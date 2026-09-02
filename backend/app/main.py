@@ -46,6 +46,21 @@ def get_erc8183_chain(erc8183_job_id: str):
     finally: session.close()
 
 
+@app.get("/v1/erc8183/jobs/{erc8183_job_id}/lineage")
+def get_erc8183_lineage(erc8183_job_id: str):
+    """Read-only G9 lineage surface; promotion remains deliberately disabled."""
+    from app.erc8183.evidence import lineage
+    from app.persistence.database import SessionLocal
+    session = SessionLocal()
+    try:
+        try:
+            return lineage(session, erc8183_job_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+    finally:
+        session.close()
+
+
 @app.post("/v1/erc8183/jobs/{erc8183_job_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
 def cancel_erc8183_job(erc8183_job_id: str):
     from app.domain.mandates import ERC8183Job

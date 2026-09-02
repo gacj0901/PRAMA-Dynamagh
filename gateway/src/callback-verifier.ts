@@ -32,6 +32,13 @@ const responseHashAbi = [{
   inputs: [{ name: "jobId", type: "uint256" }],
   outputs: [{ type: "bytes32" }],
 }] as const;
+const receiverDiamondAbi = [{
+  type: "function",
+  name: "TELEGRAPH_DIAMOND",
+  stateMutability: "view",
+  inputs: [],
+  outputs: [{ type: "address" }],
+}] as const;
 
 function normaliseTuple(value: unknown): OnChainData {
   const tuple = value as { addresses?: Address[]; integers?: bigint[]; strings?: string[]; bools?: boolean[]; 0?: Address[]; 1?: bigint[]; 2?: string[]; 3?: boolean[] };
@@ -109,8 +116,12 @@ export async function verifyTerminalCallback(
   try { response = decodeTerminalOnChainData(transaction.input); }
   catch { return { status: "INVALID", failure_code: "TERMINAL_CALLDATA_INVALID" as const }; }
   const expected = hashOnChainData(response);
-  const stored = await client.readContract({ address: getAddress(receiver), abi: responseHashAbi, functionName: "responseHash", args: [jobId] }) as Hex;
+  const [stored, receiverDiamond] = await Promise.all([
+    client.readContract({ address: getAddress(receiver), abi: responseHashAbi, functionName: "responseHash", args: [jobId] }) as Promise<Hex>,
+    client.readContract({ address: getAddress(receiver), abi: receiverDiamondAbi, functionName: "TELEGRAPH_DIAMOND", args: [] }) as Promise<Address>,
+  ]);
+  if (getAddress(receiverDiamond) !== getAddress(diamond)) return { status: "INVALID", failure_code: "RECEIVER_DIAMOND_MISMATCH" as const, stored_response_hash: stored };
   if (stored.toLowerCase() === `0x${"00".repeat(32)}`) return { status: "INVALID", failure_code: "CALLBACK_NOT_DELIVERED" as const, expected_response_hash: expected, stored_response_hash: stored };
   if (stored.toLowerCase() !== expected.toLowerCase()) return { status: "INVALID", failure_code: "CALLBACK_HASH_MISMATCH" as const, expected_response_hash: expected, stored_response_hash: stored };
-  return { status: "VALID" as const, response, expected_response_hash: expected, stored_response_hash: stored };
+  return { status: "VALID" as const, response, expected_response_hash: expected, stored_response_hash: stored, receiver_code_present: true, receiver_diamond: getAddress(receiverDiamond) };
 }

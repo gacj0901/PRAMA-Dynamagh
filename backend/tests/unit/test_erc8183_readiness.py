@@ -67,6 +67,7 @@ def test_g7_routes_and_workers_are_registered_without_invocation() -> None:
     assert ("/v1/erc8183/jobs", ("POST",)) in routes
     assert ("/v1/erc8183/jobs/{erc8183_job_id}", ("GET",)) in routes
     assert ("/v1/erc8183/jobs/{erc8183_job_id}/chain", ("GET",)) in routes
+    assert ("/v1/erc8183/jobs/{erc8183_job_id}/lineage", ("GET",)) in routes
     assert ("/v1/erc8183/jobs/{erc8183_job_id}/cancel", ("POST",)) in routes
     assert execute_erc8183_job.name == "prama.execute_erc8183_job"
     assert cancel_erc8183_job.name == "prama.cancel_erc8183_job"

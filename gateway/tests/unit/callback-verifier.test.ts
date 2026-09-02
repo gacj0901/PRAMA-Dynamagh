@@ -42,9 +42,10 @@ test("verifies only a Diamond terminal transaction and classifies callback deliv
   const client = {
     getTransaction: async () => ({ to: "0x0000000000000000000000000000000000000002" as const, input: terminalCalldata() }),
     getCode: async () => "0x6000" as Hex,
-    readContract: async () => expected,
+    readContract: async (request: { functionName: string }) => request.functionName === "TELEGRAPH_DIAMOND" ? "0x0000000000000000000000000000000000000002" : expected,
   };
   assert.equal((await verifyTerminalCallback(client, "0x0000000000000000000000000000000000000002", "0x0000000000000000000000000000000000000003", 22n, `0x${"22".repeat(32)}` as Hex)).status, "VALID");
-  assert.equal((await verifyTerminalCallback({ ...client, readContract: async () => `0x${"00".repeat(32)}` as Hex }, "0x0000000000000000000000000000000000000002", "0x0000000000000000000000000000000000000003", 22n, `0x${"22".repeat(32)}` as Hex)).failure_code, "CALLBACK_NOT_DELIVERED");
+  assert.equal((await verifyTerminalCallback({ ...client, readContract: async (request: { functionName: string }) => request.functionName === "TELEGRAPH_DIAMOND" ? "0x0000000000000000000000000000000000000002" : `0x${"00".repeat(32)}` as Hex }, "0x0000000000000000000000000000000000000002", "0x0000000000000000000000000000000000000003", 22n, `0x${"22".repeat(32)}` as Hex)).failure_code, "CALLBACK_NOT_DELIVERED");
   assert.equal((await verifyTerminalCallback({ ...client, getCode: async () => "0x" as Hex }, "0x0000000000000000000000000000000000000002", "0x0000000000000000000000000000000000000003", 22n, `0x${"22".repeat(32)}` as Hex)).failure_code, "RECEIVER_CODE_MISSING");
+  assert.equal((await verifyTerminalCallback({ ...client, readContract: async (request: { functionName: string }) => request.functionName === "TELEGRAPH_DIAMOND" ? "0x0000000000000000000000000000000000000004" : expected }, "0x0000000000000000000000000000000000000002", "0x0000000000000000000000000000000000000003", 22n, `0x${"22".repeat(32)}` as Hex)).failure_code, "RECEIVER_DIAMOND_MISMATCH");
 });
