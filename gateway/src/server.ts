@@ -1,6 +1,7 @@
 import express from "express";
 import { ChainError, chainHealth, deploymentPreflight, preflightExactAnchor, readAnchorState, readExactAnchorReceipt, submitExactAnchor } from "./chain.js";
 import { GatewayError, normalize, paidFetch, signerAddress } from "./telegraph.js";
+import { approveTelegraphUsdc, cancelTelegraphJob, createTelegraphJob, depositTelegraphEscrow, erc8183Preflight, findTerminalEvent, readCreateReceipt, readTelegraphJob } from "./erc8183.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 8081);
@@ -49,6 +50,51 @@ app.post("/chain/ticket-anchors", async (request, response) => {
     const ticketHash = request.body?.ticket_hash;
     if (typeof ticketHash !== "string") return response.status(400).json({ code: "ANCHOR_TICKET_HASH_INVALID" });
     response.status(202).json(await submitExactAnchor(privateKey, request.header("x-prama-internal-token") ?? undefined, ticketHash));
+  } catch (error) { chainFailure(response, error); }
+});
+app.get("/chain/erc8183/preflight", async (_request, response) => {
+  try { response.json(await erc8183Preflight(privateKey)); }
+  catch (error) { chainFailure(response, error); }
+});
+app.post("/chain/erc8183/approve", async (request, response) => {
+  try {
+    const amount = request.body?.amount_micro;
+    if (typeof amount !== "string" || !/^\d+$/.test(amount)) return response.status(400).json({ code: "ERC8183_AMOUNT_INVALID" });
+    response.status(202).json(await approveTelegraphUsdc(privateKey, request.header("x-prama-internal-token") ?? undefined, BigInt(amount)));
+  } catch (error) { chainFailure(response, error); }
+});
+app.post("/chain/erc8183/deposit", async (request, response) => {
+  try {
+    const amount = request.body?.amount_micro;
+    if (typeof amount !== "string" || !/^\d+$/.test(amount)) return response.status(400).json({ code: "ERC8183_AMOUNT_INVALID" });
+    response.status(202).json(await depositTelegraphEscrow(privateKey, request.header("x-prama-internal-token") ?? undefined, BigInt(amount)));
+  } catch (error) { chainFailure(response, error); }
+});
+app.post("/chain/erc8183/jobs", async (request, response) => {
+  try {
+    if (Object.keys(request.body ?? {}).length !== 0) return response.status(400).json({ code: "ERC8183_FIXTURE_INVALID" });
+    response.status(202).json(await createTelegraphJob(privateKey, request.header("x-prama-internal-token") ?? undefined));
+  } catch (error) { chainFailure(response, error); }
+});
+app.get("/chain/erc8183/jobs/:jobId", async (request, response) => {
+  try { response.json(await readTelegraphJob(BigInt(request.params.jobId))); }
+  catch (error) { chainFailure(response, error); }
+});
+app.get("/chain/erc8183/jobs/:jobId/terminal", async (request, response) => {
+  try {
+    const fromBlock = request.query.from_block;
+    if (typeof fromBlock !== "string" || !/^\d+$/.test(fromBlock)) return response.status(400).json({ code: "ERC8183_BLOCK_INVALID" });
+    response.json({ event: await findTerminalEvent(BigInt(request.params.jobId), BigInt(fromBlock)) });
+  } catch (error) { chainFailure(response, error); }
+});
+app.get("/chain/erc8183/transactions/:txHash/create", async (request, response) => {
+  try { response.json(await readCreateReceipt(privateKey, request.params.txHash as `0x${string}`)); }
+  catch (error) { chainFailure(response, error); }
+});
+app.post("/chain/erc8183/jobs/:jobId/cancel", async (request, response) => {
+  try {
+    if (Object.keys(request.body ?? {}).length !== 0) return response.status(400).json({ code: "ERC8183_FIXTURE_INVALID" });
+    response.status(202).json(await cancelTelegraphJob(privateKey, request.header("x-prama-internal-token") ?? undefined, BigInt(request.params.jobId)));
   } catch (error) { chainFailure(response, error); }
 });
 async function proxy(path: string, response: express.Response) { try { const upstream = await fetch(baseUrl + path); response.status(upstream.status).json(await upstream.json()); } catch { response.status(503).json({ code: "TELEGRAPH_UNAVAILABLE" }); } }

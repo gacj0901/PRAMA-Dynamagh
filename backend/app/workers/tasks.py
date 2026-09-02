@@ -2,6 +2,7 @@ import json, os
 from time import sleep
 from datetime import datetime, timezone
 from decimal import Decimal
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 import redis
 from app.workers.celery_app import celery_app
@@ -109,3 +110,198 @@ def execute_ticket_anchor(ticket_id: str):
         return "ANCHOR_GATEWAY_UNAVAILABLE"
     finally:
         s.close()
+
+
+def _gateway_json(path, method="GET", payload=None, authenticated=False):
+    headers = {"content-type": "application/json"}
+    if authenticated:
+        token = os.environ.get("PRAMA_GATEWAY_INTERNAL_TOKEN")
+        if not token: raise RuntimeError("GATEWAY_INTERNAL_TOKEN_MISSING")
+        headers["x-prama-internal-token"] = token
+    body = None if payload is None else json.dumps(payload).encode()
+    request = Request(os.environ["GATEWAY_URL"] + path, data=body, headers=headers, method=method)
+    try:
+        with urlopen(request, timeout=30) as response: return json.loads(response.read())
+    except HTTPError as error:
+        try: code = json.loads(error.read()).get("code", f"HTTP_{error.code}")
+        except Exception: code = f"HTTP_{error.code}"
+        raise RuntimeError(code) from error
+
+
+def _micro_usdc(value): return Decimal(str(value)) / Decimal("1000000")
+
+
+def cancellation_allowed(job) -> bool:
+    """Only a funded job may be moved into the bounded cancellation path."""
+    return job.state in {"FUNDED", "CANCEL_PENDING"} and job.chain_state == "FUNDED"
+
+
+def _event_for_job(session, event_type, erc8183_job_id):
+    return next((event for event in session.query(UsageEvent).filter_by(event_type=event_type)
+                 if event.metadata_.get("erc8183_job_id") == erc8183_job_id), None)
+
+
+def _record_observation_timeout(session, job):
+    """Persist an orchestration timeout without changing the protocol state."""
+    if _event_for_job(session, "ERC8183_JOB_OBSERVATION_TIMEOUT", job.erc8183_job_id) is None:
+        session.add(UsageEvent(mandate_id=None, event_type="ERC8183_JOB_OBSERVATION_TIMEOUT",
+                               metadata_={"erc8183_job_id": job.erc8183_job_id,
+                                          "telegraph_job_id": job.telegraph_job_id,
+                                          "chain_state": "FUNDED"}))
+
+
+def _mark_terminal(session, job, chain, terminal):
+    """Apply a read-only, verified terminal observation to one local job."""
+    if int(chain["state"]) != 1 or chain["output_hash"] == "0x" + "00" * 32:
+        raise RuntimeError("ERC8183_TERMINAL_INVALID")
+    if not terminal or not terminal.get("event"):
+        raise RuntimeError("ERC8183_JOBTERMINAL_MISSING")
+    if _micro_usdc(chain["miner_payment_micro"]) + _micro_usdc(chain["protocol_fee_micro"]) != _micro_usdc(chain["budget_micro"]):
+        raise RuntimeError("ERC8183_ACCOUNTING_MISMATCH")
+    job.budget_usdc = _micro_usdc(chain["budget_micro"])
+    job.miner_payment_usdc = _micro_usdc(chain["miner_payment_micro"])
+    job.protocol_fee_usdc = _micro_usdc(chain["protocol_fee_micro"])
+    job.chain_state = "TERMINAL"
+    job.output_hash = chain["output_hash"]
+    job.terminal_tx_hash = terminal["event"]["tx_hash"]
+    job.terminal_block_number = int(terminal["event"]["block_number"])
+    job.state = "TERMINAL"
+    job.failure_code = None
+    job.terminal_at = now()
+    if _event_for_job(session, "ERC8183_JOB_TERMINAL", job.erc8183_job_id) is None:
+        session.add(UsageEvent(mandate_id=None, event_type="ERC8183_JOB_TERMINAL",
+                               metadata_={"erc8183_job_id": job.erc8183_job_id,
+                                          "telegraph_job_id": job.telegraph_job_id}))
+
+
+@celery_app.task(name="prama.reconcile_erc8183_job")
+def reconcile_erc8183_job(erc8183_job_id: str):
+    """Read-only recovery path; it never funds, creates, or cancels a job."""
+    from app.domain.mandates import ERC8183Job
+    s = SessionLocal()
+    try:
+        job = s.get(ERC8183Job, erc8183_job_id)
+        if not job or not job.telegraph_job_id: return "ERC8183_RECONCILE_INVALID"
+        if job.failure_code == "ERC8183_JOB_UNRESOLVED":
+            _record_observation_timeout(s, job)
+        chain = _gateway_json(f"/chain/erc8183/jobs/{job.telegraph_job_id}")
+        if int(chain["state"]) == 0:
+            job.state = "FUNDED"; job.chain_state = "FUNDED"; job.failure_code = None; s.commit(); return "FUNDED"
+        if int(chain["state"]) == 2:
+            job.state = "CANCELLED"; job.chain_state = "CANCELLED"; job.failure_code = None; s.commit(); return "CANCELLED"
+        terminal = _gateway_json(f"/chain/erc8183/jobs/{job.telegraph_job_id}/terminal?from_block={job.create_block_number}")
+        _mark_terminal(s, job, chain, terminal)
+        s.commit()
+        return "TERMINAL"
+    finally: s.close()
+
+
+@celery_app.task(name="prama.fund_erc8183_escrow")
+def fund_erc8183_escrow(erc8183_job_id: str):
+    """G7 funding-only task. It cannot call createJob, Engine, or x402."""
+    from app.domain.mandates import ERC8183Job
+    s = SessionLocal()
+    try:
+        job = s.get(ERC8183Job, erc8183_job_id)
+        if not job or job.state not in {"PREPARING", "ESCROW_READY"}: return "ERC8183_FUNDING_INVALID_STATE"
+        first = _gateway_json("/chain/erc8183/preflight")
+        if int(first["job_base_price_micro"]) > int(first["budget_cap_micro"]): return "ERC8183_JOB_BUDGET_EXCEEDED"
+        top_up = int(first["top_up_micro"]); job.budget_usdc = _micro_usdc(first["job_base_price_micro"])
+        if top_up == 0:
+            job.state = "ESCROW_READY"; job.failure_code = None; s.commit(); return "ESCROW_READY"
+        if int(first["usdc_allowance_micro"]) < top_up:
+            approval = _gateway_json("/chain/erc8183/approve", "POST", {"amount_micro": str(top_up)}, True)
+            job.approval_tx_hash = approval["tx_hash"]; job.approval_block_number = int(approval["block_number"]); s.commit()
+        second = _gateway_json("/chain/erc8183/preflight")
+        if int(second["job_base_price_micro"]) != int(first["job_base_price_micro"]) or int(second["top_up_micro"]) != top_up or int(second["usdc_allowance_micro"]) < top_up:
+            return "ERC8183_FUNDING_REPREFLIGHT_REQUIRED"
+        deposit = _gateway_json("/chain/erc8183/deposit", "POST", {"amount_micro": str(top_up)}, True)
+        job.deposit_tx_hash = deposit["tx_hash"]; job.deposit_block_number = int(deposit["block_number"]); s.commit()
+        final = _gateway_json("/chain/erc8183/preflight")
+        if int(final["escrow_balance_micro"]) < int(final["required_escrow_micro"]):
+            # RPC replicas can briefly lag the mined receipt. Re-read only; never repeat deposit.
+            sleep(3); final = _gateway_json("/chain/erc8183/preflight")
+        if int(final["escrow_balance_micro"]) < int(final["required_escrow_micro"]): return "ERC8183_ESCROW_INSUFFICIENT"
+        job.state = "ESCROW_READY"; job.failure_code = None; s.commit(); return "ESCROW_READY"
+    except Exception as error:
+        if "job" in locals() and job:
+            job.failure_code = str(error)[:100]; s.commit()
+        return "ERC8183_FUNDING_FAILED"
+    finally: s.close()
+
+
+@celery_app.task(name="prama.execute_erc8183_job")
+def execute_erc8183_job(erc8183_job_id: str):
+    """G7 worker path: exact fixture only, no Engine/x402/miner request."""
+    from app.domain.mandates import ERC8183Job
+    s = SessionLocal()
+    try:
+        job = s.get(ERC8183Job, erc8183_job_id)
+        if not job: return "ERC8183_JOB_MISSING"
+        if job.state == "TERMINAL":
+            # A job may settle after a bounded original observation window.  A
+            # subsequent redelivery must remain chain-read-free, but it can
+            # repair the local terminal telemetry exactly once.
+            terminal_event = _event_for_job(s, "ERC8183_JOB_TERMINAL", job.erc8183_job_id)
+            if terminal_event is None:
+                s.add(UsageEvent(mandate_id=None, event_type="ERC8183_JOB_TERMINAL",
+                                 metadata_={"erc8183_job_id": job.erc8183_job_id,
+                                            "telegraph_job_id": job.telegraph_job_id,
+                                            "reconciled_after_late_settlement": True}))
+                s.commit()
+            return "ALREADY_TERMINAL"
+        preflight = _gateway_json("/chain/erc8183/preflight")
+        job.budget_usdc = _micro_usdc(preflight["job_base_price_micro"])
+        if not preflight["signer_gas_sufficient"] or int(preflight["job_base_price_micro"]) > int(preflight["budget_cap_micro"]):
+            job.state = "FAILED"; job.failure_code = "ERC8183_JOB_BUDGET_EXCEEDED"; s.commit(); return job.failure_code
+        # G7 writes require a deliberate operator enablement after read-only preflight.
+        if os.environ.get("ERC8183_LIVE_WRITES_ENABLED", "false").lower() != "true":
+            job.failure_code = "ERC8183_PREFLIGHT_REQUIRED"; s.commit(); return job.failure_code
+        top_up = int(preflight["top_up_micro"])
+        if not job.telegraph_job_id and not job.create_tx_hash:
+            if top_up:
+                if int(preflight["usdc_allowance_micro"]) < top_up:
+                    _gateway_json("/chain/erc8183/approve", "POST", {"amount_micro": str(top_up)}, True)
+                _gateway_json("/chain/erc8183/deposit", "POST", {"amount_micro": str(top_up)}, True)
+                preflight = _gateway_json("/chain/erc8183/preflight")
+                if int(preflight["escrow_balance_micro"]) < int(preflight["required_escrow_micro"]): raise RuntimeError("ERC8183_ESCROW_INSUFFICIENT")
+            job.state = "ESCROW_READY"; s.commit()
+            created = _gateway_json("/chain/erc8183/jobs", "POST", {}, True)
+            job.create_tx_hash = created["tx_hash"]; job.state = "SUBMITTED"; job.failure_code = None; s.commit()
+        if not job.telegraph_job_id:
+            for _ in range(24):
+                receipt = _gateway_json(f"/chain/erc8183/transactions/{job.create_tx_hash}/create")
+                if receipt["status"] == "PENDING": sleep(5); continue
+                if receipt["status"] != "CONFIRMED": raise RuntimeError(receipt.get("failure_code", "ERC8183_JOBCREATED_MISMATCH"))
+                job.telegraph_job_id = receipt["job_id"]; job.create_block_number = int(receipt["block_number"]); job.state = "FUNDED"; s.add(UsageEvent(mandate_id=None, event_type="ERC8183_JOB_CREATED", metadata_={"erc8183_job_id": job.erc8183_job_id, "telegraph_job_id": job.telegraph_job_id})); s.commit(); break
+            if not job.telegraph_job_id: return "ERC8183_CREATE_RECEIPT_TIMEOUT"
+        for _ in range(24):
+            chain = _gateway_json(f"/chain/erc8183/jobs/{job.telegraph_job_id}")
+            job.budget_usdc = _micro_usdc(chain["budget_micro"]); job.miner_payment_usdc = _micro_usdc(chain["miner_payment_micro"]); job.protocol_fee_usdc = _micro_usdc(chain["protocol_fee_micro"])
+            if int(chain["state"]) == 0:
+                job.state = "FUNDED"; job.chain_state = "FUNDED"; job.failure_code = None; s.commit(); sleep(5); continue
+            if int(chain["state"]) == 2: job.state = "CANCELLED"; s.commit(); return "CANCELLED"
+            terminal = _gateway_json(f"/chain/erc8183/jobs/{job.telegraph_job_id}/terminal?from_block={job.create_block_number}")
+            _mark_terminal(s, job, chain, terminal); s.commit(); return "TERMINAL"
+        job.state = "FUNDED"; job.chain_state = "FUNDED"; job.failure_code = None
+        _record_observation_timeout(s, job); s.commit(); return "ERC8183_OBSERVATION_TIMEOUT"
+    except Exception as error:
+        if "job" in locals() and job:
+            job.state = "FAILED"; job.failure_code = str(error)[:100]; s.commit()
+        return "ERC8183_FAILED"
+    finally: s.close()
+
+
+@celery_app.task(name="prama.cancel_erc8183_job")
+def cancel_erc8183_job(erc8183_job_id: str):
+    from app.domain.mandates import ERC8183Job
+    s = SessionLocal()
+    try:
+        job = s.get(ERC8183Job, erc8183_job_id)
+        if not job or not cancellation_allowed(job) or not job.telegraph_job_id: return "ERC8183_CANCEL_INVALID"
+        if os.environ.get("ERC8183_LIVE_WRITES_ENABLED", "false").lower() != "true": return "ERC8183_PREFLIGHT_REQUIRED"
+        result = _gateway_json(f"/chain/erc8183/jobs/{job.telegraph_job_id}/cancel", "POST", {}, True)
+        chain = _gateway_json(f"/chain/erc8183/jobs/{job.telegraph_job_id}")
+        if int(chain["state"]) != 2: return "ERC8183_CANCEL_READBACK_FAILED"
+        job.chain_state = "CANCELLED"; job.state = "CANCELLED"; job.cancel_tx_hash = result["tx_hash"]; job.cancel_block_number = int(result["block_number"]); job.cancelled_at = now(); s.add(UsageEvent(mandate_id=None, event_type="ERC8183_JOB_CANCELLED", metadata_={"erc8183_job_id": job.erc8183_job_id})); s.commit(); return "CANCELLED"
+    finally: s.close()
