@@ -1,4 +1,5 @@
 import express from "express";
+import { ChainError, chainHealth, deploymentPreflight, preflightExactAnchor, readAnchorState, readExactAnchorReceipt, submitExactAnchor } from "./chain.js";
 import { GatewayError, normalize, paidFetch, signerAddress } from "./telegraph.js";
 
 const app = express();
@@ -12,6 +13,43 @@ app.use(express.json({ limit: "256kb" }));
 
 app.get("/health", (_request, response) => {
   response.json({ status: "ok", service: "prama-dynamagh-gateway", signer_address: signer });
+});
+function chainFailure(response: express.Response, error: unknown) {
+  const known = error instanceof ChainError ? error : new ChainError("CHAIN_UNAVAILABLE", "chain preflight failed");
+  const status = known.code === "CHAIN_ID_MISMATCH" || known.code === "ANCHOR_ALREADY_EXISTS" || known.code === "INSUFFICIENT_GAS_FUNDS" ? 409 : known.code === "CHAIN_UNAVAILABLE" || known.code === "ANCHOR_CONTRACT_UNAVAILABLE" ? 503 : known.code === "CHAIN_WRITE_UNAUTHORIZED" ? 403 : 400;
+  response.status(status).json({ code: known.code });
+}
+app.get("/chain/health", async (_request, response) => {
+  try { response.json(await chainHealth(privateKey)); }
+  catch (error) { chainFailure(response, error); }
+});
+app.get("/chain/preflight", async (request, response) => {
+  const ticketHash = typeof request.query.ticket_hash === "string" ? request.query.ticket_hash : undefined;
+  try { response.json(await deploymentPreflight(privateKey, ticketHash)); }
+  catch (error) { chainFailure(response, error); }
+});
+app.get("/chain/ticket-anchors/:ticketHash", async (request, response) => {
+  try { response.json(await readAnchorState(request.params.ticketHash)); }
+  catch (error) { chainFailure(response, error); }
+});
+app.get("/chain/ticket-anchors/:ticketHash/transactions/:txHash", async (request, response) => {
+  try { response.json(await readExactAnchorReceipt(privateKey, request.params.ticketHash, request.params.txHash)); }
+  catch (error) { chainFailure(response, error); }
+});
+app.post("/chain/ticket-anchors/preflight", async (request, response) => {
+  try {
+    const ticketHash = request.body?.ticket_hash;
+    if (typeof ticketHash !== "string") return response.status(400).json({ code: "ANCHOR_TICKET_HASH_INVALID" });
+    const result = await preflightExactAnchor(privateKey, request.header("x-prama-internal-token") ?? undefined, ticketHash);
+    response.json({ chain_id: result.chain_id, contract_address: result.address, gas_estimate: result.gas.toString(), gas_price_wei: result.gas_price.toString(), estimated_cost_wei: (result.gas * result.gas_price).toString(), balance_wei: result.balance.toString(), status: "READY" });
+  } catch (error) { chainFailure(response, error); }
+});
+app.post("/chain/ticket-anchors", async (request, response) => {
+  try {
+    const ticketHash = request.body?.ticket_hash;
+    if (typeof ticketHash !== "string") return response.status(400).json({ code: "ANCHOR_TICKET_HASH_INVALID" });
+    response.status(202).json(await submitExactAnchor(privateKey, request.header("x-prama-internal-token") ?? undefined, ticketHash));
+  } catch (error) { chainFailure(response, error); }
 });
 async function proxy(path: string, response: express.Response) { try { const upstream = await fetch(baseUrl + path); response.status(upstream.status).json(await upstream.json()); } catch { response.status(503).json({ code: "TELEGRAPH_UNAVAILABLE" }); } }
 app.get("/miners", (_req, res) => void proxy("/api/miners", res));

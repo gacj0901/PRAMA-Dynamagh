@@ -1,11 +1,12 @@
 import json, os
+from time import sleep
 from datetime import datetime, timezone
 from decimal import Decimal
 from urllib.request import Request, urlopen
 import redis
 from app.workers.celery_app import celery_app
 from app.persistence.database import SessionLocal
-from app.domain.mandates import AcquisitionTask, AcquisitionStatus, Mandate, MandateStatus, TelegraphCall, UsageEvent, Evidence, StructuralEvaluation, Decision
+from app.domain.mandates import AcquisitionTask, AcquisitionStatus, AnchorAttempt, Mandate, MandateStatus, TelegraphCall, Ticket, UsageEvent, Evidence, StructuralEvaluation, Decision
 from app.domain.state_machine import transition_mandate
 from app.pramagraph.evaluation import classify, decide, digest
 from app.tickets.service import issue as issue_ticket
@@ -60,3 +61,51 @@ def evaluate_mandate(mandate_id):
         rejected=[e.evidence_id for e in evidence if e.admissibility=="REJECTED"]; limited=[e.evidence_id for e in evidence if e.admissibility=="LIMITED"]; admitted=[e.evidence_id for e in evidence if e.admissibility=="ADMITTED"]; structural="STRUCTURALLY_BLOCKED" if not evidence or rejected else ("STRUCTURALLY_LIMITED" if limited else "STRUCTURALLY_ADMISSIBLE")
         ev=StructuralEvaluation(mandate_id=mandate_id,evaluator="PRAMAGRAPH",evaluator_version="pramagraph-structural-v0",evidence_set_hash=esh,admitted_evidence_ids=admitted,limited_evidence_ids=limited,rejected_evidence_ids=rejected,limitation_codes=sum((e.limitation_codes for e in evidence),[]),contradiction_codes=[],structural_state=structural,evaluation_payload={}); s.add(ev); s.flush(); state,reasons=decide(structural); s.add(Decision(mandate_id=mandate_id,evaluation_id=ev.evaluation_id,state=state,policy_version="prama-gate-v0",evidence_set_hash=esh,reason_codes=reasons,decision_payload={})); transition_mandate(s,mandate,MandateStatus.DECIDED); s.add_all([UsageEvent(mandate_id=mandate_id,event_type="EVIDENCE_CREATED",metadata_={}),UsageEvent(mandate_id=mandate_id,event_type="EVALUATION_COMPLETED",metadata_={}),UsageEvent(mandate_id=mandate_id,event_type="DECISION_CREATED",metadata_={})]); s.commit(); return issue_ticket(s,mandate_id)[1]
     finally: s.close()
+
+
+@celery_app.task(name="prama.execute_ticket_anchor")
+def execute_ticket_anchor(ticket_id: str):
+    """Deferred G6 write path. It is never called by a read-only preflight."""
+    s = SessionLocal()
+    try:
+        ticket = s.get(Ticket, ticket_id)
+        attempt = s.query(AnchorAttempt).filter_by(ticket_id=ticket_id).one_or_none()
+        if not ticket or not attempt:
+            return "ANCHOR_ATTEMPT_MISSING"
+        if attempt.status == "CONFIRMED":
+            return "ALREADY_ANCHORED"
+        from app.tickets.service import verify
+        if verify(s, ticket)["status"] != "VALID":
+            attempt.status = "FAILED"; attempt.failure_code = "TICKET_INVALID"; ticket.anchor_status = "ANCHOR_FAILED"; s.commit(); return "TICKET_INVALID"
+        if not attempt.tx_hash:
+            token = os.environ.get("PRAMA_GATEWAY_INTERNAL_TOKEN")
+            if not token:
+                attempt.status = "FAILED"; attempt.failure_code = "GATEWAY_INTERNAL_TOKEN_MISSING"; ticket.anchor_status = "ANCHOR_FAILED"; s.commit(); return attempt.failure_code
+            data = json.dumps({"ticket_hash": ticket.ticket_hash}).encode()
+            request = Request(os.environ["GATEWAY_URL"] + "/chain/ticket-anchors", data=data, headers={"content-type": "application/json", "x-prama-internal-token": token}, method="POST")
+            with urlopen(request, timeout=120) as response:
+                result = json.loads(response.read())
+            attempt.status = "SUBMITTED"; attempt.tx_hash = result.get("tx_hash"); attempt.submitted_at = now(); s.commit()
+        else:
+            result = {"contract_address": attempt.contract_address}
+        for _ in range(24):
+            with urlopen(os.environ["GATEWAY_URL"] + f"/chain/ticket-anchors/{ticket.ticket_hash}/transactions/{attempt.tx_hash}", timeout=20) as response:
+                confirmation = json.loads(response.read())
+            if confirmation.get("status") == "PENDING":
+                sleep(5); continue
+            if confirmation.get("status") != "CONFIRMED":
+                attempt.status = "FAILED"; attempt.failure_code = confirmation.get("failure_code", "ANCHOR_RECEIPT_MISMATCH"); ticket.anchor_status = "ANCHOR_FAILED"; s.commit(); return attempt.failure_code
+            attempt.status = "CONFIRMED"; attempt.failure_code = None; attempt.block_number = int(confirmation["block_number"]); attempt.block_hash = confirmation["block_hash"]; attempt.confirmed_at = now()
+            ticket.anchor_status = "ANCHORED"; ticket.chain_id = 84532; ticket.contract_address = result["contract_address"]; ticket.tx_hash = attempt.tx_hash; ticket.block_number = attempt.block_number; ticket.block_hash = attempt.block_hash
+            s.add(UsageEvent(mandate_id=ticket.mandate_id, event_type="TICKET_ANCHORED", metadata_={"ticket_id": ticket.ticket_id, "anchor_attempt_id": attempt.anchor_attempt_id}))
+            s.commit(); return "ANCHORED"
+        return "ANCHOR_RECEIPT_TIMEOUT"
+    except Exception:
+        if 'attempt' in locals() and attempt:
+            attempt.status = "FAILED"; attempt.failure_code = "ANCHOR_GATEWAY_UNAVAILABLE"
+        if 'ticket' in locals() and ticket:
+            ticket.anchor_status = "ANCHOR_FAILED"
+        s.commit()
+        return "ANCHOR_GATEWAY_UNAVAILABLE"
+    finally:
+        s.close()

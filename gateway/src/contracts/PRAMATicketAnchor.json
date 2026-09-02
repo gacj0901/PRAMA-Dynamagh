@@ -1,0 +1,131 @@
+{
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "initialOperator",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "name": "AlreadyAnchored",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "Unauthorized",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ZeroOperator",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ZeroTicketHash",
+      "type": "error"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "ticketHash",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "blockNumber",
+          "type": "uint256"
+        }
+      ],
+      "name": "TicketAnchored",
+      "type": "event"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "ticketHash",
+          "type": "bytes32"
+        }
+      ],
+      "name": "anchor",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "name": "anchoredAtBlock",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "ticketHash",
+          "type": "bytes32"
+        }
+      ],
+      "name": "isAnchored",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "operator",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x60a060405234801561000f575f5ffd5b506040516105ab3803806105ab8339818101604052810190610031919061012e565b5f73ffffffffffffffffffffffffffffffffffffffff168173ffffffffffffffffffffffffffffffffffffffff1603610096576040517f89961e9100000000000000000000000000000000000000000000000000000000815260040160405180910390fd5b8073ffffffffffffffffffffffffffffffffffffffff1660808173ffffffffffffffffffffffffffffffffffffffff168152505050610159565b5f5ffd5b5f73ffffffffffffffffffffffffffffffffffffffff82169050919050565b5f6100fd826100d4565b9050919050565b61010d816100f3565b8114610117575f5ffd5b50565b5f8151905061012881610104565b92915050565b5f60208284031215610143576101426100d0565b5b5f6101508482850161011a565b91505092915050565b6080516104336101785f395f818161011a015261013e01526104335ff3fe608060405234801561000f575f5ffd5b506004361061004a575f3560e01c80630cbeeb9e1461004e5780634f0b58011461007e578063570ca735146100ae578063eecdf927146100cc575b5f5ffd5b610068600480360381019061006391906102ee565b6100e8565b6040516100759190610331565b60405180910390f35b610098600480360381019061009391906102ee565b6100fc565b6040516100a59190610364565b60405180910390f35b6100b6610118565b6040516100c391906103bc565b60405180910390f35b6100e660048036038101906100e191906102ee565b61013c565b005b5f602052805f5260405f205f915090505481565b5f5f5f5f8481526020019081526020015f205414159050919050565b7f000000000000000000000000000000000000000000000000000000000000000081565b7f000000000000000000000000000000000000000000000000000000000000000073ffffffffffffffffffffffffffffffffffffffff163373ffffffffffffffffffffffffffffffffffffffff16146101c1576040517f82b4290000000000000000000000000000000000000000000000000000000000815260040160405180910390fd5b5f5f1b81036101fc576040517fbaa1e0a700000000000000000000000000000000000000000000000000000000815260040160405180910390fd5b5f5f5f8381526020019081526020015f20541461025057806040517f30d2381300000000000000000000000000000000000000000000000000000000815260040161024791906103e4565b60405180910390fd5b435f5f8381526020019081526020015f20819055503373ffffffffffffffffffffffffffffffffffffffff16817f77d293ac7e5fa3e22622b14f4aea996b756edfc8419e16687caf2999824dc4c2436040516102ac9190610331565b60405180910390a350565b5f5ffd5b5f819050919050565b6102cd816102bb565b81146102d7575f5ffd5b50565b5f813590506102e8816102c4565b92915050565b5f60208284031215610303576103026102b7565b5b5f610310848285016102da565b91505092915050565b5f819050919050565b61032b81610319565b82525050565b5f6020820190506103445f830184610322565b92915050565b5f8115159050919050565b61035e8161034a565b82525050565b5f6020820190506103775f830184610355565b92915050565b5f73ffffffffffffffffffffffffffffffffffffffff82169050919050565b5f6103a68261037d565b9050919050565b6103b68161039c565b82525050565b5f6020820190506103cf5f8301846103ad565b92915050565b6103de816102bb565b82525050565b5f6020820190506103f75f8301846103d5565b9291505056fea2646970667358221220f7e6fcbd1595bb6eb3640929f0f0dcc81b76db18e4495844d3bd7492e263389a64736f6c63430008220033"
+}

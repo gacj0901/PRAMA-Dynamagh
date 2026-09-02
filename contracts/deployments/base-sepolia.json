@@ -1,0 +1,10 @@
+{
+  "chain_id": 84532,
+  "contract": "PRAMATicketAnchor",
+  "address": "0x3c1a6acfd3b7ff981c31797533169e5ee36dd6e9",
+  "deployment_tx_hash": "0xce80dc16d3362bb6f934e666009d2f15b161132d65d57dfb87a4b507369df554",
+  "deployment_block": 46290884,
+  "operator": "0xC92b5ec74dca3EeE0A615dE026C3F3756cd18FB6",
+  "source_version": "prama-ticket-anchor-v0",
+  "artifact_sha256": "380F12CB7C8DA7A9C90BF995EE8D824B97F9A579E29D574F86CA98F63E56FD5E"
+}

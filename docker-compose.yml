@@ -1,6 +1,9 @@
 name: prama-dynamagh
 
 services:
+  contracts-test:
+    profiles: ["tooling"]
+    build: ./contracts
   postgres:
     image: postgres:16-alpine
     environment:
@@ -21,10 +24,12 @@ services:
     build: ./gateway
     env_file:
       - ./gateway/.env
+      - ./.secrets/gateway-worker.env
     environment:
       PORT: 8081
       TELEGRAPH_BASE_URL: ${TELEGRAPH_BASE_URL:-https://devnode.telegraphprotocol.com}
       TELEGRAPH_MAX_PAYMENT_USDC: ${TELEGRAPH_MAX_PAYMENT_USDC:-0.05}
+      PRAMA_TICKET_ANCHOR_ADDRESS: ${PRAMA_TICKET_ANCHOR_ADDRESS:-0x3c1a6acfd3b7ff981c31797533169e5ee36dd6e9}
     ports:
       - "${GATEWAY_PORT:-8081}:8081"
     networks: [prama_internal, external_services]
@@ -58,6 +63,8 @@ services:
 
   worker:
     build: ./backend
+    env_file:
+      - ./.secrets/gateway-worker.env
     command: celery --app app.workers.celery_app worker --loglevel=INFO
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://prama:prama_local_dev_only@postgres:5432/prama_dynamagh}

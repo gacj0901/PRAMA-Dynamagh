@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -115,4 +115,22 @@ class Decision(Base):
     decision_id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4())); mandate_id: Mapped[str]=mapped_column(String(36)); evaluation_id: Mapped[str]=mapped_column(String(36),unique=True); state: Mapped[str]=mapped_column(String(16)); policy_version: Mapped[str]=mapped_column(String(64)); evidence_set_hash: Mapped[str]=mapped_column(String(66)); reason_codes: Mapped[list]=mapped_column(JSONB); decision_payload: Mapped[dict]=mapped_column(JSONB); created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utc_now); completed_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utc_now)
 class Ticket(Base):
     __tablename__="tickets"
-    ticket_id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4())); mandate_id: Mapped[str]=mapped_column(String(36)); decision_id: Mapped[str]=mapped_column(String(36)); schema_version: Mapped[str]=mapped_column(String(64)); canonical_payload: Mapped[dict]=mapped_column(JSONB); ticket_hash: Mapped[str]=mapped_column(String(66),unique=True); hash_algorithm: Mapped[str]=mapped_column(String(32)); anchor_status: Mapped[str]=mapped_column(String(32)); chain_id: Mapped[int|None]=mapped_column(Integer); contract_address: Mapped[str|None]=mapped_column(String(255)); tx_hash: Mapped[str|None]=mapped_column(String(255)); block_number: Mapped[int|None]=mapped_column(Integer); onchain_output_hash: Mapped[str|None]=mapped_column(String(255)); created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utc_now); updated_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utc_now)
+    ticket_id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4())); mandate_id: Mapped[str]=mapped_column(String(36)); decision_id: Mapped[str]=mapped_column(String(36)); schema_version: Mapped[str]=mapped_column(String(64)); canonical_payload: Mapped[dict]=mapped_column(JSONB); ticket_hash: Mapped[str]=mapped_column(String(66),unique=True); hash_algorithm: Mapped[str]=mapped_column(String(32)); anchor_status: Mapped[str]=mapped_column(String(32)); chain_id: Mapped[int|None]=mapped_column(Integer); contract_address: Mapped[str|None]=mapped_column(String(255)); tx_hash: Mapped[str|None]=mapped_column(String(255)); block_number: Mapped[int|None]=mapped_column(Integer); block_hash: Mapped[str|None]=mapped_column(String(66)); onchain_output_hash: Mapped[str|None]=mapped_column(String(255)); created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utc_now); updated_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utc_now)
+
+
+class AnchorAttempt(Base):
+    __tablename__ = "anchor_attempts"
+    __table_args__ = (UniqueConstraint("ticket_id", name="uq_anchor_attempt_ticket"),)
+
+    anchor_attempt_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    ticket_id: Mapped[str] = mapped_column(ForeignKey("tickets.ticket_id", ondelete="CASCADE"), nullable=False)
+    chain_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    contract_address: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
+    tx_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    block_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    block_hash: Mapped[str | None] = mapped_column(String(66), nullable=True)
+    failure_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
