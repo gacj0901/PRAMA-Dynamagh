@@ -9,3 +9,5 @@ celery_app = Celery(
 )
 celery_app.conf.task_default_queue = "prama-dynamagh"
 
+# Importing registers durable task names with every Worker process.
+import app.workers.tasks  # noqa: E402,F401
