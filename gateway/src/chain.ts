@@ -31,7 +31,7 @@ type PreflightClient = {
   estimateGas: (parameters: { account: Address; data: Hex }) => Promise<bigint>;
 };
 type PreflightDependencies = { client?: PreflightClient; loadArtifact?: () => AnchorArtifact; signer?: Address };
-export type ChainFailureCode = "CHAIN_ID_MISMATCH" | "CHAIN_UNAVAILABLE" | "ANCHOR_ARTIFACT_MISSING" | "ANCHOR_TICKET_HASH_INVALID" | "ANCHOR_TICKET_HASH_ZERO" | "ANCHOR_CONTRACT_INVALID" | "ANCHOR_CONTRACT_UNAVAILABLE" | "CHAIN_WRITE_UNAUTHORIZED" | "ANCHOR_ALREADY_EXISTS" | "INSUFFICIENT_GAS_FUNDS";
+export type ChainFailureCode = "CHAIN_ID_MISMATCH" | "CHAIN_UNAVAILABLE" | "ANCHOR_ARTIFACT_MISSING" | "ANCHOR_TICKET_HASH_INVALID" | "ANCHOR_TICKET_HASH_ZERO" | "ANCHOR_CONTRACT_INVALID" | "ANCHOR_CONTRACT_UNAVAILABLE" | "CHAIN_WRITE_UNAUTHORIZED" | "ANCHOR_ALREADY_EXISTS" | "INSUFFICIENT_GAS_FUNDS" | "RECEIVER_ARTIFACT_MISSING";
 
 export class ChainError extends Error {
   constructor(readonly code: ChainFailureCode, message: string) { super(message); }

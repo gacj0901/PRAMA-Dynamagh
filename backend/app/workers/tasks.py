@@ -150,6 +150,33 @@ def _record_observation_timeout(session, job):
                                           "chain_state": "FUNDED"}))
 
 
+def _verify_callback(session, job):
+    """Read-only callback proof. Terminal protocol state remains durable even when proof is unavailable."""
+    if job.callback_address.lower() == "0x0000000000000000000000000000000000000000":
+        return "CALLBACK_NOT_CONFIGURED"
+    if not job.telegraph_job_id or not job.terminal_tx_hash:
+        return "CALLBACK_NOT_DELIVERED"
+    try:
+        result = _gateway_json(f"/chain/subnet-receiver/verify?job_id={job.telegraph_job_id}&terminal_tx_hash={job.terminal_tx_hash}")
+    except Exception:
+        job.callback_verified = False
+        return "CALLBACK_NOT_DELIVERED"
+    stored = result.get("stored_response_hash")
+    if result.get("status") != "VALID":
+        job.callback_response_hash = stored
+        job.callback_verified = False
+        return result.get("failure_code", "CALLBACK_NOT_DELIVERED")
+    job.callback_response_hash = stored
+    job.callback_verified = True
+    job.callback_verified_at = now()
+    if _event_for_job(session, "ERC8183_CALLBACK_VERIFIED", job.erc8183_job_id) is None:
+        session.add(UsageEvent(mandate_id=None, event_type="ERC8183_CALLBACK_VERIFIED",
+                               metadata_={"erc8183_job_id": job.erc8183_job_id,
+                                          "telegraph_job_id": job.telegraph_job_id,
+                                          "callback_response_hash": stored}))
+    return "CALLBACK_VERIFIED"
+
+
 def _mark_terminal(session, job, chain, terminal):
     """Apply a read-only, verified terminal observation to one local job."""
     if int(chain["state"]) != 1 or chain["output_hash"] == "0x" + "00" * 32:
@@ -172,6 +199,7 @@ def _mark_terminal(session, job, chain, terminal):
         session.add(UsageEvent(mandate_id=None, event_type="ERC8183_JOB_TERMINAL",
                                metadata_={"erc8183_job_id": job.erc8183_job_id,
                                           "telegraph_job_id": job.telegraph_job_id}))
+    _verify_callback(session, job)
 
 
 @celery_app.task(name="prama.reconcile_erc8183_job")
@@ -185,6 +213,19 @@ def reconcile_erc8183_job(erc8183_job_id: str):
         if job.failure_code == "ERC8183_JOB_UNRESOLVED":
             _record_observation_timeout(s, job)
         chain = _gateway_json(f"/chain/erc8183/jobs/{job.telegraph_job_id}")
+        # A verified terminal observation is immutable.  Re-read the chain and
+        # callback proof for reconciliation, but do not rewrite timestamps or
+        # artifacts on a delivery of the same task.
+        if job.state == "TERMINAL" and job.callback_verified:
+            if int(chain["state"]) != 1 or chain["output_hash"] != job.output_hash:
+                return "ERC8183_TERMINAL_RECONCILIATION_MISMATCH"
+            terminal = _gateway_json(f"/chain/erc8183/jobs/{job.telegraph_job_id}/terminal?from_block={job.create_block_number}")
+            if not terminal or not terminal.get("event") or terminal["event"]["tx_hash"] != job.terminal_tx_hash:
+                return "ERC8183_TERMINAL_RECONCILIATION_MISMATCH"
+            proof = _gateway_json(f"/chain/subnet-receiver/verify?job_id={job.telegraph_job_id}&terminal_tx_hash={job.terminal_tx_hash}")
+            if proof.get("status") != "VALID" or proof.get("stored_response_hash") != job.callback_response_hash:
+                return "ERC8183_CALLBACK_RECONCILIATION_MISMATCH"
+            return "ALREADY_TERMINAL+CALLBACK_ALREADY_VERIFIED"
         if int(chain["state"]) == 0:
             job.state = "FUNDED"; job.chain_state = "FUNDED"; job.failure_code = None; s.commit(); return "FUNDED"
         if int(chain["state"]) == 2:
@@ -249,6 +290,13 @@ def execute_erc8183_job(erc8183_job_id: str):
                                             "telegraph_job_id": job.telegraph_job_id,
                                             "reconciled_after_late_settlement": True}))
                 s.commit()
+            if job.callback_verified:
+                return "ALREADY_TERMINAL+CALLBACK_ALREADY_VERIFIED"
+            if job.callback_address.lower() != "0x0000000000000000000000000000000000000000" and job.telegraph_job_id:
+                chain = _gateway_json(f"/chain/erc8183/jobs/{job.telegraph_job_id}")
+                terminal = _gateway_json(f"/chain/erc8183/jobs/{job.telegraph_job_id}/terminal?from_block={job.create_block_number}")
+                _mark_terminal(s, job, chain, terminal); s.commit()
+                return "ALREADY_TERMINAL+CALLBACK_RECONCILED"
             return "ALREADY_TERMINAL"
         preflight = _gateway_json("/chain/erc8183/preflight")
         job.budget_usdc = _micro_usdc(preflight["job_base_price_micro"])

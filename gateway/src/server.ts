@@ -2,6 +2,9 @@ import express from "express";
 import { ChainError, chainHealth, deploymentPreflight, preflightExactAnchor, readAnchorState, readExactAnchorReceipt, submitExactAnchor } from "./chain.js";
 import { GatewayError, normalize, paidFetch, signerAddress } from "./telegraph.js";
 import { approveTelegraphUsdc, cancelTelegraphJob, createTelegraphJob, depositTelegraphEscrow, erc8183Preflight, findTerminalEvent, readCreateReceipt, readTelegraphJob } from "./erc8183.js";
+import { deployExactSubnetReceiver, readSubnetReceiverDeployment, receiverDeploymentPreflight } from "./deploy-subnet-receiver.js";
+import { verifyTerminalCallback } from "./callback-verifier.js";
+import { configuredCallback, configuredDiamond, publicClient } from "./erc8183.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 8081);
@@ -50,6 +53,40 @@ app.post("/chain/ticket-anchors", async (request, response) => {
     const ticketHash = request.body?.ticket_hash;
     if (typeof ticketHash !== "string") return response.status(400).json({ code: "ANCHOR_TICKET_HASH_INVALID" });
     response.status(202).json(await submitExactAnchor(privateKey, request.header("x-prama-internal-token") ?? undefined, ticketHash));
+  } catch (error) { chainFailure(response, error); }
+});
+app.post("/chain/subnet-receiver/preflight", async (request, response) => {
+  try {
+    if (Object.keys(request.body ?? {}).length !== 0) return response.status(400).json({ code: "RECEIVER_DEPLOYMENT_INVALID" });
+    const p = await receiverDeploymentPreflight(privateKey, request.header("x-prama-internal-token") ?? undefined);
+    response.json({ ...p, data: undefined, gas: undefined });
+  } catch (error) { chainFailure(response, error); }
+});
+app.post("/chain/subnet-receiver/deploy", async (request, response) => {
+  try {
+    if (Object.keys(request.body ?? {}).length !== 0) return response.status(400).json({ code: "RECEIVER_DEPLOYMENT_INVALID" });
+    response.status(202).json(await deployExactSubnetReceiver(privateKey, request.header("x-prama-internal-token") ?? undefined));
+  } catch (error) { chainFailure(response, error); }
+});
+app.get("/chain/subnet-receiver/deployments/:txHash", async (request, response) => {
+  try { response.json(await readSubnetReceiverDeployment(request.params.txHash as `0x${string}`)); }
+  catch (error) { chainFailure(response, error); }
+});
+app.get("/chain/subnet-receiver/verify", async (request, response) => {
+  try {
+    const jobId = typeof request.query.job_id === "string" && /^\d+$/.test(request.query.job_id) ? BigInt(request.query.job_id) : null;
+    const terminalTxHash = typeof request.query.terminal_tx_hash === "string" && /^0x[0-9a-fA-F]{64}$/.test(request.query.terminal_tx_hash) ? request.query.terminal_tx_hash as `0x${string}` : null;
+    if (jobId === null || terminalTxHash === null) return response.status(400).json({ code: "CALLBACK_VERIFY_INPUT_INVALID" });
+    const result = await verifyTerminalCallback(publicClient(), configuredDiamond(), configuredCallback(), jobId, terminalTxHash);
+    // JSON has no bigint type.  Keep the on-chain response available to the
+    // worker while representing its numeric fields canonically over HTTP.
+    response.json(result.status === "VALID" && result.response ? {
+      ...result,
+      response: {
+        ...result.response,
+        integers: result.response.integers.map((value) => value.toString()),
+      },
+    } : result);
   } catch (error) { chainFailure(response, error); }
 });
 app.get("/chain/erc8183/preflight", async (_request, response) => {

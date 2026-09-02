@@ -62,7 +62,7 @@ def cancel_erc8183_job(erc8183_job_id: str):
 
 
 def _erc8183_response(job):
-    return {key: getattr(job, key) for key in ("erc8183_job_id", "mandate_id", "ticket_id", "chain_id", "diamond_address", "telegraph_job_id", "intent_name", "intent_id", "callback_address", "params_payload", "state", "chain_state", "budget_usdc", "miner_payment_usdc", "protocol_fee_usdc", "output_hash", "approval_tx_hash", "approval_block_number", "deposit_tx_hash", "deposit_block_number", "create_tx_hash", "create_block_number", "terminal_tx_hash", "terminal_block_number", "cancel_tx_hash", "cancel_block_number", "failure_code", "created_at", "updated_at", "terminal_at", "cancelled_at")}
+    return {key: getattr(job, key) for key in ("erc8183_job_id", "mandate_id", "ticket_id", "chain_id", "diamond_address", "telegraph_job_id", "intent_name", "intent_id", "callback_address", "callback_response_hash", "callback_verified", "callback_verified_at", "params_payload", "state", "chain_state", "budget_usdc", "miner_payment_usdc", "protocol_fee_usdc", "output_hash", "approval_tx_hash", "approval_block_number", "deposit_tx_hash", "deposit_block_number", "create_tx_hash", "create_block_number", "terminal_tx_hash", "terminal_block_number", "cancel_tx_hash", "cancel_block_number", "failure_code", "created_at", "updated_at", "terminal_at", "cancelled_at")}
 
 
 @app.post("/v1/tickets/{ticket_id}/anchor", status_code=status.HTTP_202_ACCEPTED)

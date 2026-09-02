@@ -9,7 +9,9 @@ from app.workers.tasks import (
     cancel_erc8183_job,
     cancellation_allowed,
     execute_erc8183_job,
+    reconcile_erc8183_job,
 )
+import app.workers.tasks as erc8183_tasks
 
 
 class _Query:
@@ -23,12 +25,21 @@ class _Session:
     def add(self, event): self.events.append(event)
 
 
+class _ReconcileSession(_Session):
+    def __init__(self, job): super().__init__(); self.job = job; self.commits = 0
+    def get(self, _model, _id): return self.job
+    def commit(self): self.commits += 1
+    def close(self): pass
+
+
 def _job():
     return SimpleNamespace(
         erc8183_job_id="job-local", telegraph_job_id="22", state="FUNDED", chain_state="FUNDED",
         failure_code=None, create_tx_hash="0xcreate", approval_tx_hash="0xapprove", deposit_tx_hash="0xdeposit",
+        create_block_number=46290000,
         budget_usdc=None, miner_payment_usdc=None, protocol_fee_usdc=None, output_hash=None,
         terminal_tx_hash=None, terminal_block_number=None, terminal_at=None,
+        callback_address=ZERO, callback_response_hash=None, callback_verified=False, callback_verified_at=None,
     )
 
 
@@ -43,6 +54,7 @@ TERMINAL_EVENT = {"event": {"tx_hash": "0x0a21681430f2f3c515e2b6cede3ffa39b986ae
 def test_g7_model_and_fixture_are_bounded() -> None:
     assert ERC8183Job.__tablename__ == "erc8183_jobs"
     assert any(constraint.name == "uq_erc8183_chain_diamond_job" for constraint in ERC8183Job.__table__.constraints)
+    assert {"callback_response_hash", "callback_verified", "callback_verified_at"}.issubset(ERC8183Job.__table__.c.keys())
     assert DIAMOND == "0x5a2324aA18613FAD4e44bDF0d6c73Ec1f6D87ff8"
     assert INTENT_NAME == "STORM_ALERT"
     assert INTENT_ID == "0x1d7f423dc3020b9066a5a9294633c43a4c619f55349df908009e90488bce085b"
@@ -87,3 +99,24 @@ def test_observation_timeout_preserves_funded_job_for_late_reconciliation_withou
     assert job.output_hash == CHAIN_TERMINAL["output_hash"]
     assert [event.event_type for event in session.events] == ["ERC8183_JOB_OBSERVATION_TIMEOUT", "ERC8183_JOB_TERMINAL"]
     assert cancellation_allowed(job) is False
+
+
+def test_verified_terminal_reconciliation_is_read_only_and_idempotent(monkeypatch) -> None:
+    job = _job()
+    job.state = job.chain_state = "TERMINAL"
+    job.output_hash = CHAIN_TERMINAL["output_hash"]
+    job.terminal_tx_hash = TERMINAL_EVENT["event"]["tx_hash"]
+    job.callback_address = "0x055bF3A946D780A4C043B3991c1c733f140f8124"
+    job.callback_response_hash = "0x" + "11" * 32
+    job.callback_verified = True
+    session = _ReconcileSession(job)
+    monkeypatch.setattr(erc8183_tasks, "SessionLocal", lambda: session)
+
+    def gateway(path):
+        if path.startswith("/chain/erc8183/jobs/22/terminal"): return TERMINAL_EVENT
+        if path.startswith("/chain/subnet-receiver/verify"): return {"status": "VALID", "stored_response_hash": job.callback_response_hash}
+        return CHAIN_TERMINAL
+
+    monkeypatch.setattr(erc8183_tasks, "_gateway_json", gateway)
+    assert reconcile_erc8183_job.run("job-local") == "ALREADY_TERMINAL+CALLBACK_ALREADY_VERIFIED"
+    assert session.commits == 0

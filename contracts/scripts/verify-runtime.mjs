@@ -1,0 +1,21 @@
+import { readdir, readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+
+const [address, rpcUrl = "https://sepolia.base.org"] = process.argv.slice(2);
+if (!/^0x[0-9a-fA-F]{40}$/.test(address ?? "")) throw new Error("usage: verify-runtime.mjs <contract-address> [rpc-url]");
+const artifactPath = resolve("artifacts/src/PRAMASubnetReceiver.sol/PRAMASubnetReceiver.json");
+const artifact = JSON.parse(await readFile(artifactPath, "utf8"));
+const buildInfos = await Promise.all((await readdir(resolve("artifacts/build-info"))).filter((name) => name.endsWith(".output.json")).map(async (name) => JSON.parse(await readFile(resolve("artifacts/build-info", name), "utf8"))));
+const output = buildInfos.flatMap((build) => Object.values(build.output?.contracts ?? {}).map((contracts) => contracts.PRAMASubnetReceiver)).find(Boolean);
+if (!output?.evm?.deployedBytecode?.object) throw new Error("compiled receiver runtime is unavailable");
+const expected = output.evm.deployedBytecode.object.toLowerCase();
+const immutableReferences = Object.values(output.evm.deployedBytecode.immutableReferences ?? {}).flat();
+const response = await fetch(rpcUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getCode", params: [address, "latest"] }) });
+const payload = await response.json();
+if (!response.ok || typeof payload.result !== "string" || payload.result === "0x") throw new Error("deployed receiver has no runtime code");
+const actual = payload.result.slice(2).toLowerCase();
+if (actual.length !== expected.length) throw new Error("runtime bytecode length mismatch");
+const masked = new Set();
+for (const reference of immutableReferences) for (let i = reference.start * 2; i < (reference.start + reference.length) * 2; i += 2) masked.add(i);
+for (let i = 0; i < expected.length; i += 2) if (!masked.has(i) && expected.slice(i, i + 2) !== actual.slice(i, i + 2)) throw new Error("runtime bytecode mismatch outside immutable references");
+console.log(JSON.stringify({ status: "PASS", runtime_bytes: actual.length / 2, compiled_runtime_bytes: expected.length / 2, immutable_reference_count: immutableReferences.length, non_immutable_bytes_match: true }));

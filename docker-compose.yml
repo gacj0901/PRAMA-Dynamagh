@@ -31,6 +31,7 @@ services:
       TELEGRAPH_MAX_PAYMENT_USDC: ${TELEGRAPH_MAX_PAYMENT_USDC:-0.05}
       PRAMA_TICKET_ANCHOR_ADDRESS: ${PRAMA_TICKET_ANCHOR_ADDRESS:-0x3c1a6acfd3b7ff981c31797533169e5ee36dd6e9}
       ERC8183_MAX_JOB_BUDGET_USDC: ${ERC8183_MAX_JOB_BUDGET_USDC:-2.000000}
+      TELEGRAPH_CALLBACK_CONTRACT_ADDRESS: ${TELEGRAPH_CALLBACK_CONTRACT_ADDRESS:-}
     ports:
       - "${GATEWAY_PORT:-8081}:8081"
     networks: [prama_internal, external_services]
@@ -48,6 +49,7 @@ services:
       RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672//}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/3}
       GATEWAY_URL: ${GATEWAY_URL:-http://gateway:8081}
+      ERC8183_CALLBACK_ADDRESS: ${TELEGRAPH_CALLBACK_CONTRACT_ADDRESS:-}
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
@@ -72,6 +74,7 @@ services:
       RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672//}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/3}
       GATEWAY_URL: ${GATEWAY_URL:-http://gateway:8081}
+      ERC8183_CALLBACK_ADDRESS: ${TELEGRAPH_CALLBACK_CONTRACT_ADDRESS:-}
       ERC8183_LIVE_WRITES_ENABLED: ${ERC8183_LIVE_WRITES_ENABLED:-false}
     depends_on:
       postgres:

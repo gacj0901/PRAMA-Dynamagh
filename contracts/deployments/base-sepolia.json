@@ -1,10 +1,22 @@
 {
-  "chain_id": 84532,
-  "contract": "PRAMATicketAnchor",
-  "address": "0x3c1a6acfd3b7ff981c31797533169e5ee36dd6e9",
-  "deployment_tx_hash": "0xce80dc16d3362bb6f934e666009d2f15b161132d65d57dfb87a4b507369df554",
-  "deployment_block": 46290884,
-  "operator": "0xC92b5ec74dca3EeE0A615dE026C3F3756cd18FB6",
-  "source_version": "prama-ticket-anchor-v0",
-  "artifact_sha256": "380F12CB7C8DA7A9C90BF995EE8D824B97F9A579E29D574F86CA98F63E56FD5E"
+  "PRAMATicketAnchor": {
+    "chain_id": 84532,
+    "contract": "PRAMATicketAnchor",
+    "address": "0x3c1a6acfd3b7ff981c31797533169e5ee36dd6e9",
+    "deployment_tx_hash": "0xce80dc16d3362bb6f934e666009d2f15b161132d65d57dfb87a4b507369df554",
+    "deployment_block": 46290884,
+    "operator": "0xC92b5ec74dca3EeE0A615dE026C3F3756cd18FB6",
+    "source_version": "prama-ticket-anchor-v0",
+    "artifact_sha256": "380F12CB7C8DA7A9C90BF995EE8D824B97F9A579E29D574F86CA98F63E56FD5E"
+  },
+  "PRAMASubnetReceiver": {
+    "chain_id": 84532,
+    "contract": "PRAMASubnetReceiver",
+    "address": "0x055bF3A946D780A4C043B3991c1c733f140f8124",
+    "deployment_tx_hash": "0xee0254ae9c2859e84ca30a38cecd123e57a2a8da71f70cc60d0c8d9976bd31dc",
+    "deployment_block": 46305536,
+    "telegraph_diamond": "0x5a2324aA18613FAD4e44bDF0d6c73Ec1f6D87ff8",
+    "source_version": "prama-subnet-receiver-v0",
+    "artifact_sha256": "6E4F6FB865D6A30378712233A0B84AAF9B55F713F326E05C8CA5FE96901C05FC"
+  }
 }

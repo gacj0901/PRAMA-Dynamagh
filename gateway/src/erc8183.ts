@@ -1,6 +1,6 @@
 import {
   createPublicClient, createWalletClient, decodeEventLog, encodeFunctionData,
-  getAddress, http, keccak256, parseUnits, stringToHex, type Address, type Hex,
+  getAddress, http, isAddress, keccak256, parseUnits, stringToHex, type Address, type Hex,
 } from "viem";
 import { baseSepolia } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
@@ -35,18 +35,33 @@ const erc20Abi = [
 type JobValue = { agent: Address; intentId: Hex; callback: Address; budget: bigint; minerPayment: bigint; protocolFee: bigint; state: number; createdAt: bigint };
 export function configuredDiamond(): Address { return getAddress(process.env.TELEGRAPH_DIAMOND_ADDRESS ?? TELEGRAPH_DIAMOND); }
 export function configuredUsdc(): Address { return getAddress(process.env.TELEGRAPH_USDC_ADDRESS ?? TELEGRAPH_USDC); }
+export function configuredCallback(): Address {
+  const value = process.env.TELEGRAPH_CALLBACK_CONTRACT_ADDRESS;
+  if (!value) return ZERO_ADDRESS;
+  if (!isAddress(value)) throw new ChainError("ERC8183_CALLBACK_INVALID" as never, "configured callback address is invalid");
+  return getAddress(value);
+}
 export function maxJobBudgetMicro(): bigint { return parseUnits(process.env.ERC8183_MAX_JOB_BUDGET_USDC ?? "2.000000", 6); }
 export function publicClient() { return createPublicClient({ chain: baseSepolia, transport: http(baseSepoliaRpcUrl()) }); }
 function accountFor(privateKey: string | undefined) { if (!privateKey) throw new ChainError("CHAIN_UNAVAILABLE", "gateway signer is unavailable"); return privateKeyToAccount(privateKey as Hex); }
-function requireExactFixture(intentId: string, params: typeof STORM_ALERT_PARAMS, callback: string) {
-  if (intentId !== STORM_ALERT_INTENT_ID || callback.toLowerCase() !== ZERO_ADDRESS || JSON.stringify(params) !== JSON.stringify(STORM_ALERT_PARAMS)) throw new ChainError("ERC8183_FIXTURE_INVALID" as never, "only the fixed STORM_ALERT fixture is allowed");
+function requireExactFixture(intentId: string, params: typeof STORM_ALERT_PARAMS, callback: string, expectedCallback: Address) {
+  if (intentId !== STORM_ALERT_INTENT_ID || getAddress(callback) !== expectedCallback || JSON.stringify(params) !== JSON.stringify(STORM_ALERT_PARAMS)) throw new ChainError("ERC8183_FIXTURE_INVALID" as never, "only the fixed STORM_ALERT fixture and configured callback are allowed");
 }
 async function requireBase(client: ReturnType<typeof publicClient>) { const id = await client.getChainId(); if (id !== EXPECTED_CHAIN_ID) throw new ChainError("CHAIN_ID_MISMATCH", "Base Sepolia is required"); return id; }
+
+export async function guardedCallback(client: { getCode: (parameters: { address: Address }) => Promise<Hex | undefined> }) {
+  const callback = configuredCallback();
+  if (callback === ZERO_ADDRESS) return { callback, codePresent: false };
+  const code = await client.getCode({ address: callback });
+  if (!code || code === "0x") throw new ChainError("ERC8183_CALLBACK_UNAVAILABLE" as never, "configured callback has no runtime code");
+  return { callback, codePresent: true };
+}
 
 export async function erc8183Preflight(privateKey: string | undefined) {
   const signer = signerAddress(privateKey); if (!signer) throw new ChainError("CHAIN_UNAVAILABLE", "gateway signer is unavailable");
   const client = publicClient(), diamond = configuredDiamond(), usdc = configuredUsdc(), account = getAddress(signer);
   const chainId = await requireBase(client);
+  const callback = await guardedCallback(client);
   const [diamondCode, usdcCode, token, price, escrow, usdcBalance, allowance, gasPrice, ethBalance] = await Promise.all([
     client.getCode({ address: diamond }), client.getCode({ address: usdc }), client.readContract({ address: diamond, abi: diamondAbi, functionName: "usdcToken" }), client.readContract({ address: diamond, abi: diamondAbi, functionName: "getJobBasePrice" }), client.readContract({ address: diamond, abi: diamondAbi, functionName: "escrowBalance", args: [account] }), client.readContract({ address: usdc, abi: erc20Abi, functionName: "balanceOf", args: [account] }), client.readContract({ address: usdc, abi: erc20Abi, functionName: "allowance", args: [account, diamond] }), client.getGasPrice(), client.getBalance({ address: account }),
   ]);
@@ -57,11 +72,11 @@ export async function erc8183Preflight(privateKey: string | undefined) {
   if ((usdcBalance as bigint) < topUp) throw new ChainError("ERC8183_INSUFFICIENT_USDC" as never, "signer lacks USDC for bounded escrow top-up");
   const approveData = encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [diamond, topUp] });
   const depositData = encodeFunctionData({ abi: diamondAbi, functionName: "depositUSDC", args: [topUp] });
-  const createData = encodeFunctionData({ abi: diamondAbi, functionName: "createJob", args: [STORM_ALERT_INTENT_ID, STORM_ALERT_PARAMS, ZERO_ADDRESS] });
+  const createData = encodeFunctionData({ abi: diamondAbi, functionName: "createJob", args: [STORM_ALERT_INTENT_ID, STORM_ALERT_PARAMS, callback.callback] });
   const estimate = async (to: Address, data: Hex) => { try { return await client.estimateGas({ account, to, data, value: 0n }); } catch { return null; } };
   const [approveGas, depositGas, createGas] = await Promise.all([estimate(usdc, approveData), estimate(diamond, depositData), (escrow as bigint) >= (price as bigint) ? estimate(diamond, createData) : Promise.resolve(null)]);
   const gasNeed = [approveGas, depositGas, createGas].reduce<bigint>((sum, gas) => sum + (gas ?? 0n), 0n) * gasPrice;
-  return { status: "READY", chain_id: chainId, diamond_address: diamond, usdc_address: usdc, diamond_code_present: true, usdc_code_present: true, diamond_usdc_token: getAddress(token as string), signer_address: account, signer_eth_balance_wei: ethBalance.toString(), signer_usdc_balance_micro: (usdcBalance as bigint).toString(), usdc_allowance_micro: (allowance as bigint).toString(), escrow_balance_micro: (escrow as bigint).toString(), job_base_price_micro: (price as bigint).toString(), budget_cap_micro: maxJobBudgetMicro().toString(), required_escrow_micro: (price as bigint).toString(), top_up_micro: topUp.toString(), intent_name: STORM_ALERT_INTENT, intent_id: STORM_ALERT_INTENT_ID, callback: ZERO_ADDRESS, estimated_approve_gas: approveGas?.toString() ?? null, estimated_deposit_gas: depositGas?.toString() ?? null, estimated_create_job_gas: createGas?.toString() ?? null, create_simulation_ready: (escrow as bigint) >= (price as bigint), signer_gas_sufficient: ethBalance > gasNeed };
+  return { status: "READY", chain_id: chainId, diamond_address: diamond, usdc_address: usdc, diamond_code_present: true, usdc_code_present: true, diamond_usdc_token: getAddress(token as string), signer_address: account, signer_eth_balance_wei: ethBalance.toString(), signer_usdc_balance_micro: (usdcBalance as bigint).toString(), usdc_allowance_micro: (allowance as bigint).toString(), escrow_balance_micro: (escrow as bigint).toString(), job_base_price_micro: (price as bigint).toString(), budget_cap_micro: maxJobBudgetMicro().toString(), required_escrow_micro: (price as bigint).toString(), top_up_micro: topUp.toString(), intent_name: STORM_ALERT_INTENT, intent_id: STORM_ALERT_INTENT_ID, callback: callback.callback, callback_code_present: callback.codePresent, estimated_approve_gas: approveGas?.toString() ?? null, estimated_deposit_gas: depositGas?.toString() ?? null, estimated_create_job_gas: createGas?.toString() ?? null, create_simulation_ready: (escrow as bigint) >= (price as bigint), signer_gas_sufficient: ethBalance > gasNeed };
 }
 
 async function exactWrite(privateKey: string | undefined, token: string | undefined, to: Address, data: Hex, expectedGas: bigint | null) {
@@ -86,8 +101,8 @@ export async function depositTelegraphEscrow(privateKey: string | undefined, tok
 }
 export async function createTelegraphJob(privateKey: string | undefined, token: string | undefined) {
   const p = await erc8183Preflight(privateKey); if (!p.create_simulation_ready) throw new ChainError("ERC8183_ESCROW_INSUFFICIENT" as never, "escrow must be funded before createJob");
-  requireExactFixture(STORM_ALERT_INTENT_ID, STORM_ALERT_PARAMS, ZERO_ADDRESS);
-  return { tx_hash: await exactWrite(privateKey, token, configuredDiamond(), encodeFunctionData({ abi: diamondAbi, functionName: "createJob", args: [STORM_ALERT_INTENT_ID, STORM_ALERT_PARAMS, ZERO_ADDRESS] }), BigInt(p.estimated_create_job_gas!)), chain_id: p.chain_id, diamond_address: p.diamond_address };
+  requireExactFixture(STORM_ALERT_INTENT_ID, STORM_ALERT_PARAMS, p.callback, configuredCallback());
+  return { tx_hash: await exactWrite(privateKey, token, configuredDiamond(), encodeFunctionData({ abi: diamondAbi, functionName: "createJob", args: [STORM_ALERT_INTENT_ID, STORM_ALERT_PARAMS, p.callback] }), BigInt(p.estimated_create_job_gas!)), chain_id: p.chain_id, diamond_address: p.diamond_address, callback: p.callback };
 }
 export async function cancelTelegraphJob(privateKey: string | undefined, token: string | undefined, jobId: bigint) {
   const job = await readTelegraphJob(jobId); if (job.state !== 0) throw new ChainError("ERC8183_CANCEL_INVALID" as never, "only Funded jobs may be cancelled");
@@ -103,7 +118,7 @@ export async function readCreateReceipt(privateKey: string | undefined, txHash: 
   const signer = signerAddress(privateKey); if (!signer) throw new ChainError("CHAIN_UNAVAILABLE", "gateway signer is unavailable"); const client = publicClient();
   let receipt; try { receipt = await client.getTransactionReceipt({ hash: txHash }); } catch { return { status: "PENDING" as const }; }
   if (receipt.status !== "success") return { status: "FAILED" as const, failure_code: "ERC8183_CREATE_REVERTED" };
-  const event = receipt.logs.map(log => { try { return decodeEventLog({ abi: diamondAbi, eventName: "JobCreated", data: log.data, topics: log.topics }); } catch { return null; } }).find(entry => entry && getAddress((entry.args as { agent: Address }).agent) === getAddress(signer) && (entry.args as { intentId: Hex }).intentId === STORM_ALERT_INTENT_ID && getAddress((entry.args as { callback: Address }).callback) === ZERO_ADDRESS);
+  const event = receipt.logs.map(log => { try { return decodeEventLog({ abi: diamondAbi, eventName: "JobCreated", data: log.data, topics: log.topics }); } catch { return null; } }).find(entry => entry && getAddress((entry.args as { agent: Address }).agent) === getAddress(signer) && (entry.args as { intentId: Hex }).intentId === STORM_ALERT_INTENT_ID && getAddress((entry.args as { callback: Address }).callback) === configuredCallback());
   if (!event || receipt.blockNumber === null) return { status: "FAILED" as const, failure_code: "ERC8183_JOBCREATED_MISMATCH" };
   const args = event.args as { jobId: bigint }; return { status: "CONFIRMED" as const, job_id: args.jobId.toString(), block_number: receipt.blockNumber.toString(), tx_hash: txHash };
 }
