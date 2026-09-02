@@ -8,7 +8,7 @@ ALLOWED_TRANSITIONS: dict[MandateStatus, set[MandateStatus]] = {
     MandateStatus.ACQUIRING: {MandateStatus.EVALUATING, MandateStatus.FAILED},
     MandateStatus.EVALUATING: {MandateStatus.DECIDING, MandateStatus.FAILED},
     MandateStatus.DECIDING: {MandateStatus.DECIDED, MandateStatus.FAILED},
-    MandateStatus.DECIDED: set(),
+    MandateStatus.DECIDED: {MandateStatus.TICKETED, MandateStatus.FAILED},
     MandateStatus.TICKETED: set(),
     MandateStatus.FAILED: set(),
 }

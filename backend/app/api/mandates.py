@@ -94,3 +94,9 @@ def decision(mandate_id: str, session: Session = Depends(get_session)) -> dict[s
 def replay(mandate_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
     from app.pramagraph.replay import replay as run
     return run(session, mandate_id)
+@router.get("/{mandate_id}/ticket")
+def ticket(mandate_id: str, session: Session = Depends(get_session)):
+    from app.domain.mandates import Ticket
+    t=session.query(Ticket).filter_by(mandate_id=mandate_id).first()
+    if not t: raise HTTPException(404,"ticket not found")
+    return {"ticket_id":t.ticket_id,"mandate_id":t.mandate_id,"schema_version":t.schema_version,"ticket_hash":t.ticket_hash,"anchor_status":t.anchor_status,"canonical_payload":t.canonical_payload}
