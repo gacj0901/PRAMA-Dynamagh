@@ -1,0 +1,94 @@
+name: prama-dynamagh
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-prama_dynamagh}
+      POSTGRES_USER: ${POSTGRES_USER:-prama}
+      # Local-only fallback so the bootstrap topology is runnable. Replace in .env.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-prama_local_dev_only}
+    volumes:
+      - prama_postgres_data:/var/lib/postgresql/data
+    networks: [prama_internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  gateway:
+    build: ./gateway
+    environment:
+      PORT: 8081
+      TELEGRAPH_ENGINE_URL: ${TELEGRAPH_ENGINE_URL:-https://devnode.telegraphprotocol.com}
+      TELEGRAPH_SIGNER_PRIVATE_KEY: ${TELEGRAPH_SIGNER_PRIVATE_KEY:-}
+      MAX_PAYMENT_USDC: ${MAX_PAYMENT_USDC:-5.00}
+    ports:
+      - "${GATEWAY_PORT:-8081}:8081"
+    networks: [prama_internal, external_services]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8081/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://prama:prama_local_dev_only@postgres:5432/prama_dynamagh}
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672//}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/3}
+      GATEWAY_URL: ${GATEWAY_URL:-http://gateway:8081}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+    networks: [prama_internal, external_services]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    build: ./backend
+    command: celery --app app.workers.celery_app worker --loglevel=INFO
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://prama:prama_local_dev_only@postgres:5432/prama_dynamagh}
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672//}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/3}
+      GATEWAY_URL: ${GATEWAY_URL:-http://gateway:8081}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+    networks: [prama_internal, external_services]
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "${WEB_PORT:-5173}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [prama_internal]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+networks:
+  prama_internal:
+  external_services:
+    external: true
+    name: ${EXTERNAL_SERVICES_NETWORK:-firecrawl_backend}
+
+volumes:
+  prama_postgres_data:

@@ -1,0 +1,25 @@
+{
+  "name": "prama-dynamagh-gateway",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "start": "tsx src/server.ts",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@x402/core": "^2.0.0",
+    "@x402/evm": "^2.0.0",
+    "@x402/fetch": "^2.0.0",
+    "express": "^5.0.1",
+    "viem": "^2.21.54"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
+

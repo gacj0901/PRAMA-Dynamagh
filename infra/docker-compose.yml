@@ -1,0 +1,4 @@
+# The runnable compose entrypoint is ../docker-compose.yml so `docker compose up --build`
+# works from the repository root. This file reserves the infrastructure boundary.
+name: prama-dynamagh
+
