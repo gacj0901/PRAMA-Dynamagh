@@ -1,8 +1,14 @@
+import os
+
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from app.persistence.database import Base
+import app.domain.mandates  # noqa: F401 - imports mapped models for Alembic metadata
+
 config = context.config
-target_metadata = None
+config.set_main_option("sqlalchemy.url", os.environ.get("DATABASE_URL", config.get_main_option("sqlalchemy.url")))
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
@@ -23,4 +29,3 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
-
