@@ -22,6 +22,7 @@ class MandateStatus(str, enum.Enum):
     ACQUIRING = "ACQUIRING"
     EVALUATING = "EVALUATING"
     DECIDING = "DECIDING"
+    DECIDED = "DECIDED"
     TICKETED = "TICKETED"
     FAILED = "FAILED"
 
@@ -102,3 +103,13 @@ class UsageEvent(Base):
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+class Evidence(Base):
+    __tablename__="evidence"
+    evidence_id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4())); mandate_id: Mapped[str]=mapped_column(String(36),index=True); acquisition_id: Mapped[str]=mapped_column(String(36)); telegraph_call_id: Mapped[str]=mapped_column(String(36),unique=True); evidence_type: Mapped[str]=mapped_column(String(64)); source_kind: Mapped[str]=mapped_column(String(32)); source_intent: Mapped[str|None]=mapped_column(String(255)); source_miner_id: Mapped[str|None]=mapped_column(String(255)); source_signal_hash: Mapped[str|None]=mapped_column(String(255)); normalized_payload: Mapped[dict]=mapped_column(JSONB); content_hash: Mapped[str]=mapped_column(String(66)); normalizer_version: Mapped[str]=mapped_column(String(64)); provenance_status: Mapped[str]=mapped_column(String(32)); admissibility: Mapped[str]=mapped_column(String(32)); limitation_codes: Mapped[list]=mapped_column(JSONB,default=list); created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utc_now); updated_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utc_now)
+class StructuralEvaluation(Base):
+    __tablename__="structural_evaluations"
+    evaluation_id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4())); mandate_id: Mapped[str]=mapped_column(String(36)); evaluator: Mapped[str]=mapped_column(String(64)); evaluator_version: Mapped[str]=mapped_column(String(64)); evidence_set_hash: Mapped[str]=mapped_column(String(66)); admitted_evidence_ids: Mapped[list]=mapped_column(JSONB); limited_evidence_ids: Mapped[list]=mapped_column(JSONB); rejected_evidence_ids: Mapped[list]=mapped_column(JSONB); limitation_codes: Mapped[list]=mapped_column(JSONB); contradiction_codes: Mapped[list]=mapped_column(JSONB); structural_state: Mapped[str]=mapped_column(String(64)); evaluation_payload: Mapped[dict]=mapped_column(JSONB); created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utc_now); completed_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utc_now)
+class Decision(Base):
+    __tablename__="decisions"
+    decision_id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4())); mandate_id: Mapped[str]=mapped_column(String(36)); evaluation_id: Mapped[str]=mapped_column(String(36),unique=True); state: Mapped[str]=mapped_column(String(16)); policy_version: Mapped[str]=mapped_column(String(64)); evidence_set_hash: Mapped[str]=mapped_column(String(66)); reason_codes: Mapped[list]=mapped_column(JSONB); decision_payload: Mapped[dict]=mapped_column(JSONB); created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utc_now); completed_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utc_now)

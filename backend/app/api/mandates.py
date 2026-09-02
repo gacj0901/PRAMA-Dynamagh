@@ -73,3 +73,24 @@ def acquisitions(mandate_id: str, session: Session = Depends(get_session)) -> di
         call=session.query(TelegraphCall).filter_by(acquisition_id=t.acquisition_id).one_or_none()
         output.append({"acquisition_id":t.acquisition_id,"status":t.status,"intent":call.intent if call else None,"miner_id":call.miner_id if call else None,"miner_name":call.miner_name if call else None,"signal_hash":call.signal_hash if call else None,"cost_usd":float(call.cost_usd) if call and call.cost_usd is not None else None,"duration_ms":call.duration_ms if call else None})
     return {"mandate_id": mandate_id, "acquisitions": output}
+
+@router.get("/{mandate_id}/evidence")
+def evidence(mandate_id: str, session: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    from app.domain.mandates import Evidence
+    return [{"evidence_id":e.evidence_id,"admissibility":e.admissibility,"provenance_status":e.provenance_status,"content_hash":e.content_hash,"source_intent":e.source_intent,"source_miner_id":e.source_miner_id,"source_signal_hash":e.source_signal_hash,"limitation_codes":e.limitation_codes,"normalized_payload":e.normalized_payload} for e in session.query(Evidence).filter_by(mandate_id=mandate_id)]
+@router.get("/{mandate_id}/evaluation")
+def evaluation(mandate_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
+    from app.domain.mandates import StructuralEvaluation
+    e=session.query(StructuralEvaluation).filter_by(mandate_id=mandate_id).order_by(StructuralEvaluation.created_at.desc()).first()
+    if not e: raise HTTPException(404,"evaluation not found")
+    return {"evaluation_id":e.evaluation_id,"evaluator_version":e.evaluator_version,"evidence_set_hash":e.evidence_set_hash,"structural_state":e.structural_state,"limitation_codes":e.limitation_codes,"contradiction_codes":e.contradiction_codes}
+@router.get("/{mandate_id}/decision")
+def decision(mandate_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
+    from app.domain.mandates import Decision
+    d=session.query(Decision).filter_by(mandate_id=mandate_id).order_by(Decision.created_at.desc()).first()
+    if not d: raise HTTPException(404,"decision not found")
+    return {"decision_id":d.decision_id,"state":d.state,"policy_version":d.policy_version,"reason_codes":d.reason_codes,"evidence_set_hash":d.evidence_set_hash,"evaluation_id":d.evaluation_id}
+@router.get("/{mandate_id}/replay")
+def replay(mandate_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
+    from app.pramagraph.replay import replay as run
+    return run(session, mandate_id)
