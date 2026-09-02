@@ -19,11 +19,12 @@ services:
 
   gateway:
     build: ./gateway
+    env_file:
+      - ./gateway/.env
     environment:
       PORT: 8081
-      TELEGRAPH_ENGINE_URL: ${TELEGRAPH_ENGINE_URL:-https://devnode.telegraphprotocol.com}
-      TELEGRAPH_SIGNER_PRIVATE_KEY: ${TELEGRAPH_SIGNER_PRIVATE_KEY:-}
-      MAX_PAYMENT_USDC: ${MAX_PAYMENT_USDC:-5.00}
+      TELEGRAPH_BASE_URL: ${TELEGRAPH_BASE_URL:-https://devnode.telegraphprotocol.com}
+      TELEGRAPH_MAX_PAYMENT_USDC: ${TELEGRAPH_MAX_PAYMENT_USDC:-0.05}
     ports:
       - "${GATEWAY_PORT:-8081}:8081"
     networks: [prama_internal, external_services]

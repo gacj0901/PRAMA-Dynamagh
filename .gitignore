@@ -1,5 +1,6 @@
 .env
 .env.*
+gateway/.env
 !.env.example
 __pycache__/
 *.py[cod]
@@ -11,4 +12,3 @@ dist/
 coverage/
 postgres-data/
 *.log
-

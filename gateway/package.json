@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc --noEmit",
     "start": "tsx src/server.ts",
-    "test": "node --test"
+    "test": "tsx --test tests/unit/*.test.ts",
+    "test:live": "tsx --test tests/live/g2-live.test.ts"
   },
   "dependencies": {
     "@x402/core": "^2.0.0",
@@ -22,4 +23,3 @@
     "typescript": "^5.7.2"
   }
 }
-
