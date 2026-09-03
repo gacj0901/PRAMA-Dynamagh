@@ -33,6 +33,9 @@ class MandateRead(BaseModel):
     max_budget_usdc: Decimal
     deadline: datetime | None
     status: str
+    origin: str
+    autonomy_policy_id: str | None
+    autonomy_run_id: str | None
     created_at: datetime
     updated_at: datetime
     acquisitions: list[dict[str, Any]] = []

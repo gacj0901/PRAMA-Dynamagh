@@ -8,6 +8,11 @@ celery_app = Celery(
     backend=os.environ.get("REDIS_URL", "redis://redis:6379/3"),
 )
 celery_app.conf.task_default_queue = "prama-dynamagh"
+celery_app.conf.beat_schedule = {
+    # The task is harmless while the global switch is false (the default).
+    # Policy cadence/budgets remain the authoritative scheduling controls.
+    "autonomy-tick": {"task": "prama.autonomy_tick", "schedule": 60.0},
+}
 
 # Importing registers durable task names with every Worker process.
 import app.workers.tasks  # noqa: E402,F401

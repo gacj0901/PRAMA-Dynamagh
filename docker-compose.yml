@@ -50,6 +50,7 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/3}
       GATEWAY_URL: ${GATEWAY_URL:-http://gateway:8081}
       ERC8183_CALLBACK_ADDRESS: ${TELEGRAPH_CALLBACK_CONTRACT_ADDRESS:-}
+      AUTONOMY_GLOBAL_ENABLED: ${AUTONOMY_GLOBAL_ENABLED:-false}
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
@@ -68,7 +69,7 @@ services:
     build: ./backend
     env_file:
       - ./.secrets/gateway-worker.env
-    command: celery --app app.workers.celery_app worker --loglevel=INFO
+    command: celery --app app.workers.celery_app worker --beat --loglevel=INFO
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://prama:prama_local_dev_only@postgres:5432/prama_dynamagh}
       RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672//}
@@ -76,6 +77,7 @@ services:
       GATEWAY_URL: ${GATEWAY_URL:-http://gateway:8081}
       ERC8183_CALLBACK_ADDRESS: ${TELEGRAPH_CALLBACK_CONTRACT_ADDRESS:-}
       ERC8183_LIVE_WRITES_ENABLED: ${ERC8183_LIVE_WRITES_ENABLED:-false}
+      AUTONOMY_GLOBAL_ENABLED: ${AUTONOMY_GLOBAL_ENABLED:-false}
     depends_on:
       postgres:
         condition: service_healthy

@@ -11,8 +11,49 @@ from app.domain.mandates import AcquisitionTask, AcquisitionStatus, AnchorAttemp
 from app.domain.state_machine import transition_mandate
 from app.pramagraph.evaluation import classify, decide, digest
 from app.tickets.service import issue as issue_ticket
+from app.autonomy.service import claim_run, execute_claimed, finalize_http_run, recover_runs, schedule_due
+from app.domain.mandates import AutonomyPolicy
 
 def now(): return datetime.now(timezone.utc)
+
+
+@celery_app.task(name="prama.autonomy_tick")
+def autonomy_tick():
+    """Private worker scheduler; policy/global controls fail closed.
+
+    PostgreSQL row locks in ``claim_run`` provide the durable lease.  This
+    task deliberately has no public API counterpart.
+    """
+    session = SessionLocal()
+    try:
+        recovered = recover_runs(session)
+        session.commit()
+        scheduled = claimed = completed = 0
+        policies = session.query(AutonomyPolicy).filter_by(enabled=True, state="ACTIVE").all()
+        for policy in policies:
+            run = schedule_due(session, policy)
+            if run is None:
+                continue
+            scheduled += 1
+            session.commit()
+            run = claim_run(session, run.run_id)
+            if run is None:
+                session.rollback()
+                continue
+            claimed += 1
+            outcome = execute_claimed(session, run)
+            if outcome == "COMPLETED":
+                completed += 1
+            session.commit()
+            if outcome == "ACQUISITION_QUEUED":
+                acquisition = session.query(AcquisitionTask).filter_by(mandate_id=run.mandate_id).one()
+                execute_acquisition.delay(run.mandate_id, acquisition.acquisition_id)
+        return {"recovered": len(recovered), "scheduled": scheduled, "claimed": claimed, "completed": completed}
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 @celery_app.task(name="prama.execute_acquisition", bind=True)
 def execute_acquisition(self, mandate_id: str, acquisition_id: str):
     lock=redis.from_url(os.environ["REDIS_URL"]); key=f"prama:acquisition:{acquisition_id}"
@@ -32,12 +73,15 @@ def execute_acquisition(self, mandate_id: str, acquisition_id: str):
         req=Request(os.environ["GATEWAY_URL"]+"/ask",data=data,headers={"content-type":"application/json"},method="POST")
         with urlopen(req, timeout=45) as r: raw=json.loads(r.read())
         if not raw.get("miner_id") or not raw.get("intent") or not raw.get("signal_hash"): raise RuntimeError("TELEGRAPH_INVALID_RESPONSE")
-        call=TelegraphCall(mandate_id=mandate_id,acquisition_id=acquisition_id,causal_request_id=mandate_id,miner_id=str(raw.get("miner_id")),miner_name=raw.get("miner_name"),intent=raw.get("intent"),signal_hash=raw.get("signal_hash"),cost_usd=raw.get("cost_usd"),duration_ms=raw.get("duration_ms"),reasoning=raw.get("reasoning"),warnings=raw.get("warnings",[]),raw_response=raw,status="SUCCEEDED",completed_at=now())
+        actual_cost=Decimal(str(raw.get("cost_usd") or "0"))
+        if actual_cost > Decimal(mandate.max_budget_usdc): raise RuntimeError("BUDGET_EXHAUSTED")
+        call=TelegraphCall(mandate_id=mandate_id,acquisition_id=acquisition_id,causal_request_id=mandate_id,miner_id=str(raw.get("miner_id")),miner_name=raw.get("miner_name"),intent=raw.get("intent"),signal_hash=raw.get("signal_hash"),cost_usd=actual_cost,duration_ms=raw.get("duration_ms"),reasoning=raw.get("reasoning"),warnings=raw.get("warnings",[]),raw_response=raw,status="SUCCEEDED",completed_at=now())
         s.add(call); task.status=AcquisitionStatus.SUCCEEDED.value; task.completed_at=now(); transition_mandate(s,mandate,MandateStatus.EVALUATING); s.add_all([UsageEvent(mandate_id=mandate_id,acquisition_id=acquisition_id,event_type="TELEGRAPH_RESPONSE",metadata_={}),UsageEvent(mandate_id=mandate_id,acquisition_id=acquisition_id,event_type="ACQUISITION_COMPLETED",metadata_={})]); s.commit(); return evaluate_mandate(mandate_id)
     except Exception as e:
         code=str(e) if str(e) in {"BUDGET_EXHAUSTED","TELEGRAPH_INVALID_RESPONSE"} else "GATEWAY_UNAVAILABLE"; task=s.get(AcquisitionTask,acquisition_id); mandate=s.get(Mandate,mandate_id)
         if task: task.status=AcquisitionStatus.FAILED.value; task.failure_code=code
         if mandate and mandate.status not in {"FAILED","TICKETED"}: transition_mandate(s,mandate,MandateStatus.FAILED,code)
+        if mandate and mandate.origin == "AUTONOMOUS": finalize_http_run(s, mandate_id, failure_code=code)
         s.commit(); return code
     finally: lock.delete(key); s.close()
 
@@ -56,11 +100,19 @@ def evaluate_mandate(mandate_id):
             try:
                 with urlopen(os.environ["GATEWAY_URL"]+"/signals/"+c.signal_hash,timeout=20) as x: verified=x.status==200
             except: verified=False
+            if mandate.origin == "AUTONOMOUS":
+                policy=s.get(AutonomyPolicy, mandate.autonomy_policy_id)
+                if policy and policy.strict_verification and not verified:
+                    transition_mandate(s, mandate, MandateStatus.FAILED, "STRICT_PROVENANCE_FAILED")
+                    finalize_http_run(s, mandate_id, failure_code="STRICT_PROVENANCE_FAILED")
+                    s.commit(); return "STRICT_PROVENANCE_FAILED"
             normalized={"intent":c.intent,"result":c.raw_response.get("result"),"miner_id":c.miner_id,"signal_hash":c.signal_hash,"warnings":c.warnings}; adm,codes=classify(c,verified)
             e=Evidence(mandate_id=mandate_id,acquisition_id=c.acquisition_id,telegraph_call_id=c.telegraph_call_id,evidence_type="TELEGRAPH_RESULT",source_kind="TELEGRAPH",source_intent=c.intent,source_miner_id=c.miner_id,source_signal_hash=c.signal_hash,normalized_payload=normalized,content_hash=digest(normalized),normalizer_version="telegraph-evidence-v0",provenance_status="VERIFIED" if verified else "FAILED",admissibility=adm,limitation_codes=codes); s.add(e); evidence.append(e)
         s.flush(); esh=digest([e.content_hash for e in sorted(evidence,key=lambda x:x.evidence_id)])
         rejected=[e.evidence_id for e in evidence if e.admissibility=="REJECTED"]; limited=[e.evidence_id for e in evidence if e.admissibility=="LIMITED"]; admitted=[e.evidence_id for e in evidence if e.admissibility=="ADMITTED"]; structural="STRUCTURALLY_BLOCKED" if not evidence or rejected else ("STRUCTURALLY_LIMITED" if limited else "STRUCTURALLY_ADMISSIBLE")
-        ev=StructuralEvaluation(mandate_id=mandate_id,evaluator="PRAMAGRAPH",evaluator_version="pramagraph-structural-v0",evidence_set_hash=esh,admitted_evidence_ids=admitted,limited_evidence_ids=limited,rejected_evidence_ids=rejected,limitation_codes=sum((e.limitation_codes for e in evidence),[]),contradiction_codes=[],structural_state=structural,evaluation_payload={}); s.add(ev); s.flush(); state,reasons=decide(structural); s.add(Decision(mandate_id=mandate_id,evaluation_id=ev.evaluation_id,state=state,policy_version="prama-gate-v0",evidence_set_hash=esh,reason_codes=reasons,decision_payload={})); transition_mandate(s,mandate,MandateStatus.DECIDED); s.add_all([UsageEvent(mandate_id=mandate_id,event_type="EVIDENCE_CREATED",metadata_={}),UsageEvent(mandate_id=mandate_id,event_type="EVALUATION_COMPLETED",metadata_={}),UsageEvent(mandate_id=mandate_id,event_type="DECISION_CREATED",metadata_={})]); s.commit(); return issue_ticket(s,mandate_id)[1]
+        ev=StructuralEvaluation(mandate_id=mandate_id,evaluator="PRAMAGRAPH",evaluator_version="pramagraph-structural-v0",evidence_set_hash=esh,admitted_evidence_ids=admitted,limited_evidence_ids=limited,rejected_evidence_ids=rejected,limitation_codes=sum((e.limitation_codes for e in evidence),[]),contradiction_codes=[],structural_state=structural,evaluation_payload={}); s.add(ev); s.flush(); state,reasons=decide(structural); s.add(Decision(mandate_id=mandate_id,evaluation_id=ev.evaluation_id,state=state,policy_version="prama-gate-v0",evidence_set_hash=esh,reason_codes=reasons,decision_payload={})); transition_mandate(s,mandate,MandateStatus.DECIDED); s.add_all([UsageEvent(mandate_id=mandate_id,event_type="EVIDENCE_CREATED",metadata_={}),UsageEvent(mandate_id=mandate_id,event_type="EVALUATION_COMPLETED",metadata_={}),UsageEvent(mandate_id=mandate_id,event_type="DECISION_CREATED",metadata_={})]); s.commit(); result=issue_ticket(s,mandate_id)[1]
+        if mandate.origin == "AUTONOMOUS": finalize_http_run(s, mandate_id); s.commit()
+        return result
     finally: s.close()
 
 

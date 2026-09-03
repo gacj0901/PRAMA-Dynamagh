@@ -1,9 +1,11 @@
 from fastapi import FastAPI, HTTPException, status
 
 from app.api.mandates import router as mandates_router
+from app.api.autonomy import router as autonomy_router
 
 app = FastAPI(title="PRAMA-Dynamagh API", version="0.0.1")
 app.include_router(mandates_router)
+app.include_router(autonomy_router)
 
 
 @app.post("/v1/erc8183/jobs", status_code=status.HTTP_202_ACCEPTED)

@@ -38,8 +38,6 @@ def test_erc8183_evidence_uniqueness_rolls_back_cleanly(session):
     assert job is not None
     before = session.query(Evidence).filter_by(erc8183_job_id=LIVE_JOB, normalizer_version=VERSION).count()
     session.add(candidate(LIVE_JOB))
-    session.flush()
-    session.add(candidate(LIVE_JOB))
     with pytest.raises(IntegrityError) as raised:
         session.flush()
     assert getattr(getattr(raised.value, "orig", None), "diag", None).constraint_name == "uq_evidence_erc8183_job_normalizer"
