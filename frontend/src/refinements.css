@@ -1,0 +1,165 @@
+/* Presentation refinements: positive states and the dedicated About control. */
+.chip.good {
+  color: #6bc8a3;
+  border-color: #6bc8a3;
+  background: #4d645b;
+}
+
+.tabs button {
+  padding: 13px 12px;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.brand {
+  position: relative;
+}
+
+.about-trigger-logo {
+  position: absolute;
+  z-index: 5;
+  top: 50%;
+  left: 198px;
+  min-width: 174px;
+  min-height: 44px;
+  border: 0;
+  padding: 9px 12px;
+  background: #f15a36;
+  color: #111314;
+  font: 700 13px/1 "Sometype Mono", "Courier New", monospace;
+  letter-spacing: -0.035em;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-7px, -50%);
+  transition: opacity 160ms ease, transform 160ms ease, background 160ms ease;
+}
+
+.about-trigger-logo span {
+  display: inline;
+  margin-left: 4px;
+}
+
+.brand:hover .about-trigger-logo,
+.brand:focus-within .about-trigger-logo {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(0, -50%);
+}
+
+.about-trigger:hover,
+.about-trigger.active {
+  background: #ff6c46;
+}
+
+.about-trigger:focus-visible {
+  outline: 2px solid #f7ece6;
+  outline-offset: 3px;
+}
+
+.about-trigger-panel {
+  width: 100%;
+  min-height: 70px;
+  border: 3px solid #f15a36;
+  outline: 2px solid #f15a36;
+  outline-offset: 3px;
+  padding: 11px 18px 10px;
+  background: #f15a36;
+  color: #111314;
+  font: 700 22px/0.94 "Sometype Mono", "Courier New", monospace;
+  letter-spacing: -0.045em;
+  text-align: left;
+  cursor: pointer;
+}
+
+.about-trigger-panel span {
+  display: block;
+  margin-top: 3px;
+}
+
+.about-stage {
+  min-height: 670px;
+  border: 4px solid #f15a36;
+  padding: 7px;
+  background: #101112;
+}
+
+.about-bottom-stage {
+  position: fixed;
+  z-index: 20;
+  overflow: auto;
+  border: 3px solid #f15a36;
+  padding: 12px;
+  background: #101112;
+  color: #ded9d5;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.48);
+}
+
+.about-bottom-stage h2 {
+  margin: 0 0 9px;
+  color: #f7ece6;
+  font: 600 15px/1.2 "Sometype Mono", "Courier New", monospace;
+}
+
+.about-bottom-stage p {
+  margin: 0 0 10px;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.about-guard {
+  margin: 14px 0 0 !important;
+  padding: 10px 0 0;
+  border-top: 1px solid #f15a36;
+  color: #f3d2b9 !important;
+  font-weight: 600;
+}
+
+@media (max-width: 1240px) {
+  .tabs button {
+    padding: 12px 8px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 1100px) {
+  .tabs button {
+    padding: 12px 9px;
+    font-size: 11px;
+  }
+
+  .about-trigger-logo {
+    min-width: 170px;
+    font-size: 12px;
+  }
+
+  .about-trigger-panel {
+    min-height: 64px;
+    font-size: 20px;
+  }
+
+  .about-stage {
+    min-height: 590px;
+  }
+}
+
+@media (max-width: 760px) {
+  .brand {
+    flex-wrap: wrap;
+  }
+
+  .about-trigger-logo {
+    display: none;
+  }
+
+  .about-stage {
+    min-height: 0;
+  }
+
+  .tabs button {
+    padding: 10px 7px;
+    font-size: 10px;
+  }
+}

@@ -2,13 +2,14 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.domain.mandates import AcquisitionTask, AcquisitionStatus, Mandate, MandateStatus, MandateTransition, UsageEvent
 from app.workers.tasks import execute_acquisition
 from app.persistence.database import get_session
+from app.public_safety import enforce_public_budget, enforce_public_rate_limit, reserve_public_manual_spend
 
 router = APIRouter(prefix="/v1/mandates", tags=["mandates"])
 
@@ -52,16 +53,32 @@ def list_mandates(session: Session = Depends(get_session)) -> list[Mandate]:
 
 
 @router.post("", response_model=MandateRead, status_code=status.HTTP_202_ACCEPTED)
-def create_mandate(payload: MandateCreate, session: Session = Depends(get_session)) -> Mandate:
-    mandate = Mandate(**payload.model_dump(), status=MandateStatus.RECEIVED.value)
-    session.add(mandate)
-    session.flush()
-    task = AcquisitionTask(mandate_id=mandate.mandate_id, query=mandate.text, required=True, status=AcquisitionStatus.PENDING.value, ordinal=0)
-    session.add_all([MandateTransition(mandate_id=mandate.mandate_id, from_status=None, to_status=MandateStatus.RECEIVED.value, reason="mandate created"), task, UsageEvent(mandate_id=mandate.mandate_id, event_type="MANDATE_CREATED", metadata_={})])
-    session.commit()
-    session.refresh(mandate)
-    session.refresh(task)
-    task.status = AcquisitionStatus.QUEUED.value; session.add(UsageEvent(mandate_id=mandate.mandate_id, acquisition_id=task.acquisition_id, event_type="ACQUISITION_QUEUED", metadata_={})); session.commit()
+def create_mandate(payload: MandateCreate, request: Request, session: Session = Depends(get_session)) -> Mandate:
+    """Accept one public manual workflow only after durable spend authorization."""
+    enforce_public_rate_limit(request)
+    enforce_public_budget(payload.max_budget_usdc)
+    try:
+        mandate = Mandate(**payload.model_dump(), status=MandateStatus.RECEIVED.value, origin="MANUAL")
+        session.add(mandate)
+        session.flush()
+        reserve_public_manual_spend(session, mandate.mandate_id, mandate.max_budget_usdc)
+        task = AcquisitionTask(mandate_id=mandate.mandate_id, query=mandate.text, required=True, status=AcquisitionStatus.QUEUED.value, ordinal=0)
+        session.add_all([
+            MandateTransition(mandate_id=mandate.mandate_id, from_status=None, to_status=MandateStatus.RECEIVED.value, reason="mandate created"),
+            task,
+            UsageEvent(mandate_id=mandate.mandate_id, event_type="MANDATE_CREATED", metadata_={}),
+            UsageEvent(mandate_id=mandate.mandate_id, acquisition_id=task.acquisition_id, event_type="ACQUISITION_QUEUED", metadata_={}),
+        ])
+        session.commit()
+        session.refresh(mandate)
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as error:
+        session.rollback()
+        raise HTTPException(status_code=503, detail="PUBLIC_SPEND_AUTHORIZATION_UNAVAILABLE") from error
+    # A broker outage retains the reservation instead of authorizing an
+    # unaccounted retry.  The worker therefore remains fail-closed on spend.
     execute_acquisition.delay(mandate.mandate_id, task.acquisition_id)
     mandate.acquisitions = []
     return mandate

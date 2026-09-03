@@ -8,8 +8,10 @@ app.include_router(mandates_router)
 app.include_router(autonomy_router)
 
 
-@app.post("/v1/erc8183/jobs", status_code=status.HTTP_202_ACCEPTED)
+@app.post("/v1/erc8183/jobs", status_code=status.HTTP_404_NOT_FOUND, include_in_schema=False)
 def request_erc8183_job():
+    # Public production deliberately has no ERC-8183 write surface.
+    raise HTTPException(status_code=404, detail="NOT_FOUND")
     from app.erc8183.service import request_fixture
     from app.persistence.database import SessionLocal
     from app.workers.tasks import execute_erc8183_job
@@ -76,8 +78,10 @@ def get_erc8183_lineage(erc8183_job_id: str):
         session.close()
 
 
-@app.post("/v1/erc8183/jobs/{erc8183_job_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
+@app.post("/v1/erc8183/jobs/{erc8183_job_id}/cancel", status_code=status.HTTP_404_NOT_FOUND, include_in_schema=False)
 def cancel_erc8183_job(erc8183_job_id: str):
+    # Cancellation is an on-chain action and is never available publicly.
+    raise HTTPException(status_code=404, detail="NOT_FOUND")
     from app.domain.mandates import ERC8183Job
     from app.persistence.database import SessionLocal
     from app.workers.tasks import cancel_erc8183_job as task, cancellation_allowed
@@ -95,8 +99,10 @@ def _erc8183_response(job):
     return {key: getattr(job, key) for key in ("erc8183_job_id", "mandate_id", "ticket_id", "chain_id", "diamond_address", "telegraph_job_id", "intent_name", "intent_id", "callback_address", "callback_response_hash", "callback_verified", "callback_verified_at", "params_payload", "state", "chain_state", "budget_usdc", "miner_payment_usdc", "protocol_fee_usdc", "output_hash", "approval_tx_hash", "approval_block_number", "deposit_tx_hash", "deposit_block_number", "create_tx_hash", "create_block_number", "terminal_tx_hash", "terminal_block_number", "cancel_tx_hash", "cancel_block_number", "failure_code", "created_at", "updated_at", "terminal_at", "cancelled_at")}
 
 
-@app.post("/v1/tickets/{ticket_id}/anchor", status_code=status.HTTP_202_ACCEPTED)
+@app.post("/v1/tickets/{ticket_id}/anchor", status_code=status.HTTP_404_NOT_FOUND, include_in_schema=False)
 def request_ticket_anchor(ticket_id: str):
+    # Tickets stay read-only from the public deployment surface.
+    raise HTTPException(status_code=404, detail="NOT_FOUND")
     from app.anchors.service import request_anchor
     from app.persistence.database import SessionLocal
     from app.workers.tasks import execute_ticket_anchor
@@ -155,5 +161,18 @@ def verify_ticket(ticket_id: str):
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "service": "prama-dynamagh-api"}
+def health() -> dict:
+    from app.public_safety import public_daily_spend_cap_usdc, public_max_mandate_usdc, public_rate_limit
+    from app.redis_config import redis_runtime_diagnostics
+    rate_limit, rate_window = public_rate_limit()
+    return {
+        "status": "ok",
+        "service": "prama-dynamagh-api",
+        "public_execution": {
+            "max_mandate_usdc": f"{public_max_mandate_usdc():.6f}",
+            "daily_spend_cap_usdc": f"{public_daily_spend_cap_usdc():.6f}",
+            "rate_limit": rate_limit,
+            "rate_window_seconds": rate_window,
+        },
+        "redis_runtime": redis_runtime_diagnostics(),
+    }

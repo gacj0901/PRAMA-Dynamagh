@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -106,6 +106,30 @@ class UsageEvent(Base):
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class PublicManualSpendLedger(Base):
+    """Durable daily public-spend total.  ``reserved + spent`` is the cap gate."""
+    __tablename__ = "public_manual_spend_ledgers"
+
+    spend_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    reserved_usdc: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False, default=Decimal("0.000000"))
+    spent_usdc: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False, default=Decimal("0.000000"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class PublicManualSpendReservation(Base):
+    """One public budget authorization per manual mandate, retained for audit."""
+    __tablename__ = "public_manual_spend_reservations"
+
+    mandate_id: Mapped[str] = mapped_column(ForeignKey("mandates.mandate_id", ondelete="CASCADE"), primary_key=True)
+    spend_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    reserved_usdc: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    actual_spend_usdc: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="RESERVED")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 
 class Evidence(Base):
     __tablename__="evidence"

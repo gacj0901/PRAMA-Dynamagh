@@ -13,6 +13,8 @@ from app.pramagraph.evaluation import classify, decide, digest
 from app.tickets.service import issue as issue_ticket
 from app.autonomy.service import claim_run, execute_claimed, finalize_http_run, recover_runs, schedule_due
 from app.domain.mandates import AutonomyPolicy
+from app.public_safety import release_public_manual_reservation, settle_public_manual_spend, verify_public_manual_reservation
+from app.redis_config import redis_url
 
 def now(): return datetime.now(timezone.utc)
 
@@ -56,34 +58,62 @@ def autonomy_tick():
         session.close()
 @celery_app.task(name="prama.execute_acquisition", bind=True)
 def execute_acquisition(self, mandate_id: str, acquisition_id: str):
-    lock=redis.from_url(os.environ["REDIS_URL"]); key=f"prama:acquisition:{acquisition_id}"
+    lock = redis.from_url(redis_url()); key = f"prama:acquisition:{acquisition_id}"
     if not lock.set(key, "1", nx=True, ex=300): return "LOCKED"
-    s=SessionLocal()
+    s = SessionLocal(); network_attempted = False; public_reservation = False
     try:
-        task=s.get(AcquisitionTask, acquisition_id); mandate=s.get(Mandate, mandate_id)
+        task = s.get(AcquisitionTask, acquisition_id); mandate = s.get(Mandate, mandate_id)
         if not task or not mandate: return "INVALID_MANDATE"
         if task.status == AcquisitionStatus.SUCCEEDED.value: return "ALREADY_COMPLETED"
+        # A delivery after a terminal result must never create a second paid
+        # attempt.  The persisted reservation stays auditable and fail-closed.
+        if task.status == AcquisitionStatus.FAILED.value: return "ALREADY_FAILED"
+        if task.status == AcquisitionStatus.RUNNING.value: return "ALREADY_RUNNING"
         if mandate.status == MandateStatus.RECEIVED.value: transition_mandate(s, mandate, MandateStatus.PLANNED)
-        task.status=AcquisitionStatus.RUNNING.value; task.attempt_count += 1; task.started_at=now()
+        task.status = AcquisitionStatus.RUNNING.value; task.attempt_count += 1; task.started_at = now()
         if mandate.status == MandateStatus.PLANNED.value: transition_mandate(s, mandate, MandateStatus.ACQUIRING)
-        spent=sum((c.cost_usd or 0 for c in s.query(TelegraphCall).filter_by(mandate_id=mandate_id,status="SUCCEEDED")), Decimal("0")); remaining=Decimal(mandate.max_budget_usdc)-spent
+        spent = sum((c.cost_usd or 0 for c in s.query(TelegraphCall).filter_by(mandate_id=mandate_id, status="SUCCEEDED")), Decimal("0"))
+        remaining = Decimal(mandate.max_budget_usdc) - spent
         if remaining <= 0: raise RuntimeError("BUDGET_EXHAUSTED")
-        s.add(UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id,event_type="TELEGRAPH_REQUEST",metadata_={})); s.commit()
-        data=json.dumps({"query":task.query,"context":{},"causal_request_id":mandate_id,"budget_usdc":str(remaining)}).encode()
-        req=Request(os.environ["GATEWAY_URL"]+"/ask",data=data,headers={"content-type":"application/json"},method="POST")
-        with urlopen(req, timeout=45) as r: raw=json.loads(r.read())
+        if mandate.origin == "MANUAL":
+            reservation = verify_public_manual_reservation(s, mandate_id, Decimal(mandate.max_budget_usdc))
+            if remaining > reservation.reserved_usdc:
+                raise RuntimeError("PUBLIC_SPEND_AUTHORIZATION_INVALID")
+            public_reservation = True
+        s.add(UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id, event_type="TELEGRAPH_REQUEST", metadata_={}))
+        s.commit()
+        data = json.dumps({"query": task.query, "context": {}, "causal_request_id": mandate_id, "budget_usdc": str(remaining)}).encode()
+        req = Request(os.environ["GATEWAY_URL"] + "/ask", data=data, headers={"content-type": "application/json"}, method="POST")
+        network_attempted = True
+        with urlopen(req, timeout=45) as r: raw = json.loads(r.read())
         if not raw.get("miner_id") or not raw.get("intent") or not raw.get("signal_hash"): raise RuntimeError("TELEGRAPH_INVALID_RESPONSE")
-        actual_cost=Decimal(str(raw.get("cost_usd") or "0"))
+        actual_cost = Decimal(str(raw.get("cost_usd") or "0"))
         if actual_cost > Decimal(mandate.max_budget_usdc): raise RuntimeError("BUDGET_EXHAUSTED")
-        call=TelegraphCall(mandate_id=mandate_id,acquisition_id=acquisition_id,causal_request_id=mandate_id,miner_id=str(raw.get("miner_id")),miner_name=raw.get("miner_name"),intent=raw.get("intent"),signal_hash=raw.get("signal_hash"),cost_usd=actual_cost,duration_ms=raw.get("duration_ms"),reasoning=raw.get("reasoning"),warnings=raw.get("warnings",[]),raw_response=raw,status="SUCCEEDED",completed_at=now())
-        s.add(call); task.status=AcquisitionStatus.SUCCEEDED.value; task.completed_at=now(); transition_mandate(s,mandate,MandateStatus.EVALUATING); s.add_all([UsageEvent(mandate_id=mandate_id,acquisition_id=acquisition_id,event_type="TELEGRAPH_RESPONSE",metadata_={}),UsageEvent(mandate_id=mandate_id,acquisition_id=acquisition_id,event_type="ACQUISITION_COMPLETED",metadata_={})]); s.commit(); return evaluate_mandate(mandate_id)
+        if public_reservation: settle_public_manual_spend(s, mandate_id, actual_cost)
+        call = TelegraphCall(mandate_id=mandate_id, acquisition_id=acquisition_id, causal_request_id=mandate_id, miner_id=str(raw.get("miner_id")), miner_name=raw.get("miner_name"), intent=raw.get("intent"), signal_hash=raw.get("signal_hash"), cost_usd=actual_cost, duration_ms=raw.get("duration_ms"), reasoning=raw.get("reasoning"), warnings=raw.get("warnings", []), raw_response=raw, status="SUCCEEDED", completed_at=now())
+        s.add(call); task.status = AcquisitionStatus.SUCCEEDED.value; task.completed_at = now(); transition_mandate(s, mandate, MandateStatus.EVALUATING)
+        s.add_all([UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id, event_type="TELEGRAPH_RESPONSE", metadata_={}), UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id, event_type="ACQUISITION_COMPLETED", metadata_={})])
+        s.commit(); return evaluate_mandate(mandate_id)
     except Exception as e:
-        code=str(e) if str(e) in {"BUDGET_EXHAUSTED","TELEGRAPH_INVALID_RESPONSE"} else "GATEWAY_UNAVAILABLE"; task=s.get(AcquisitionTask,acquisition_id); mandate=s.get(Mandate,mandate_id)
-        if task: task.status=AcquisitionStatus.FAILED.value; task.failure_code=code
-        if mandate and mandate.status not in {"FAILED","TICKETED"}: transition_mandate(s,mandate,MandateStatus.FAILED,code)
+        raw_code = str(e)
+        known = {"BUDGET_EXHAUSTED", "TELEGRAPH_INVALID_RESPONSE", "PUBLIC_SPEND_AUTHORIZATION_INVALID", "PUBLIC_SPEND_AUTHORIZATION_UNAVAILABLE", "PUBLIC_SPEND_SETTLEMENT_INVALID"}
+        code = raw_code if raw_code in known else "GATEWAY_UNAVAILABLE"
+        # Before the outbound request, the reservation is certainly unspent and
+        # can be released.  After any network attempt it is deliberately held
+        # rather than risking a second x402 payment after an uncertain result.
+        if public_reservation and not network_attempted:
+            try:
+                release_public_manual_reservation(s, mandate_id)
+            except Exception:
+                s.rollback()
+                code = "PUBLIC_SPEND_AUTHORIZATION_UNAVAILABLE"
+        task = s.get(AcquisitionTask, acquisition_id); mandate = s.get(Mandate, mandate_id)
+        if task: task.status = AcquisitionStatus.FAILED.value; task.failure_code = code
+        if mandate and mandate.status not in {"FAILED", "TICKETED"}: transition_mandate(s, mandate, MandateStatus.FAILED, code)
         if mandate and mandate.origin == "AUTONOMOUS": finalize_http_run(s, mandate_id, failure_code=code)
         s.commit(); return code
-    finally: lock.delete(key); s.close()
+    finally:
+        lock.delete(key); s.close()
 
 @celery_app.task(name="prama.evaluate_mandate")
 def evaluate_mandate(mandate_id):
