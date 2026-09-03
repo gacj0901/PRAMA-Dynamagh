@@ -22,6 +22,19 @@ def request_erc8183_job():
     finally: session.close()
 
 
+@app.get("/v1/erc8183/jobs")
+def list_erc8183_jobs():
+    """Read-only ERC-8183 inventory for the PRAMA operator interface."""
+    from app.domain.mandates import ERC8183Job
+    from app.persistence.database import SessionLocal
+    session = SessionLocal()
+    try:
+        jobs = session.query(ERC8183Job).order_by(ERC8183Job.updated_at.desc()).all()
+        return [_erc8183_response(job) for job in jobs]
+    finally:
+        session.close()
+
+
 @app.get("/v1/erc8183/jobs/{erc8183_job_id}")
 def get_erc8183_job(erc8183_job_id: str):
     from app.domain.mandates import ERC8183Job

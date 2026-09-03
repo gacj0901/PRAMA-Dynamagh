@@ -12,4 +12,8 @@ COPY migrations ./migrations
 COPY alembic.ini ./
 COPY tests ./tests
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 8000
+
+# Railway runs migrations before starting the single public API process. The
+# worker has its own Dockerfile so it never runs this API command.
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

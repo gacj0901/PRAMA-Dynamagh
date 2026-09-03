@@ -41,6 +41,16 @@ class MandateRead(BaseModel):
     acquisitions: list[dict[str, Any]] = []
 
 
+@router.get("", response_model=list[MandateRead])
+def list_mandates(session: Session = Depends(get_session)) -> list[Mandate]:
+    """Read-only inventory used by the operator interface.
+
+    The endpoint intentionally returns only persisted Mandate fields.  Detailed
+    artifacts remain available through the existing mandate-scoped endpoints.
+    """
+    return session.query(Mandate).order_by(Mandate.updated_at.desc()).all()
+
+
 @router.post("", response_model=MandateRead, status_code=status.HTTP_202_ACCEPTED)
 def create_mandate(payload: MandateCreate, session: Session = Depends(get_session)) -> Mandate:
     mandate = Mandate(**payload.model_dump(), status=MandateStatus.RECEIVED.value)
@@ -65,6 +75,39 @@ def get_mandate(mandate_id: str, session: Session = Depends(get_session)) -> Man
     tasks = session.query(AcquisitionTask).filter_by(mandate_id=mandate_id).all()
     mandate.acquisitions = [{"acquisition_id": t.acquisition_id, "status": t.status, "attempt_count": t.attempt_count, "failure_code": t.failure_code} for t in tasks]
     return mandate
+
+
+@router.get("/{mandate_id}/timeline")
+def timeline(mandate_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Return the persisted state and usage chronology without side effects."""
+    mandate = session.get(Mandate, mandate_id)
+    if mandate is None:
+        raise HTTPException(status_code=404, detail="mandate not found")
+    transitions = session.query(MandateTransition).filter_by(mandate_id=mandate_id).order_by(MandateTransition.created_at).all()
+    events = session.query(UsageEvent).filter_by(mandate_id=mandate_id).order_by(UsageEvent.created_at).all()
+    return {
+        "mandate_id": mandate_id,
+        "transitions": [
+            {
+                "transition_id": item.transition_id,
+                "from_status": item.from_status,
+                "to_status": item.to_status,
+                "reason": item.reason,
+                "created_at": item.created_at,
+            }
+            for item in transitions
+        ],
+        "events": [
+            {
+                "event_id": item.event_id,
+                "event_type": item.event_type,
+                "acquisition_id": item.acquisition_id,
+                "metadata": item.metadata_,
+                "created_at": item.created_at,
+            }
+            for item in events
+        ],
+    }
 
 
 @router.get("/{mandate_id}/acquisitions")

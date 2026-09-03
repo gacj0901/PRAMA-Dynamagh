@@ -86,9 +86,14 @@ services:
     networks: [prama_internal, external_services]
 
   frontend:
-    build: ./frontend
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
     ports:
       - "${WEB_PORT:-5173}:80"
+    environment:
+      PORT: 80
+      API_UPSTREAM: ${API_UPSTREAM:-http://api:8000}
     depends_on:
       api:
         condition: service_healthy
