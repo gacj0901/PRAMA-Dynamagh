@@ -27,6 +27,7 @@ from app.domain.mandates import (
     UsageEvent,
 )
 from app.erc8183.evidence import replay_persisted
+from app.public_safety import M2M_MAX_WORKFLOW_USDC, reserve_autonomous_spend
 
 PAID_MIN_CADENCE_SECONDS = 900
 MODES = {"TELEGRAPH_HTTP", "TELEGRAPH_ERC8183", "REPLAY_ONLY"}
@@ -171,12 +172,25 @@ def execute_claimed(session, run: AutonomyRun) -> str:
         if not isinstance(instruction, str) or not instruction.strip() or not isinstance(title, str):
             run.state = "FAILED"; run.failure_code = "MANDATE_TEMPLATE_INVALID"; run.finished_at = now(); _event(session, run, "AUTONOMY_RUN_FAILED"); return run.state
         mandate = Mandate(
-            actor_id="autonomy-controller", text=instruction.strip(), mandate_type="AUTONOMOUS",
+            actor_id="autonomy-controller", agent_id="autonomy-controller", client_id="prama-internal",
+            text=instruction.strip(), mandate_type="AUTONOMOUS",
             constraints={"title": title, "autonomy_policy_id": policy.policy_id, "autonomy_run_id": run.run_id},
             max_budget_usdc=Decimal(run.planned_cost_usdc), status=MandateStatus.RECEIVED.value,
             origin="AUTONOMOUS", autonomy_policy_id=policy.policy_id, autonomy_run_id=run.run_id,
         )
         session.add(mandate); session.flush()
+        # Bounded paid autonomy shares the G12 global daily reservation ledger.
+        # Legacy over-budget policies may still be observed in the scheduler,
+        # but the worker will fail them closed before any Gateway request.
+        if Decimal(run.planned_cost_usdc) <= M2M_MAX_WORKFLOW_USDC:
+            try:
+                reserve_autonomous_spend(session, mandate.mandate_id, Decimal(run.planned_cost_usdc))
+            except Exception as error:
+                code = getattr(error, "detail", str(error))
+                mandate.status = MandateStatus.FAILED.value
+                session.add(MandateTransition(mandate_id=mandate.mandate_id, from_status=MandateStatus.RECEIVED.value, to_status=MandateStatus.FAILED.value, reason=str(code)[:255]))
+                run.state = "FAILED"; run.failure_code = str(code)[:100]; run.finished_at = now(); _event(session, run, "AUTONOMY_RUN_FAILED")
+                return run.state
         acquisition = AcquisitionTask(
             mandate_id=mandate.mandate_id, query=mandate.text, required=True,
             status=AcquisitionStatus.QUEUED.value, ordinal=0,

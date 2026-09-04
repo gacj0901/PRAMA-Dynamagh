@@ -47,6 +47,8 @@ class Mandate(Base):
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=MandateStatus.RECEIVED.value)
     origin: Mapped[str] = mapped_column(String(32), nullable=False, default="MANUAL")
+    agent_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    client_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     autonomy_policy_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     autonomy_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
@@ -120,7 +122,12 @@ class PublicManualSpendLedger(Base):
 
 
 class PublicManualSpendReservation(Base):
-    """One public budget authorization per manual mandate, retained for audit."""
+    """One durable paid-workflow budget authorization, retained for audit.
+
+    The table name is retained for G12 compatibility.  Reservations are now
+    shared by MANUAL, M2M, and AUTONOMOUS paid workflows so the daily ledger is
+    a single global cap rather than separate per-surface allowances.
+    """
     __tablename__ = "public_manual_spend_reservations"
 
     mandate_id: Mapped[str] = mapped_column(ForeignKey("mandates.mandate_id", ondelete="CASCADE"), primary_key=True)
@@ -128,8 +135,21 @@ class PublicManualSpendReservation(Base):
     reserved_usdc: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
     actual_spend_usdc: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="RESERVED")
+    origin: Mapped[str] = mapped_column(String(32), nullable=False, default="MANUAL")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class M2MMandateRequest(Base):
+    """Durable M2M idempotency record bound to one mandate and request hash."""
+
+    __tablename__ = "m2m_mandate_requests"
+    idempotency_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    agent_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    client_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    mandate_id: Mapped[str] = mapped_column(ForeignKey("mandates.mandate_id", ondelete="CASCADE"), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 class Evidence(Base):
     __tablename__="evidence"

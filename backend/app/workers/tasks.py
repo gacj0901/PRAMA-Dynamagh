@@ -13,10 +13,20 @@ from app.pramagraph.evaluation import classify, decide, digest
 from app.tickets.service import issue as issue_ticket
 from app.autonomy.service import claim_run, execute_claimed, finalize_http_run, recover_runs, schedule_due
 from app.domain.mandates import AutonomyPolicy
-from app.public_safety import release_public_manual_reservation, settle_public_manual_spend, verify_public_manual_reservation
+from app.public_safety import (
+    M2M_MAX_WORKFLOW_USDC,
+    m2m_max_workflow_usdc,
+    release_spend_reservation,
+    settle_spend,
+    verify_spend_reservation,
+)
 from app.redis_config import redis_url
 
 def now(): return datetime.now(timezone.utc)
+
+
+def _attribution(mandate: Mandate) -> dict[str, str]:
+    return {"origin": mandate.origin, "agent_id": mandate.agent_id or "", "client_id": mandate.client_id or ""}
 
 
 @celery_app.task(name="prama.autonomy_tick")
@@ -60,7 +70,7 @@ def autonomy_tick():
 def execute_acquisition(self, mandate_id: str, acquisition_id: str):
     lock = redis.from_url(redis_url()); key = f"prama:acquisition:{acquisition_id}"
     if not lock.set(key, "1", nx=True, ex=300): return "LOCKED"
-    s = SessionLocal(); network_attempted = False; public_reservation = False
+    s = SessionLocal(); network_attempted = False; paid_reservation = False; reservation_origin = None; reservation_maximum = None
     try:
         task = s.get(AcquisitionTask, acquisition_id); mandate = s.get(Mandate, mandate_id)
         if not task or not mandate: return "INVALID_MANDATE"
@@ -75,12 +85,23 @@ def execute_acquisition(self, mandate_id: str, acquisition_id: str):
         spent = sum((c.cost_usd or 0 for c in s.query(TelegraphCall).filter_by(mandate_id=mandate_id, status="SUCCEEDED")), Decimal("0"))
         remaining = Decimal(mandate.max_budget_usdc) - spent
         if remaining <= 0: raise RuntimeError("BUDGET_EXHAUSTED")
-        if mandate.origin == "MANUAL":
-            reservation = verify_public_manual_reservation(s, mandate_id, Decimal(mandate.max_budget_usdc))
+        if mandate.origin in {"MANUAL", "M2M", "AUTONOMOUS"}:
+            if mandate.origin == "M2M":
+                reservation_maximum = m2m_max_workflow_usdc()
+                if Decimal(mandate.max_budget_usdc) > reservation_maximum:
+                    raise RuntimeError("M2M_WORKFLOW_BUDGET_EXCEEDED")
+            elif mandate.origin == "AUTONOMOUS":
+                reservation_maximum = M2M_MAX_WORKFLOW_USDC
+                if Decimal(mandate.max_budget_usdc) > reservation_maximum:
+                    raise RuntimeError("AUTONOMOUS_WORKFLOW_BUDGET_EXCEEDED")
+            else:
+                reservation_maximum = Decimal(mandate.max_budget_usdc)
+            reservation_origin = mandate.origin
+            reservation = verify_spend_reservation(s, mandate_id, reservation_maximum, reservation_origin)
             if remaining > reservation.reserved_usdc:
                 raise RuntimeError("PUBLIC_SPEND_AUTHORIZATION_INVALID")
-            public_reservation = True
-        s.add(UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id, event_type="TELEGRAPH_REQUEST", metadata_={}))
+            paid_reservation = True
+        s.add(UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id, event_type="TELEGRAPH_REQUEST", metadata_=_attribution(mandate)))
         s.commit()
         data = json.dumps({"query": task.query, "context": {}, "causal_request_id": mandate_id, "budget_usdc": str(remaining)}).encode()
         req = Request(os.environ["GATEWAY_URL"] + "/ask", data=data, headers={"content-type": "application/json"}, method="POST")
@@ -88,22 +109,23 @@ def execute_acquisition(self, mandate_id: str, acquisition_id: str):
         with urlopen(req, timeout=45) as r: raw = json.loads(r.read())
         if not raw.get("miner_id") or not raw.get("intent") or not raw.get("signal_hash"): raise RuntimeError("TELEGRAPH_INVALID_RESPONSE")
         actual_cost = Decimal(str(raw.get("cost_usd") or "0"))
-        if actual_cost > Decimal(mandate.max_budget_usdc): raise RuntimeError("BUDGET_EXHAUSTED")
-        if public_reservation: settle_public_manual_spend(s, mandate_id, actual_cost)
+        if actual_cost > remaining: raise RuntimeError("BUDGET_EXHAUSTED")
+        if paid_reservation: settle_spend(s, mandate_id, actual_cost, reservation_maximum, reservation_origin)
         call = TelegraphCall(mandate_id=mandate_id, acquisition_id=acquisition_id, causal_request_id=mandate_id, miner_id=str(raw.get("miner_id")), miner_name=raw.get("miner_name"), intent=raw.get("intent"), signal_hash=raw.get("signal_hash"), cost_usd=actual_cost, duration_ms=raw.get("duration_ms"), reasoning=raw.get("reasoning"), warnings=raw.get("warnings", []), raw_response=raw, status="SUCCEEDED", completed_at=now())
         s.add(call); task.status = AcquisitionStatus.SUCCEEDED.value; task.completed_at = now(); transition_mandate(s, mandate, MandateStatus.EVALUATING)
-        s.add_all([UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id, event_type="TELEGRAPH_RESPONSE", metadata_={}), UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id, event_type="ACQUISITION_COMPLETED", metadata_={})])
+        metadata = _attribution(mandate)
+        s.add_all([UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id, event_type="TELEGRAPH_RESPONSE", metadata_=metadata), UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id, event_type="ACQUISITION_COMPLETED", metadata_=metadata)])
         s.commit(); return evaluate_mandate(mandate_id)
     except Exception as e:
-        raw_code = str(e)
-        known = {"BUDGET_EXHAUSTED", "TELEGRAPH_INVALID_RESPONSE", "PUBLIC_SPEND_AUTHORIZATION_INVALID", "PUBLIC_SPEND_AUTHORIZATION_UNAVAILABLE", "PUBLIC_SPEND_SETTLEMENT_INVALID"}
+        raw_code = getattr(e, "detail", str(e))
+        known = {"BUDGET_EXHAUSTED", "TELEGRAPH_INVALID_RESPONSE", "PUBLIC_SPEND_AUTHORIZATION_INVALID", "PUBLIC_SPEND_AUTHORIZATION_UNAVAILABLE", "PUBLIC_SPEND_SETTLEMENT_INVALID", "M2M_WORKFLOW_BUDGET_EXCEEDED", "AUTONOMOUS_WORKFLOW_BUDGET_EXCEEDED"}
         code = raw_code if raw_code in known else "GATEWAY_UNAVAILABLE"
         # Before the outbound request, the reservation is certainly unspent and
         # can be released.  After any network attempt it is deliberately held
         # rather than risking a second x402 payment after an uncertain result.
-        if public_reservation and not network_attempted:
+        if paid_reservation and not network_attempted:
             try:
-                release_public_manual_reservation(s, mandate_id)
+                release_spend_reservation(s, mandate_id, reservation_origin)
             except Exception:
                 s.rollback()
                 code = "PUBLIC_SPEND_AUTHORIZATION_UNAVAILABLE"
@@ -117,33 +139,104 @@ def execute_acquisition(self, mandate_id: str, acquisition_id: str):
 
 @celery_app.task(name="prama.evaluate_mandate")
 def evaluate_mandate(mandate_id):
-    s=SessionLocal()
+    s = SessionLocal()
     try:
-        mandate=s.get(Mandate,mandate_id)
-        if mandate.status=="DECIDED": return "ALREADY_DECIDED"
-        calls=s.query(TelegraphCall).filter_by(mandate_id=mandate_id,status="SUCCEEDED").all()
-        if mandate.status=="EVALUATING": transition_mandate(s,mandate,MandateStatus.DECIDING)
-        evidence=[]
+        mandate = s.get(Mandate, mandate_id)
+        if mandate.status == "DECIDED":
+            return "ALREADY_DECIDED"
+        calls = s.query(TelegraphCall).filter_by(mandate_id=mandate_id, status="SUCCEEDED").all()
+        if mandate.status == "EVALUATING":
+            transition_mandate(s, mandate, MandateStatus.DECIDING)
+        evidence = []
         for c in calls:
-            existing=s.query(Evidence).filter_by(telegraph_call_id=c.telegraph_call_id).one_or_none()
-            if existing: evidence.append(existing); continue
+            existing = s.query(Evidence).filter_by(telegraph_call_id=c.telegraph_call_id).one_or_none()
+            if existing:
+                evidence.append(existing)
+                continue
             try:
-                with urlopen(os.environ["GATEWAY_URL"]+"/signals/"+c.signal_hash,timeout=20) as x: verified=x.status==200
-            except: verified=False
+                with urlopen(os.environ["GATEWAY_URL"] + "/signals/" + c.signal_hash, timeout=20) as x:
+                    verified = x.status == 200
+            except Exception:
+                verified = False
             if mandate.origin == "AUTONOMOUS":
-                policy=s.get(AutonomyPolicy, mandate.autonomy_policy_id)
+                policy = s.get(AutonomyPolicy, mandate.autonomy_policy_id)
                 if policy and policy.strict_verification and not verified:
                     transition_mandate(s, mandate, MandateStatus.FAILED, "STRICT_PROVENANCE_FAILED")
                     finalize_http_run(s, mandate_id, failure_code="STRICT_PROVENANCE_FAILED")
-                    s.commit(); return "STRICT_PROVENANCE_FAILED"
-            normalized={"intent":c.intent,"result":c.raw_response.get("result"),"miner_id":c.miner_id,"signal_hash":c.signal_hash,"warnings":c.warnings}; adm,codes=classify(c,verified)
-            e=Evidence(mandate_id=mandate_id,acquisition_id=c.acquisition_id,telegraph_call_id=c.telegraph_call_id,evidence_type="TELEGRAPH_RESULT",source_kind="TELEGRAPH",source_intent=c.intent,source_miner_id=c.miner_id,source_signal_hash=c.signal_hash,normalized_payload=normalized,content_hash=digest(normalized),normalizer_version="telegraph-evidence-v0",provenance_status="VERIFIED" if verified else "FAILED",admissibility=adm,limitation_codes=codes); s.add(e); evidence.append(e)
-        s.flush(); esh=digest([e.content_hash for e in sorted(evidence,key=lambda x:x.evidence_id)])
-        rejected=[e.evidence_id for e in evidence if e.admissibility=="REJECTED"]; limited=[e.evidence_id for e in evidence if e.admissibility=="LIMITED"]; admitted=[e.evidence_id for e in evidence if e.admissibility=="ADMITTED"]; structural="STRUCTURALLY_BLOCKED" if not evidence or rejected else ("STRUCTURALLY_LIMITED" if limited else "STRUCTURALLY_ADMISSIBLE")
-        ev=StructuralEvaluation(mandate_id=mandate_id,evaluator="PRAMAGRAPH",evaluator_version="pramagraph-structural-v0",evidence_set_hash=esh,admitted_evidence_ids=admitted,limited_evidence_ids=limited,rejected_evidence_ids=rejected,limitation_codes=sum((e.limitation_codes for e in evidence),[]),contradiction_codes=[],structural_state=structural,evaluation_payload={}); s.add(ev); s.flush(); state,reasons=decide(structural); s.add(Decision(mandate_id=mandate_id,evaluation_id=ev.evaluation_id,state=state,policy_version="prama-gate-v0",evidence_set_hash=esh,reason_codes=reasons,decision_payload={})); transition_mandate(s,mandate,MandateStatus.DECIDED); s.add_all([UsageEvent(mandate_id=mandate_id,event_type="EVIDENCE_CREATED",metadata_={}),UsageEvent(mandate_id=mandate_id,event_type="EVALUATION_COMPLETED",metadata_={}),UsageEvent(mandate_id=mandate_id,event_type="DECISION_CREATED",metadata_={})]); s.commit(); result=issue_ticket(s,mandate_id)[1]
-        if mandate.origin == "AUTONOMOUS": finalize_http_run(s, mandate_id); s.commit()
+                    s.commit()
+                    return "STRICT_PROVENANCE_FAILED"
+            normalized = {
+                "intent": c.intent,
+                "result": c.raw_response.get("result"),
+                "miner_id": c.miner_id,
+                "signal_hash": c.signal_hash,
+                "warnings": c.warnings,
+            }
+            admissibility, codes = classify(c, verified)
+            evidence_item = Evidence(
+                mandate_id=mandate_id,
+                acquisition_id=c.acquisition_id,
+                telegraph_call_id=c.telegraph_call_id,
+                evidence_type="TELEGRAPH_RESULT",
+                source_kind="TELEGRAPH",
+                source_intent=c.intent,
+                source_miner_id=c.miner_id,
+                source_signal_hash=c.signal_hash,
+                normalized_payload=normalized,
+                content_hash=digest(normalized),
+                normalizer_version="telegraph-evidence-v0",
+                provenance_status="VERIFIED" if verified else "FAILED",
+                admissibility=admissibility,
+                limitation_codes=codes,
+            )
+            s.add(evidence_item)
+            evidence.append(evidence_item)
+        s.flush()
+        evidence_set_hash = digest([item.content_hash for item in sorted(evidence, key=lambda item: item.evidence_id)])
+        rejected = [item.evidence_id for item in evidence if item.admissibility == "REJECTED"]
+        limited = [item.evidence_id for item in evidence if item.admissibility == "LIMITED"]
+        admitted = [item.evidence_id for item in evidence if item.admissibility == "ADMITTED"]
+        structural = "STRUCTURALLY_BLOCKED" if not evidence or rejected else ("STRUCTURALLY_LIMITED" if limited else "STRUCTURALLY_ADMISSIBLE")
+        evaluation = StructuralEvaluation(
+            mandate_id=mandate_id,
+            evaluator="PRAMAGRAPH",
+            evaluator_version="pramagraph-structural-v0",
+            evidence_set_hash=evidence_set_hash,
+            admitted_evidence_ids=admitted,
+            limited_evidence_ids=limited,
+            rejected_evidence_ids=rejected,
+            limitation_codes=sum((item.limitation_codes for item in evidence), []),
+            contradiction_codes=[],
+            structural_state=structural,
+            evaluation_payload={},
+        )
+        s.add(evaluation)
+        s.flush()
+        state, reasons = decide(structural)
+        s.add(Decision(
+            mandate_id=mandate_id,
+            evaluation_id=evaluation.evaluation_id,
+            state=state,
+            policy_version="prama-gate-v0",
+            evidence_set_hash=evidence_set_hash,
+            reason_codes=reasons,
+            decision_payload={},
+        ))
+        transition_mandate(s, mandate, MandateStatus.DECIDED)
+        metadata = _attribution(mandate)
+        s.add_all([
+            UsageEvent(mandate_id=mandate_id, event_type="EVIDENCE_CREATED", metadata_=metadata),
+            UsageEvent(mandate_id=mandate_id, event_type="EVALUATION_COMPLETED", metadata_=metadata),
+            UsageEvent(mandate_id=mandate_id, event_type="DECISION_CREATED", metadata_=metadata),
+        ])
+        s.commit()
+        result = issue_ticket(s, mandate_id)[1]
+        if mandate.origin == "AUTONOMOUS":
+            finalize_http_run(s, mandate_id)
+            s.commit()
         return result
-    finally: s.close()
+    finally:
+        s.close()
 
 
 @celery_app.task(name="prama.execute_ticket_anchor")

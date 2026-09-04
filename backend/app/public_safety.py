@@ -1,9 +1,9 @@
-"""Fail-closed budget authorization for the public manual mandate path.
+"""Fail-closed budget authorization for all paid mandate paths.
 
-The API reserves the maximum public mandate budget before publishing work.
-The worker subsequently verifies that durable reservation before it can call
-Gateway.  PostgreSQL is the source of truth for money; Redis is used only for
-the public request rate limit and the existing acquisition execution lock.
+The API or private scheduler reserves the workflow maximum before publishing
+work.  The worker subsequently verifies that durable reservation before it can
+call Gateway.  PostgreSQL is the source of truth for money; Redis is used only
+for request limiting and the existing acquisition execution lock.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from app.domain.mandates import PublicManualSpendLedger, PublicManualSpendReserv
 from app.redis_config import redis_url
 
 _MICRO = Decimal("0.000001")
+M2M_MAX_WORKFLOW_USDC = Decimal("0.010000")
 logger = logging.getLogger(__name__)
 
 
@@ -40,7 +41,28 @@ def public_max_mandate_usdc() -> Decimal:
 
 
 def public_daily_spend_cap_usdc() -> Decimal:
-    return _decimal_setting("PUBLIC_DAILY_SPEND_CAP_USDC", "0.50")
+    return global_daily_spend_cap_usdc()
+
+
+def global_daily_spend_cap_usdc() -> Decimal:
+    """Return the one shared daily cap for manual, M2M, and autonomous spend."""
+    fallback = os.environ.get("PUBLIC_DAILY_SPEND_CAP_USDC", "0.50")
+    return _decimal_setting("GLOBAL_DAILY_SPEND_CAP_USDC", fallback)
+
+
+def m2m_max_workflow_usdc() -> Decimal:
+    """Return the hard M2M paid-workflow ceiling.
+
+    This is intentionally not configurable above 0.01 USDC.  A deployment
+    may lower the ceiling, but no API or environment typo can raise it.
+    """
+    try:
+        configured = Decimal(os.environ.get("M2M_MAX_WORKFLOW_USDC", str(M2M_MAX_WORKFLOW_USDC)))
+    except (InvalidOperation, ValueError) as error:
+        raise RuntimeError("M2M_MAX_WORKFLOW_USDC_INVALID") from error
+    if configured <= 0 or configured.as_tuple().exponent < -6:
+        raise RuntimeError("M2M_MAX_WORKFLOW_USDC_INVALID")
+    return min(configured.quantize(_MICRO), M2M_MAX_WORKFLOW_USDC)
 
 
 def public_rate_limit() -> tuple[int, int]:
@@ -84,16 +106,30 @@ def enforce_public_rate_limit(request: Request) -> None:
 
 
 def reserve_public_manual_spend(session: Session, mandate_id: str, amount: Decimal) -> None:
-    """Atomically reserve a public manual budget in PostgreSQL.
+    """Atomically reserve a manual budget in PostgreSQL.
 
     The conditional upsert serializes concurrent reservations on the one
     ledger row for today.  ``spent + reserved`` can therefore never exceed
     the cap.  The caller must commit this together with the Mandate and task.
     """
+    _reserve_spend(session, mandate_id, amount, public_max_mandate_usdc(), "MANUAL")
+
+
+def reserve_m2m_spend(session: Session, mandate_id: str, amount: Decimal) -> None:
+    """Atomically reserve an M2M budget on the shared G12 daily ledger."""
+    _reserve_spend(session, mandate_id, amount, m2m_max_workflow_usdc(), "M2M")
+
+
+def reserve_autonomous_spend(session: Session, mandate_id: str, amount: Decimal) -> None:
+    """Atomically reserve a bounded paid autonomous budget on the same ledger."""
+    _reserve_spend(session, mandate_id, amount, M2M_MAX_WORKFLOW_USDC, "AUTONOMOUS")
+
+
+def _reserve_spend(session: Session, mandate_id: str, amount: Decimal, maximum: Decimal, origin: str) -> None:
     normalized = amount.quantize(_MICRO)
-    if normalized <= 0 or normalized > public_max_mandate_usdc():
+    if normalized <= 0 or normalized > maximum:
         raise HTTPException(status_code=422, detail="PUBLIC_MANDATE_BUDGET_EXCEEDED")
-    cap = public_daily_spend_cap_usdc()
+    cap = global_daily_spend_cap_usdc()
     if normalized > cap:
         raise HTTPException(status_code=429, detail="PUBLIC_DAILY_SPEND_CAP_EXCEEDED")
     spend_date = datetime.now(timezone.utc).date()
@@ -124,11 +160,17 @@ def reserve_public_manual_spend(session: Session, mandate_id: str, amount: Decim
             spend_date=spend_date,
             reserved_usdc=normalized,
             status="RESERVED",
+            origin=origin,
         )
     )
 
 
 def verify_public_manual_reservation(session: Session, mandate_id: str, maximum: Decimal) -> PublicManualSpendReservation:
+    """Return a locked manual reservation, or stop before Gateway is contacted."""
+    return verify_spend_reservation(session, mandate_id, maximum, "MANUAL")
+
+
+def verify_spend_reservation(session: Session, mandate_id: str, maximum: Decimal, origin: str) -> PublicManualSpendReservation:
     """Return a locked valid reservation, or stop before Gateway is contacted."""
     try:
         reservation = (
@@ -137,7 +179,7 @@ def verify_public_manual_reservation(session: Session, mandate_id: str, maximum:
             .with_for_update()
             .one_or_none()
         )
-        if reservation is None or reservation.status != "RESERVED":
+        if reservation is None or reservation.status != "RESERVED" or reservation.origin != origin:
             raise RuntimeError("PUBLIC_SPEND_AUTHORIZATION_INVALID")
         if reservation.reserved_usdc <= 0 or reservation.reserved_usdc > maximum:
             raise RuntimeError("PUBLIC_SPEND_AUTHORIZATION_INVALID")
@@ -149,8 +191,23 @@ def verify_public_manual_reservation(session: Session, mandate_id: str, maximum:
 
 
 def settle_public_manual_spend(session: Session, mandate_id: str, actual_spend: Decimal) -> None:
-    """Convert a reservation into immutable actual spend in the same commit as the call."""
-    reservation = verify_public_manual_reservation(session, mandate_id, public_max_mandate_usdc())
+    """Settle a manual reservation in the same commit as the call."""
+    settle_spend(session, mandate_id, actual_spend, public_max_mandate_usdc(), "MANUAL")
+
+
+def settle_m2m_spend(session: Session, mandate_id: str, actual_spend: Decimal) -> None:
+    """Settle an M2M reservation in the same commit as the Telegraph call."""
+    settle_spend(session, mandate_id, actual_spend, m2m_max_workflow_usdc(), "M2M")
+
+
+def settle_autonomous_spend(session: Session, mandate_id: str, actual_spend: Decimal) -> None:
+    """Settle an autonomous reservation in the same commit as the call."""
+    settle_spend(session, mandate_id, actual_spend, M2M_MAX_WORKFLOW_USDC, "AUTONOMOUS")
+
+
+def settle_spend(session: Session, mandate_id: str, actual_spend: Decimal, maximum: Decimal, origin: str) -> None:
+    """Convert a reservation into immutable actual spend atomically."""
+    reservation = verify_spend_reservation(session, mandate_id, maximum, origin)
     actual = actual_spend.quantize(_MICRO)
     if actual < 0 or actual > reservation.reserved_usdc:
         raise RuntimeError("PUBLIC_SPEND_SETTLEMENT_INVALID")
@@ -164,6 +221,11 @@ def settle_public_manual_spend(session: Session, mandate_id: str, actual_spend: 
 
 
 def release_public_manual_reservation(session: Session, mandate_id: str) -> None:
+    """Release only a definitely unspent manual reservation."""
+    release_spend_reservation(session, mandate_id, "MANUAL")
+
+
+def release_spend_reservation(session: Session, mandate_id: str, origin: str) -> None:
     """Release only a definitely unspent reservation; uncertain failures keep it reserved."""
     reservation = (
         session.query(PublicManualSpendReservation)
@@ -171,7 +233,7 @@ def release_public_manual_reservation(session: Session, mandate_id: str) -> None
         .with_for_update()
         .one_or_none()
     )
-    if reservation is None or reservation.status != "RESERVED":
+    if reservation is None or reservation.status != "RESERVED" or reservation.origin != origin:
         return
     ledger = session.get(PublicManualSpendLedger, reservation.spend_date, with_for_update=True)
     if ledger is None or ledger.reserved_usdc < reservation.reserved_usdc:
