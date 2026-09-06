@@ -265,6 +265,85 @@ class CryptoPriceEvidence(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
+class EvidenceRelation(Base):
+    """Immutable relation between one typed evidence artifact and requirement."""
+
+    __tablename__ = "evidence_relations"
+    __table_args__ = (
+        UniqueConstraint(
+            "target_id",
+            "requirement_id",
+            "evidence_id",
+            "observer_version",
+            "contract_version",
+            name="uq_evidence_relations_lineage_version",
+        ),
+        CheckConstraint(
+            "relation_state IN ('SATISFIES', 'CONTRADICTS', 'UNRESOLVED', 'NOT_APPLICABLE')",
+            name="ck_evidence_relations_state",
+        ),
+    )
+
+    relation_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    target_id: Mapped[str] = mapped_column(
+        ForeignKey("epistemic_targets.target_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    requirement_id: Mapped[str] = mapped_column(
+        ForeignKey("evidence_requirements.requirement_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    evidence_id: Mapped[str] = mapped_column(
+        ForeignKey("evidence.evidence_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    relation_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    relation_basis: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    observer_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    contract_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_hash: Mapped[str] = mapped_column(String(66), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class EpistemicEvaluation(Base):
+    """Immutable deterministic E1 relational snapshot; it has no decision authority."""
+
+    __tablename__ = "epistemic_evaluations"
+    __table_args__ = (
+        CheckConstraint(
+            "structural_state IN ('COMPLETE', 'INCOMPLETE', 'CONTRADICTED')",
+            name="ck_epistemic_evaluations_structural_state",
+        ),
+    )
+
+    evaluation_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    mandate_id: Mapped[str] = mapped_column(
+        ForeignKey("mandates.mandate_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    target_id: Mapped[str] = mapped_column(
+        ForeignKey("epistemic_targets.target_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    evidence_set_hash: Mapped[str] = mapped_column(String(66), nullable=False, index=True)
+    requirement_states: Mapped[list] = mapped_column(JSONB, nullable=False)
+    relations: Mapped[list] = mapped_column(JSONB, nullable=False)
+    contradictions: Mapped[list] = mapped_column(JSONB, nullable=False)
+    limitations: Mapped[list] = mapped_column(JSONB, nullable=False)
+    structural_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    observer_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    contract_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    algorithm_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_evidence_ids: Mapped[list] = mapped_column(JSONB, nullable=False)
+    canonical_hash: Mapped[str] = mapped_column(String(66), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
 class StructuralEvaluation(Base):
     __tablename__="structural_evaluations"
     evaluation_id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4())); mandate_id: Mapped[str]=mapped_column(String(36)); evaluator: Mapped[str]=mapped_column(String(64)); evaluator_version: Mapped[str]=mapped_column(String(64)); evidence_set_hash: Mapped[str]=mapped_column(String(66)); admitted_evidence_ids: Mapped[list]=mapped_column(JSONB); limited_evidence_ids: Mapped[list]=mapped_column(JSONB); rejected_evidence_ids: Mapped[list]=mapped_column(JSONB); limitation_codes: Mapped[list]=mapped_column(JSONB); contradiction_codes: Mapped[list]=mapped_column(JSONB); structural_state: Mapped[str]=mapped_column(String(64)); evaluation_payload: Mapped[dict]=mapped_column(JSONB); created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utc_now); completed_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utc_now)

@@ -12,6 +12,20 @@ from app.epistemic.contracts import (
     canonical_hash,
     canonical_json,
 )
+from app.epistemic.evaluator import (
+    E1_ADMISSION_VERSION,
+    E1_C2_ALGORITHM_VERSION,
+    E1_C2_CONTRACT_VERSION,
+    E1_C2_OBSERVER_VERSION,
+    E1_EVIDENCE_SET_HASH_VERSION,
+    E1_ELIGIBLE_ADMISSION_STATES,
+    E1EvaluationResult,
+    build_e1_evidence_set_hash,
+    build_evidence_relation,
+    evaluate_crypto_price,
+    persist_e1_evaluation,
+    replay_crypto_price,
+)
 
 __all__ = [
     "CRYPTO_PRICE_EVIDENCE_SCHEMA_VERSION",
@@ -24,4 +38,16 @@ __all__ = [
     "build_evidence_requirement",
     "canonical_hash",
     "canonical_json",
+    "E1_ADMISSION_VERSION",
+    "E1_C2_ALGORITHM_VERSION",
+    "E1_C2_CONTRACT_VERSION",
+    "E1_C2_OBSERVER_VERSION",
+    "E1_EVIDENCE_SET_HASH_VERSION",
+    "E1_ELIGIBLE_ADMISSION_STATES",
+    "E1EvaluationResult",
+    "build_e1_evidence_set_hash",
+    "build_evidence_relation",
+    "evaluate_crypto_price",
+    "persist_e1_evaluation",
+    "replay_crypto_price",
 ]
