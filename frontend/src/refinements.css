@@ -80,15 +80,38 @@
 }
 
 .about-stage {
+  position: relative;
   min-height: 670px;
   border: 4px solid #f15a36;
-  padding: 7px;
+  padding: 40px 7px 7px;
   background: #101112;
+}
+
+.about-close {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  z-index: 1;
+  width: 30px;
+  height: 30px;
+  border: 1px solid #f15a36;
+  background: #101112;
+  color: #f7ece6;
+  font: 600 22px/1 "Sometype Mono", "Courier New", monospace;
+  cursor: pointer;
+}
+
+.about-close:hover,
+.about-close:focus-visible {
+  background: #f15a36;
+  color: #111314;
 }
 
 .about-bottom-stage {
   position: fixed;
   z-index: 20;
+  max-width: calc(100vw - 28px);
+  max-height: calc(100vh - 28px);
   overflow: auto;
   border: 3px solid #f15a36;
   padding: 12px;
