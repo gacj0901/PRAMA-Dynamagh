@@ -2,6 +2,8 @@
 
 **A structural epistemic layer built on Telegraph Protocol for turning mandates into evidence-bound machine decisions.**
 
+![PRAMA-Dynamagh](docs/assets/prama-dynamagh-presentation.png)
+
 ```text
 Mandate
    ↓
