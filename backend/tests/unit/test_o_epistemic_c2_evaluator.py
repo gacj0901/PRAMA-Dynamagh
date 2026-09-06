@@ -168,6 +168,21 @@ def test_temporal_window_is_explicit_or_unresolved():
     temporal = next(item for item in resolved.evaluation.requirement_states if item["requirement_type"] == "temporal_applicability")
     assert temporal["state"] == "SATISFIED"
 
+    outside_evidence = _evidence("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+    outside_typed = _typed(
+        outside_evidence.evidence_id,
+        observed_at=datetime(2026, 9, 6, 11, 54, 59, tzinfo=UTC),
+    )
+    outside = _evaluate(
+        requirements=_requirements(temporal_window=300),
+        evidence=[outside_evidence],
+        typed={outside_evidence.evidence_id: outside_typed},
+    )
+    temporal = next(item for item in outside.evaluation.requirement_states if item["requirement_type"] == "temporal_applicability")
+    temporal_relation = next(item for item in outside.relations if item.requirement_id == temporal["requirement_id"])
+    assert temporal_relation.relation_state == "NOT_APPLICABLE"
+    assert temporal["state"] == "UNRESOLVED"
+
 
 def test_support_and_contradiction_are_both_preserved():
     first = _evidence("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")

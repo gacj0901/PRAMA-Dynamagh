@@ -312,7 +312,15 @@ def _evaluate_requirement_relation(
             )
         delta = abs(target_as_of - observed_at)
         delta_seconds = Decimal(delta.days * 86400 * 1_000_000 + delta.seconds * 1_000_000 + delta.microseconds) / Decimal(1_000_000)
-        state = "SATISFIES" if delta_seconds <= Decimal(max_age) else "CONTRADICTS"
+        if delta_seconds > Decimal(max_age):
+            return "NOT_APPLICABLE", {
+                "rule": "explicit_temporal_window_outside",
+                "target_as_of": canonical_timestamp(target_as_of),
+                "observed_at": canonical_timestamp(observed_at),
+                "max_age_seconds": max_age,
+                "absolute_delta_seconds": canonical_decimal(delta_seconds),
+            }, ()
+        state = "SATISFIES"
         return state, {
             "rule": "explicit_temporal_window",
             "target_as_of": canonical_timestamp(target_as_of),
