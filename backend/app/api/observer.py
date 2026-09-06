@@ -17,6 +17,7 @@ from app.domain.mandates import Evidence, OEvidenceProvenanceContract, Telegraph
 from app.observers.provenance import (
     OBSERVER_ID,
     OBSERVER_VERSION,
+    observe_telegraph_call,
     replay_provenance,
     list_observations,
 )
@@ -139,3 +140,30 @@ def provenance_status(
         return _status_snapshot(session)
     except SQLAlchemyError as error:
         raise HTTPException(status_code=503, detail="OBSERVER_STATUS_UNAVAILABLE") from error
+
+
+@router.post("/provenance/backfill")
+def provenance_backfill(
+    _: None = Depends(require_observer_read_auth),
+    session: Session = Depends(get_session),
+) -> dict[str, int]:
+    """One-time bounded backfill of eligible persisted source rows only."""
+
+    try:
+        call_ids = session.scalars(
+            select(TelegraphCall.telegraph_call_id)
+            .join(Evidence, Evidence.telegraph_call_id == TelegraphCall.telegraph_call_id)
+            .where(TelegraphCall.completed_at.is_not(None))
+            .order_by(TelegraphCall.completed_at, TelegraphCall.telegraph_call_id)
+        ).all()
+        results = [observe_telegraph_call(session, call_id) for call_id in call_ids]
+        session.commit()
+        return {
+            "eligible_evidence_count": len(call_ids),
+            "rows_created": sum(result.get("status") == "RECORDED" for result in results),
+            "rows_already_present": sum(result.get("status") == "ALREADY_RECORDED" for result in results),
+            "rows_out_of_order": sum(result.get("status") == "OUT_OF_ORDER" for result in results),
+        }
+    except SQLAlchemyError as error:
+        session.rollback()
+        raise HTTPException(status_code=503, detail="OBSERVER_BACKFILL_UNAVAILABLE") from error
