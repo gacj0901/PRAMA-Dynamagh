@@ -414,6 +414,7 @@ def replay_provenance(session: Session) -> dict[str, Any]:
     contexts: list[tuple[str, str]] = []
     context_counts: dict[tuple[str, str], int] = {}
     hashes: list[str] = []
+    match_count = 0
     valid = True
     for stored_row in stored:
         lineage = _lineage(session, stored_row.telegraph_call_id or "")
@@ -458,9 +459,16 @@ def replay_provenance(session: Session) -> dict[str, Any]:
         }
         recomputed_hash = digest(payload)
         hashes.append(recomputed_hash)
-        valid = valid and recomputed_hash == stored_row.observation_hash
+        matches = recomputed_hash == stored_row.observation_hash
+        match_count += 1 if matches else 0
+        valid = valid and matches
         if context is not None:
             values.append(float(lineage["omega"]))
             contexts.append(context)
             context_counts[context] = context_count + 1
-    return {"status": "VALID" if valid else "INVALID", "observation_count": len(stored), "hashes": hashes}
+    return {
+        "status": "VALID" if valid else "INVALID",
+        "observation_count": len(stored),
+        "match_count": match_count,
+        "hashes": hashes,
+    }
