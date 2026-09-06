@@ -30,26 +30,36 @@ def _snapshot(
     relations: tuple[dict, ...] = (),
     structural_state: str = "COMPLETE",
 ) -> E1RelationalSnapshot:
+    canonical_relations = tuple(sorted(relations, key=lambda item: item["relation_id"]))
+    requirement_states = (
+        {
+            "requirement_id": "r2",
+            "requirement_type": "quote_currency",
+            "required": True,
+            "state": requirement_state,
+            "supporting_relation_ids": tuple(
+                item["relation_id"] for item in canonical_relations if item["relation_state"] == "SATISFIES"
+            ),
+            "contradicting_relation_ids": tuple(
+                item["relation_id"] for item in canonical_relations if item["relation_state"] == "CONTRADICTS"
+            ),
+            "unresolved_relation_ids": (),
+            "not_applicable_relation_ids": (),
+        },
+    )
     return E1RelationalSnapshot(
         evaluation_id=evaluation_id,
-        target_id=TARGET_ID,
-        requirement_states=(
+        canonical_hash=canonical_hash(
             {
-                "requirement_id": "r2",
-                "requirement_type": "quote_currency",
-                "required": True,
-                "state": requirement_state,
-                "supporting_relation_ids": tuple(
-                    item["relation_id"] for item in relations if item["relation_state"] == "SATISFIES"
-                ),
-                "contradicting_relation_ids": tuple(
-                    item["relation_id"] for item in relations if item["relation_state"] == "CONTRADICTS"
-                ),
-                "unresolved_relation_ids": (),
-                "not_applicable_relation_ids": (),
-            },
+                "target_id": TARGET_ID,
+                "requirement_states": requirement_states,
+                "relations": canonical_relations,
+                "structural_state": structural_state,
+            }
         ),
-        relations=relations,
+        target_id=TARGET_ID,
+        requirement_states=requirement_states,
+        relations=canonical_relations,
         structural_state=structural_state,
         observer_version="O_EPISTEMIC-v0.1",
         contract_version="e1-c2-crypto-price-v0.1",
@@ -167,6 +177,8 @@ def test_relation_and_evidence_deltas_preserve_contradiction_attribution():
     )
     assert transition.previous_requirement_state == "SATISFIED"
     assert transition.current_requirement_state == "CONTRADICTED"
+    assert transition.previous_evaluation_hash == previous.canonical_hash
+    assert transition.current_evaluation_hash == current.canonical_hash
     assert transition.added_relation_ids == ("rel-2",)
     assert transition.added_contradicting_evidence_ids == ("e2",)
     assert transition.added_supporting_evidence_ids == ()
@@ -203,6 +215,36 @@ def test_same_state_relational_change_and_exact_noop_are_distinct():
     )
     assert exact_noop.transition_basis["transition_kind"] == "EXACT_NO_OP"
     assert same_state.canonical_hash != exact_noop.canonical_hash
+    same_semantics = derive_transition(
+        previous,
+        _snapshot("third-evaluation-id", relations=(_relation("rel-1", "e1", "SATISFIES"),)),
+        previous_event_index=0,
+        event_index=1,
+        requirement_id="r2",
+        transition_id="third-incidental-id",
+    )
+    assert exact_noop.canonical_hash == same_semantics.canonical_hash
+
+    changed_previous_hash = derive_transition(
+        E1RelationalSnapshot(
+            **{**previous.__dict__, "canonical_hash": "0xprevious-changed"}
+        ),
+        corroborated,
+        previous_event_index=0,
+        event_index=1,
+        requirement_id="r2",
+    )
+    changed_current_hash = derive_transition(
+        previous,
+        E1RelationalSnapshot(
+            **{**corroborated.__dict__, "canonical_hash": "0xcurrent-changed"}
+        ),
+        previous_event_index=0,
+        event_index=1,
+        requirement_id="r2",
+    )
+    assert changed_previous_hash.canonical_hash != same_state.canonical_hash
+    assert changed_current_hash.canonical_hash != same_state.canonical_hash
 
 
 def test_relation_removal_and_state_change_are_set_based_and_order_invariant():

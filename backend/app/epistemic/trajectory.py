@@ -99,6 +99,7 @@ class E1RelationalSnapshot:
     """A normalized, immutable view of one persisted or fixture E1 snapshot."""
 
     evaluation_id: str
+    canonical_hash: str
     target_id: str
     requirement_states: tuple[dict[str, Any], ...]
     relations: tuple[dict[str, Any], ...]
@@ -125,6 +126,7 @@ class E1RelationalSnapshot:
         )
         return cls(
             evaluation_id=_require_string("evaluation_id", resolved_evaluation_id),
+            canonical_hash=_require_string("canonical_hash", _value(evaluation, "canonical_hash")),
             target_id=_require_string("target_id", _value(evaluation, "target_id")),
             requirement_states=tuple(
                 _normalize_requirement_state(item)
@@ -171,6 +173,8 @@ class EpistemicTransitionObservation:
     event_index: int
     previous_evaluation_id: str
     current_evaluation_id: str
+    previous_evaluation_hash: str
+    current_evaluation_hash: str
     previous_requirement_state: str
     current_requirement_state: str
     added_relation_ids: tuple[str, ...]
@@ -196,6 +200,8 @@ class EpistemicTransitionObservation:
             "event_index": self.event_index,
             "previous_evaluation_id": self.previous_evaluation_id,
             "current_evaluation_id": self.current_evaluation_id,
+            "previous_evaluation_hash": self.previous_evaluation_hash,
+            "current_evaluation_hash": self.current_evaluation_hash,
             "previous_requirement_state": self.previous_requirement_state,
             "current_requirement_state": self.current_requirement_state,
             "added_relation_ids": list(self.added_relation_ids),
@@ -269,6 +275,8 @@ def _canonical_body(observation: EpistemicTransitionObservation) -> dict[str, An
         "requirement_id": observation.requirement_id,
         "requirement_type": observation.requirement_type,
         "event_index": observation.event_index,
+        "previous_evaluation_hash": observation.previous_evaluation_hash,
+        "current_evaluation_hash": observation.current_evaluation_hash,
         "previous_requirement_state": observation.previous_requirement_state,
         "current_requirement_state": observation.current_requirement_state,
         "added_relation_ids": list(observation.added_relation_ids),
@@ -392,6 +400,8 @@ def derive_transition(
         event_index=event_index,
         previous_evaluation_id=previous.evaluation_id,
         current_evaluation_id=current.evaluation_id,
+        previous_evaluation_hash=previous.canonical_hash,
+        current_evaluation_hash=current.canonical_hash,
         previous_requirement_state=previous_requirement["state"],
         current_requirement_state=current_requirement["state"],
         added_relation_ids=added_relation_ids,
