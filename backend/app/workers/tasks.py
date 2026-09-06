@@ -231,6 +231,13 @@ def evaluate_mandate(mandate_id):
             UsageEvent(mandate_id=mandate_id, event_type="DECISION_CREATED", metadata_=metadata),
         ])
         s.commit()
+        try:
+            from app.observers.provenance import observe_mandate_shadow
+
+            observe_mandate_shadow(mandate_id)
+        except Exception:
+            # The observer is shadow-only and must never alter the decision path.
+            pass
         result = issue_ticket(s, mandate_id)[1]
         if mandate.origin == "AUTONOMOUS":
             finalize_http_run(s, mandate_id)

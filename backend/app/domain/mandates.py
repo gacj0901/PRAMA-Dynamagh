@@ -301,3 +301,78 @@ class AutonomyRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class OEvidenceProvenanceContract(Base):
+    __tablename__ = "o_evidence_provenance_contracts"
+    observer_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    observer_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    boundary: Mapped[list] = mapped_column(JSONB, nullable=False)
+    required_invariants: Mapped[list] = mapped_column(JSONB, nullable=False)
+    normalization: Mapped[str] = mapped_column(String(32), nullable=False)
+    context_fields: Mapped[list] = mapped_column(JSONB, nullable=False)
+    min_context_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    min_global_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    kernel_config: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    sigma_op_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    u_lambda_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    capability: Mapped[str] = mapped_column(String(255), nullable=False)
+    mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    frozen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class OEvidenceProvenanceGlobalState(Base):
+    __tablename__ = "o_evidence_provenance_global_states"
+    observer_id: Mapped[str] = mapped_column(
+        ForeignKey("o_evidence_provenance_contracts.observer_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    observation_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    omega_sum: Mapped[Decimal] = mapped_column(Numeric(18, 12), nullable=False, default=Decimal("0"))
+    next_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    last_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class OEvidenceProvenanceContextState(Base):
+    __tablename__ = "o_evidence_provenance_context_states"
+    __table_args__ = (UniqueConstraint("observer_id", "miner_id", "intent", name="uq_o_evidence_provenance_context"),)
+    observer_id: Mapped[str] = mapped_column(
+        ForeignKey("o_evidence_provenance_contracts.observer_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    miner_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    intent: Mapped[str] = mapped_column(String(128), primary_key=True)
+    observation_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    omega_sum: Mapped[Decimal] = mapped_column(Numeric(18, 12), nullable=False, default=Decimal("0"))
+    kernel_state: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    last_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class OEvidenceProvenanceObservation(Base):
+    __tablename__ = "o_evidence_provenance_observations"
+    observation_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    observer_id: Mapped[str] = mapped_column(
+        ForeignKey("o_evidence_provenance_contracts.observer_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    mandate_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    acquisition_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    telegraph_call_id: Mapped[str | None] = mapped_column(String(36), nullable=True, unique=True, index=True)
+    evidence_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    miner_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    intent: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    omega: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected: Mapped[Decimal | None] = mapped_column(Numeric(18, 15), nullable=True)
+    support_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    context_count_before: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    global_count_before: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_artifact_ids: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    kernel_output: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    observation_hash: Mapped[str] = mapped_column(String(66), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
