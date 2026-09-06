@@ -5,7 +5,7 @@ import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -186,6 +186,85 @@ class M2MMandateRequest(Base):
 class Evidence(Base):
     __tablename__="evidence"
     evidence_id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4())); mandate_id: Mapped[str]=mapped_column(String(36),index=True); acquisition_id: Mapped[str|None]=mapped_column(String(36), nullable=True); telegraph_call_id: Mapped[str|None]=mapped_column(String(36),unique=True, nullable=True); erc8183_job_id: Mapped[str|None]=mapped_column(ForeignKey("erc8183_jobs.erc8183_job_id"), nullable=True, index=True); evidence_type: Mapped[str]=mapped_column(String(64)); source_kind: Mapped[str]=mapped_column(String(32)); source_intent: Mapped[str|None]=mapped_column(String(255)); source_miner_id: Mapped[str|None]=mapped_column(String(255)); source_signal_hash: Mapped[str|None]=mapped_column(String(255)); normalized_payload: Mapped[dict]=mapped_column(JSONB); content_hash: Mapped[str]=mapped_column(String(66)); normalizer_version: Mapped[str]=mapped_column(String(64)); provenance_status: Mapped[str]=mapped_column(String(32)); admissibility: Mapped[str]=mapped_column(String(32)); limitation_codes: Mapped[list]=mapped_column(JSONB,default=list); created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utc_now); updated_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utc_now)
+
+
+class EpistemicTarget(Base):
+    """Immutable target contract for the foundational O_EPISTEMIC layer."""
+
+    __tablename__ = "epistemic_targets"
+
+    target_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    mandate_id: Mapped[str] = mapped_column(
+        ForeignKey("mandates.mandate_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    target_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    parameters: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    temporal_scope: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    contract_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_hash: Mapped[str] = mapped_column(String(66), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class EvidenceRequirement(Base):
+    """Immutable, typed requirement contract for an EpistemicTarget."""
+
+    __tablename__ = "evidence_requirements"
+    __table_args__ = (
+        UniqueConstraint(
+            "target_id",
+            "requirement_type",
+            "contract_version",
+            name="uq_evidence_requirements_target_type_version",
+        ),
+        CheckConstraint(
+            "requirement_type IN ('asset_identity', 'quote_currency', 'price_value', 'temporal_applicability')",
+            name="ck_evidence_requirements_crypto_price_v01_type",
+        ),
+    )
+
+    requirement_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    target_id: Mapped[str] = mapped_column(
+        ForeignKey("epistemic_targets.target_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    requirement_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    parameters: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    contract_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_hash: Mapped[str] = mapped_column(String(66), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class CryptoPriceEvidence(Base):
+    """Typed CRYPTO_PRICE evidence extension; existing Evidence is untouched."""
+
+    __tablename__ = "crypto_price_evidence"
+    __table_args__ = (
+        UniqueConstraint("evidence_id", name="uq_crypto_price_evidence_evidence_id"),
+    )
+
+    crypto_price_evidence_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
+    )
+    evidence_id: Mapped[str] = mapped_column(
+        ForeignKey("evidence.evidence_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    asset: Mapped[str] = mapped_column(String(128), nullable=False)
+    quote_currency: Mapped[str] = mapped_column(String(32), nullable=False)
+    price_value: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_hash: Mapped[str] = mapped_column(String(66), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
 class StructuralEvaluation(Base):
     __tablename__="structural_evaluations"
     evaluation_id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4())); mandate_id: Mapped[str]=mapped_column(String(36)); evaluator: Mapped[str]=mapped_column(String(64)); evaluator_version: Mapped[str]=mapped_column(String(64)); evidence_set_hash: Mapped[str]=mapped_column(String(66)); admitted_evidence_ids: Mapped[list]=mapped_column(JSONB); limited_evidence_ids: Mapped[list]=mapped_column(JSONB); rejected_evidence_ids: Mapped[list]=mapped_column(JSONB); limitation_codes: Mapped[list]=mapped_column(JSONB); contradiction_codes: Mapped[list]=mapped_column(JSONB); structural_state: Mapped[str]=mapped_column(String(64)); evaluation_payload: Mapped[dict]=mapped_column(JSONB); created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utc_now); completed_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utc_now)
