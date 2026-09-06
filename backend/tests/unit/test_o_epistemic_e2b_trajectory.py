@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -11,9 +12,11 @@ from app.epistemic.evaluator import evaluate_crypto_price
 from app.epistemic.trajectory import (
     E1RelationalSnapshot,
     E2BTrajectoryPoint,
+    build_trajectory_lineage,
     build_transition_stream,
     derive_transition,
     replay_transition_stream,
+    transition_identity,
 )
 
 
@@ -21,6 +24,11 @@ UTC = timezone.utc
 T0 = datetime(2026, 9, 6, 12, tzinfo=UTC)
 TARGET_ID = "22222222-2222-4222-8222-222222222222"
 MANDATE_ID = "11111111-1111-4111-8111-111111111111"
+E1_OBSERVER_VERSION = "O_EPISTEMIC-v0.1"
+E1_CONTRACT_VERSION = "e1-c2-crypto-price-v0.1"
+E1_ALGORITHM_VERSION = "e1-c2-deterministic-relational-v0.1"
+E1_CANONICALIZATION_VERSION = "e1-canonical-v0.1"
+TARGET_CONTRACT_VERSION = "crypto-price-target-v0.1"
 
 
 def _snapshot(
@@ -61,10 +69,28 @@ def _snapshot(
         requirement_states=requirement_states,
         relations=canonical_relations,
         structural_state=structural_state,
-        observer_version="O_EPISTEMIC-v0.1",
-        contract_version="e1-c2-crypto-price-v0.1",
-        algorithm_version="e1-c2-deterministic-relational-v0.1",
+        observer_version=E1_OBSERVER_VERSION,
+        contract_version=E1_CONTRACT_VERSION,
+        algorithm_version=E1_ALGORITHM_VERSION,
+        target_contract_version=TARGET_CONTRACT_VERSION,
+        canonicalization_version=E1_CANONICALIZATION_VERSION,
     )
+
+
+def _lineage_for(snapshot: E1RelationalSnapshot, **overrides):
+    values = {
+        "target_id": snapshot.target_id,
+        "target_contract_version": snapshot.target_contract_version,
+        "e1_observer_version": snapshot.observer_version,
+        "e1_contract_version": snapshot.contract_version,
+        "e1_algorithm_version": snapshot.algorithm_version,
+        "e1_canonicalization_version": snapshot.canonicalization_version,
+    }
+    values.update(overrides)
+    return build_trajectory_lineage(**values)
+
+
+MANUAL_LINEAGE = _lineage_for(_snapshot("lineage-seed"))
 
 
 def _relation(relation_id: str, evidence_id: str, state: str) -> dict:
@@ -144,8 +170,13 @@ def _e1_trajectory_points() -> tuple[E2BTrajectoryPoint, ...]:
             result.evaluation,
             relations=result.relations,
             evaluation_id=evaluation_id,
+            target=target,
         )
-        return E2BTrajectoryPoint(event_index=int(evaluation_id[1:]), snapshot=snapshot)
+        return E2BTrajectoryPoint(
+            trajectory_lineage=_lineage_for(snapshot),
+            event_index=int(evaluation_id[1:]),
+            snapshot=snapshot,
+        )
 
     return (
         evaluate("g0", price=None),
@@ -173,6 +204,7 @@ def test_relation_and_evidence_deltas_preserve_contradiction_attribution():
         previous_event_index=0,
         event_index=1,
         requirement_id="r2",
+        trajectory_lineage=MANUAL_LINEAGE,
         transition_id="incidental-a",
     )
     assert transition.previous_requirement_state == "SATISFIED"
@@ -201,6 +233,7 @@ def test_same_state_relational_change_and_exact_noop_are_distinct():
         previous_event_index=0,
         event_index=1,
         requirement_id="r2",
+        trajectory_lineage=MANUAL_LINEAGE,
     )
     assert same_state.transition_basis["transition_kind"] == "SAME_STATE_RELATIONAL_CHANGE"
     assert same_state.added_supporting_evidence_ids == ("e2",)
@@ -211,6 +244,7 @@ def test_same_state_relational_change_and_exact_noop_are_distinct():
         previous_event_index=0,
         event_index=1,
         requirement_id="r2",
+        trajectory_lineage=MANUAL_LINEAGE,
         transition_id="different-incidental-id",
     )
     assert exact_noop.transition_basis["transition_kind"] == "EXACT_NO_OP"
@@ -221,6 +255,7 @@ def test_same_state_relational_change_and_exact_noop_are_distinct():
         previous_event_index=0,
         event_index=1,
         requirement_id="r2",
+        trajectory_lineage=MANUAL_LINEAGE,
         transition_id="third-incidental-id",
     )
     assert exact_noop.canonical_hash == same_semantics.canonical_hash
@@ -233,6 +268,7 @@ def test_same_state_relational_change_and_exact_noop_are_distinct():
         previous_event_index=0,
         event_index=1,
         requirement_id="r2",
+        trajectory_lineage=MANUAL_LINEAGE,
     )
     changed_current_hash = derive_transition(
         previous,
@@ -242,6 +278,7 @@ def test_same_state_relational_change_and_exact_noop_are_distinct():
         previous_event_index=0,
         event_index=1,
         requirement_id="r2",
+        trajectory_lineage=MANUAL_LINEAGE,
     )
     assert changed_previous_hash.canonical_hash != same_state.canonical_hash
     assert changed_current_hash.canonical_hash != same_state.canonical_hash
@@ -264,6 +301,7 @@ def test_relation_removal_and_state_change_are_set_based_and_order_invariant():
         previous_event_index=1,
         event_index=2,
         requirement_id="r2",
+        trajectory_lineage=MANUAL_LINEAGE,
     )
     assert transition.removed_relation_ids == ("rel-2",)
     assert transition.removed_contradicting_evidence_ids == ("e2",)
@@ -286,6 +324,7 @@ def test_relation_removal_and_state_change_are_set_based_and_order_invariant():
         previous_event_index=1,
         event_index=2,
         requirement_id="r2",
+        trajectory_lineage=MANUAL_LINEAGE,
         transition_id="another-incidental-id",
     )
     assert reordered.canonical_hash == transition.canonical_hash
@@ -323,9 +362,99 @@ def test_stream_requires_explicit_monotonic_event_index_and_excludes_exact_noops
         raise AssertionError("non-monotonic event index was accepted")
 
     exact = _snapshot("exact", relations=(_relation("rel-1", "e1", "SATISFIES"),))
-    point_a = E2BTrajectoryPoint(0, _snapshot("a", relations=(_relation("rel-1", "e1", "SATISFIES"),)))
-    point_b = E2BTrajectoryPoint(1, exact)
+    point_a = E2BTrajectoryPoint(
+        trajectory_lineage=MANUAL_LINEAGE,
+        event_index=0,
+        snapshot=_snapshot("a", relations=(_relation("rel-1", "e1", "SATISFIES"),)),
+    )
+    point_b = E2BTrajectoryPoint(trajectory_lineage=MANUAL_LINEAGE, event_index=1, snapshot=exact)
     assert build_transition_stream((point_a, point_b)) == ()
     included = build_transition_stream((point_a, point_b), include_exact_noops=True)
     assert len(included) == 1
     assert included[0].transition_basis["transition_kind"] == "EXACT_NO_OP"
+
+
+def test_lineage_is_deterministic_version_scoped_and_event_index_scoped():
+    first = build_trajectory_lineage(
+        target_id=TARGET_ID,
+        target_contract_version=TARGET_CONTRACT_VERSION,
+        e1_observer_version=E1_OBSERVER_VERSION,
+        e1_contract_version=E1_CONTRACT_VERSION,
+        e1_algorithm_version=E1_ALGORITHM_VERSION,
+        e1_canonicalization_version=E1_CANONICALIZATION_VERSION,
+    )
+    second = build_trajectory_lineage(
+        target_id=TARGET_ID,
+        target_contract_version=TARGET_CONTRACT_VERSION,
+        e1_observer_version=E1_OBSERVER_VERSION,
+        e1_contract_version=E1_CONTRACT_VERSION,
+        e1_algorithm_version=E1_ALGORITHM_VERSION,
+        e1_canonicalization_version=E1_CANONICALIZATION_VERSION,
+    )
+    changed = build_trajectory_lineage(
+        target_id=TARGET_ID,
+        target_contract_version=TARGET_CONTRACT_VERSION,
+        e1_observer_version=E1_OBSERVER_VERSION,
+        e1_contract_version=E1_CONTRACT_VERSION,
+        e1_algorithm_version="e1-c2-deterministic-relational-v0.2",
+        e1_canonicalization_version=E1_CANONICALIZATION_VERSION,
+    )
+    assert first == second
+    assert first.trajectory_lineage_id != changed.trajectory_lineage_id
+    assert first.target_id == changed.target_id
+
+    base = _snapshot("base", relations=(_relation("rel-1", "e1", "SATISFIES"),))
+    changed_version = replace(base, algorithm_version="e1-c2-deterministic-relational-v0.2")
+    lineage_b = _lineage_for(changed_version)
+    stream_a = build_transition_stream(
+        tuple(
+            E2BTrajectoryPoint(trajectory_lineage=first, event_index=index, snapshot=base)
+            for index in range(3)
+        ),
+        include_exact_noops=True,
+    )
+    stream_b = build_transition_stream(
+        tuple(
+            E2BTrajectoryPoint(trajectory_lineage=lineage_b, event_index=index, snapshot=changed_version)
+            for index in range(3)
+        ),
+        include_exact_noops=True,
+    )
+    assert [item.event_index for item in stream_a] == [1, 2]
+    assert [item.event_index for item in stream_b] == [1, 2]
+    assert {transition_identity(item) for item in stream_a}.isdisjoint(
+        {transition_identity(item) for item in stream_b}
+    )
+    assert [item.canonical_hash for item in replay_transition_stream(
+        tuple(E2BTrajectoryPoint(trajectory_lineage=first, event_index=index, snapshot=base) for index in range(3)),
+        include_exact_noops=True,
+    )] == [item.canonical_hash for item in stream_a]
+
+
+def test_event_order_divergence_is_bound_by_lineage_index_and_snapshot_hashes():
+    points = _e1_trajectory_points()
+    normal = build_transition_stream(points[:4])
+    divergent = tuple(
+        E2BTrajectoryPoint(
+            trajectory_lineage=points[0].trajectory_lineage,
+            event_index=index,
+            snapshot=points[source_index].snapshot,
+        )
+        for index, source_index in enumerate((0, 2, 1, 3))
+    )
+    reordered = build_transition_stream(divergent)
+    assert [item.event_index for item in normal] != [item.event_index for item in reordered] or [
+        item.canonical_hash for item in normal
+    ] != [item.canonical_hash for item in reordered]
+    assert [item.canonical_hash for item in normal] != [item.canonical_hash for item in reordered]
+
+
+def test_lineage_mismatch_is_rejected_before_transition_derivation():
+    snapshot = _snapshot("lineage-a")
+    other = _lineage_for(snapshot, e1_algorithm_version="e1-c2-deterministic-relational-v0.2")
+    try:
+        E2BTrajectoryPoint(trajectory_lineage=other, event_index=0, snapshot=snapshot)
+    except ValueError as error:
+        assert "semantic versions" in str(error)
+    else:
+        raise AssertionError("lineage/snapshot semantic mismatch was accepted")

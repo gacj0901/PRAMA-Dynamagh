@@ -12,13 +12,31 @@ from collections.abc import Iterable, Mapping
 import uuid
 from typing import Any
 
-from app.epistemic.contracts import canonical_hash, canonical_json
+from app.epistemic.contracts import (
+    E1_CANONICALIZATION_VERSION,
+    canonical_hash,
+    canonical_json,
+)
 
 
 E2_B_OBSERVER_VERSION = "O_EPISTEMIC_E2B-v0.1"
 E2_B_CONTRACT_VERSION = "e2-b-categorical-epistemic-trajectory-v0.1"
 E2_B_ALGORITHM_VERSION = "e2-b-set-delta-v0.1"
 E2_B_CANONICALIZATION_VERSION = "e2-b-canonical-v0.1"
+E2_B_LINEAGE_IDENTITY_VERSION = "e2-b-lineage-identity-v0.1"
+
+LINEAGE_VERSION_FIELDS = (
+    "target_contract_version",
+    "e1_observer_version",
+    "e1_contract_version",
+    "e1_algorithm_version",
+    "e1_canonicalization_version",
+    "e2_b_observer_version",
+    "e2_b_transition_contract_version",
+    "e2_b_algorithm_version",
+    "e2_b_canonicalization_version",
+    "e2_b_lineage_identity_version",
+)
 
 REQUIREMENT_STATES = ("SATISFIED", "UNRESOLVED", "CONTRADICTED")
 RELATION_STATES = ("SATISFIES", "CONTRADICTS", "UNRESOLVED", "NOT_APPLICABLE")
@@ -57,6 +75,85 @@ def _require_state(name: str, value: Any, allowed: tuple[str, ...]) -> str:
     if value not in allowed:
         raise ValueError(f"unsupported {name}: {value!r}")
     return value
+
+
+def _version_tuple_body(version_tuple: tuple[tuple[str, str], ...]) -> list[dict[str, str]]:
+    return [{"name": name, "version": version} for name, version in version_tuple]
+
+
+@dataclass(frozen=True)
+class TrajectoryLineage:
+    """Deterministic identity of one version-frozen target trajectory."""
+
+    trajectory_lineage_id: str
+    target_id: str
+    semantic_version_tuple: tuple[tuple[str, str], ...]
+
+    def __post_init__(self) -> None:
+        _require_string("trajectory_lineage_id", self.trajectory_lineage_id)
+        _require_string("target_id", self.target_id)
+        names = tuple(name for name, _ in self.semantic_version_tuple)
+        if names != LINEAGE_VERSION_FIELDS:
+            raise ValueError("trajectory lineage semantic version tuple has unexpected fields")
+        for name, version in self.semantic_version_tuple:
+            _require_string(f"{name} name", name)
+            _require_string(f"{name} version", version)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "trajectory_lineage_id": self.trajectory_lineage_id,
+            "target_id": self.target_id,
+            "semantic_version_tuple": _version_tuple_body(self.semantic_version_tuple),
+        }
+
+
+def build_trajectory_lineage(
+    *,
+    target_id: str,
+    target_contract_version: str,
+    e1_observer_version: str,
+    e1_contract_version: str,
+    e1_algorithm_version: str,
+    e1_canonicalization_version: str,
+    e2_b_observer_version: str = E2_B_OBSERVER_VERSION,
+    e2_b_transition_contract_version: str = E2_B_CONTRACT_VERSION,
+    e2_b_algorithm_version: str = E2_B_ALGORITHM_VERSION,
+    e2_b_canonicalization_version: str = E2_B_CANONICALIZATION_VERSION,
+    e2_b_lineage_identity_version: str = E2_B_LINEAGE_IDENTITY_VERSION,
+) -> TrajectoryLineage:
+    """Build an ex-ante lineage ID from semantic versions only.
+
+    Git/deployment versions, generated identifiers, timestamps, and runtime
+    metadata are intentionally absent.  Changing any trajectory-affecting
+    version therefore creates a new lineage without comparing outputs.
+    """
+
+    values = (
+        target_contract_version,
+        e1_observer_version,
+        e1_contract_version,
+        e1_algorithm_version,
+        e1_canonicalization_version,
+        e2_b_observer_version,
+        e2_b_transition_contract_version,
+        e2_b_algorithm_version,
+        e2_b_canonicalization_version,
+        e2_b_lineage_identity_version,
+    )
+    semantic_version_tuple = tuple(
+        (name, _require_string(name, value))
+        for name, value in zip(LINEAGE_VERSION_FIELDS, values, strict=True)
+    )
+    body = {
+        "lineage_identity_contract_version": E2_B_LINEAGE_IDENTITY_VERSION,
+        "target_id": _require_string("target_id", target_id),
+        "semantic_version_tuple": _version_tuple_body(semantic_version_tuple),
+    }
+    return TrajectoryLineage(
+        trajectory_lineage_id=canonical_hash(body),
+        target_id=target_id,
+        semantic_version_tuple=semantic_version_tuple,
+    )
 
 
 def _normalize_requirement_state(item: object) -> dict[str, Any]:
@@ -107,6 +204,8 @@ class E1RelationalSnapshot:
     observer_version: str
     contract_version: str
     algorithm_version: str
+    target_contract_version: str
+    canonicalization_version: str
 
     @classmethod
     def from_evaluation(
@@ -115,10 +214,18 @@ class E1RelationalSnapshot:
         *,
         relations: Iterable[object] | None = None,
         evaluation_id: str | None = None,
+        target: object | None = None,
+        target_contract_version: str | None = None,
+        canonicalization_version: str = E1_CANONICALIZATION_VERSION,
     ) -> "E1RelationalSnapshot":
         """Adapt an E1 evaluation without adding runtime or persistence behavior."""
 
         resolved_evaluation_id = evaluation_id or _value(evaluation, "evaluation_id")
+        resolved_target_contract_version = target_contract_version
+        if resolved_target_contract_version is None and target is not None:
+            resolved_target_contract_version = _value(target, "contract_version")
+        if resolved_target_contract_version is None:
+            raise ValueError("target_contract_version is required for E2-B lineage identity")
         relation_source = (
             list(relations)
             if relations is not None
@@ -145,13 +252,42 @@ class E1RelationalSnapshot:
             algorithm_version=_require_string(
                 "algorithm_version", _value(evaluation, "algorithm_version")
             ),
+            target_contract_version=_require_string(
+                "target_contract_version", resolved_target_contract_version
+            ),
+            canonicalization_version=_require_string(
+                "canonicalization_version", canonicalization_version
+            ),
         )
+
+    @property
+    def e1_semantic_version_tuple(self) -> tuple[tuple[str, str], ...]:
+        return (
+            ("target_contract_version", self.target_contract_version),
+            ("e1_observer_version", self.observer_version),
+            ("e1_contract_version", self.contract_version),
+            ("e1_algorithm_version", self.algorithm_version),
+            ("e1_canonicalization_version", self.canonicalization_version),
+        )
+
+
+def _validate_lineage_snapshot(
+    lineage: TrajectoryLineage,
+    snapshot: E1RelationalSnapshot,
+) -> None:
+    if lineage.target_id != snapshot.target_id:
+        raise ValueError("trajectory lineage target does not match E1 snapshot")
+    expected = dict(lineage.semantic_version_tuple)
+    actual = dict(snapshot.e1_semantic_version_tuple)
+    if any(expected[name] != actual[name] for name in actual):
+        raise ValueError("trajectory lineage semantic versions do not match E1 snapshot")
 
 
 @dataclass(frozen=True)
 class E2BTrajectoryPoint:
     """One fixture-supplied point in an experimental target trajectory."""
 
+    trajectory_lineage: TrajectoryLineage
     event_index: int
     snapshot: E1RelationalSnapshot
 
@@ -160,6 +296,7 @@ class E2BTrajectoryPoint:
             raise ValueError("event_index must be an integer")
         if self.event_index < 0:
             raise ValueError("event_index must be non-negative")
+        _validate_lineage_snapshot(self.trajectory_lineage, self.snapshot)
 
 
 @dataclass(frozen=True)
@@ -167,6 +304,7 @@ class EpistemicTransitionObservation:
     """Requirement-level categorical transition; no scalarization is included."""
 
     transition_id: str
+    trajectory_lineage_id: str
     target_id: str
     requirement_id: str
     requirement_type: str
@@ -189,11 +327,13 @@ class EpistemicTransitionObservation:
     contract_version: str
     observer_version: str
     algorithm_version: str
+    semantic_version_tuple: tuple[tuple[str, str], ...]
     canonical_hash: str
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "transition_id": self.transition_id,
+            "trajectory_lineage_id": self.trajectory_lineage_id,
             "target_id": self.target_id,
             "requirement_id": self.requirement_id,
             "requirement_type": self.requirement_type,
@@ -216,6 +356,7 @@ class EpistemicTransitionObservation:
             "contract_version": self.contract_version,
             "observer_version": self.observer_version,
             "algorithm_version": self.algorithm_version,
+            "semantic_version_tuple": _version_tuple_body(self.semantic_version_tuple),
             "canonical_hash": self.canonical_hash,
         }
 
@@ -271,6 +412,7 @@ def _canonical_body(observation: EpistemicTransitionObservation) -> dict[str, An
 
     return {
         "canonicalization_version": E2_B_CANONICALIZATION_VERSION,
+        "trajectory_lineage_id": observation.trajectory_lineage_id,
         "target_id": observation.target_id,
         "requirement_id": observation.requirement_id,
         "requirement_type": observation.requirement_type,
@@ -291,6 +433,7 @@ def _canonical_body(observation: EpistemicTransitionObservation) -> dict[str, An
         "contract_version": observation.contract_version,
         "observer_version": observation.observer_version,
         "algorithm_version": observation.algorithm_version,
+        "semantic_version_tuple": _version_tuple_body(observation.semantic_version_tuple),
     }
 
 
@@ -301,6 +444,7 @@ def derive_transition(
     previous_event_index: int,
     event_index: int,
     requirement_id: str,
+    trajectory_lineage: TrajectoryLineage,
     transition_id: str | None = None,
 ) -> EpistemicTransitionObservation:
     """Derive one deterministic requirement-level set delta."""
@@ -313,6 +457,10 @@ def derive_transition(
         raise ValueError("event_index must be strictly increasing")
     if previous.target_id != current.target_id:
         raise ValueError("E2-B transitions cannot cross target trajectories")
+    _validate_lineage_snapshot(trajectory_lineage, previous)
+    _validate_lineage_snapshot(trajectory_lineage, current)
+    if trajectory_lineage.target_id != current.target_id:
+        raise ValueError("trajectory lineage target does not match transition target")
     for name in ("observer_version", "contract_version", "algorithm_version"):
         if getattr(previous, name) != getattr(current, name):
             raise ValueError(f"E2-B version mismatch: {name}")
@@ -394,6 +542,7 @@ def derive_transition(
     }
     observation = EpistemicTransitionObservation(
         transition_id=transition_id or str(uuid.uuid4()),
+        trajectory_lineage_id=trajectory_lineage.trajectory_lineage_id,
         target_id=current.target_id,
         requirement_id=requirement_id,
         requirement_type=current_requirement["requirement_type"],
@@ -416,6 +565,7 @@ def derive_transition(
         contract_version=current.contract_version,
         observer_version=current.observer_version,
         algorithm_version=current.algorithm_version,
+        semantic_version_tuple=trajectory_lineage.semantic_version_tuple,
         canonical_hash="",
     )
     return replace(observation, canonical_hash=canonical_hash(_canonical_body(observation)))
@@ -432,11 +582,16 @@ def build_transition_stream(
     if len(materialized) < 2:
         return ()
     target_id = materialized[0].snapshot.target_id
+    trajectory_lineage = materialized[0].trajectory_lineage
+    if materialized[0].event_index != 0:
+        raise ValueError("E2-B trajectory event_index must start at 0")
     for previous_point, current_point in zip(materialized, materialized[1:]):
         if current_point.snapshot.target_id != target_id:
             raise ValueError("E2-B stream cannot cross target trajectories")
-        if current_point.event_index <= previous_point.event_index:
-            raise ValueError("E2-B event_index must be strictly increasing")
+        if current_point.trajectory_lineage != trajectory_lineage:
+            raise ValueError("E2-B stream cannot cross trajectory lineages")
+        if current_point.event_index != previous_point.event_index + 1:
+            raise ValueError("E2-B event_index must be contiguous and strictly increasing")
 
     transitions: list[EpistemicTransitionObservation] = []
     for previous_point, current_point in zip(materialized, materialized[1:]):
@@ -451,10 +606,26 @@ def build_transition_stream(
                 previous_event_index=previous_point.event_index,
                 event_index=current_point.event_index,
                 requirement_id=requirement_id,
+                trajectory_lineage=trajectory_lineage,
             )
             if include_exact_noops or transition.transition_basis["transition_kind"] != "EXACT_NO_OP":
                 transitions.append(transition)
+    identities = {transition_identity(item) for item in transitions}
+    if len(identities) != len(transitions):
+        raise ValueError("E2-B transition identity collision")
     return tuple(transitions)
+
+
+def transition_identity(
+    observation: EpistemicTransitionObservation,
+) -> tuple[str, int, str]:
+    """Conceptual future persistence key for one requirement-level transition."""
+
+    return (
+        observation.trajectory_lineage_id,
+        observation.event_index,
+        observation.requirement_id,
+    )
 
 
 def replay_transition_stream(
