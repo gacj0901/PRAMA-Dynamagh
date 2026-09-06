@@ -17,7 +17,6 @@ from app.domain.mandates import Evidence, OEvidenceProvenanceContract, Telegraph
 from app.observers.provenance import (
     OBSERVER_ID,
     OBSERVER_VERSION,
-    replay_provenance,
     list_observations,
 )
 from app.persistence.database import get_session
@@ -97,7 +96,6 @@ def _status_snapshot(session: Session) -> dict[str, Any]:
         for (miner_id, intent), values in sorted(grouped.items())
     ]
 
-    replay = replay_provenance(session)
     latest_gamma = None
     for row in reversed(observations):
         if row.kernel_output is not None:
@@ -120,9 +118,10 @@ def _status_snapshot(session: Session) -> dict[str, Any]:
         "context_count": len(context_summaries),
         "contexts": context_summaries,
         "latest_gamma": latest_gamma,
-        "replay_checked_count": replay["observation_count"],
-        "replay_match_count": replay["match_count"],
-        "deterministic_hash_match": replay["status"] == "VALID" and replay["observation_count"] == replay["match_count"],
+        "replay_checked_count": None,
+        "replay_match_count": None,
+        "deterministic_hash_match": None,
+        "replay_verification_status": "NOT_PERSISTED",
         "shadow_mode": True,
         "decision_gate_unchanged": True,
     }
@@ -139,4 +138,3 @@ def provenance_status(
         return _status_snapshot(session)
     except SQLAlchemyError as error:
         raise HTTPException(status_code=503, detail="OBSERVER_STATUS_UNAVAILABLE") from error
-
