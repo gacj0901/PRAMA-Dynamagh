@@ -30,6 +30,75 @@ The result is a decision pipeline in which acquisition, evidence, evaluation, de
 
 ---
 
+## The problem, in plain language
+
+Autonomous agents can now acquire information programmatically, pay for it, and act on the result.
+
+But receiving an answer is not the same as having evidence for a decision.
+
+In a conventional agent pipeline, a returned signal may be consumed immediately by the next step. That creates several problems:
+
+- the source and economic context of the information can become detached from the decision
+- a valid response does not necessarily mean the evidence is sufficient for the decision being made
+- when something goes wrong, reconstructing exactly what information produced the decision can be difficult
+- later verification often proves that an execution happened, but not whether the evidence actually justified the decision
+
+The problem is therefore not only obtaining machine intelligence.
+
+It is preserving the relationship between:
+
+```text
+what was requested
+        ↓
+what was acquired
+        ↓
+what counted as evidence
+        ↓
+what decision was made
+```
+
+## The PRAMA-Dynamagh approach
+
+PRAMA-Dynamagh inserts a structural epistemic layer between acquired intelligence and machine action.
+
+Instead of:
+
+> Receive a response → use it directly
+
+the pipeline becomes:
+
+1. **Acquire** intelligence through Telegraph / x402.
+2. Convert the returned signal into attributable **Evidence**, preserving its source, provider, cost, hashes, and execution context.
+3. **Evaluate** whether that evidence is structurally admissible for the decision being constructed.
+4. Produce the resulting **Decision**.
+5. Issue a deterministic **Decision Ticket** that binds the decision to its evidence lineage and allows it to be verified and replayed later.
+
+```text
+Mandate
+  ↓
+Telegraph / x402
+  ↓
+Evidence
+  ↓
+PRAMAgraph
+  ↓
+Decision
+  ↓
+Verifiable Ticket
+```
+
+The objective is simple:
+
+**a machine decision should remain bound to the evidence from which it was made.**
+
+## In one sentence
+
+**PRAMA-Dynamagh turns acquired machine intelligence into evidence-bound, reconstructible decisions.**
+
+> **Don't let autonomous agents act on answers alone. Make their decisions traceable back to evidence.**
+
+---
+
 ## Core idea
 
 Telegraph provides machine-native intelligence acquisition:
@@ -258,21 +327,19 @@ M2M identity is persisted and bound to authenticated execution context.
 
 ## Bounded autonomous execution
 
-PRAMA-Dynamagh has also demonstrated scheduler-originated autonomous execution in production.
+PRAMA-Dynamagh is currently operating a bounded scheduler-originated autonomous workflow in production.
 
-Autonomous runs remain subject to explicit policy limits such as:
+The active policy is constrained by:
 
-- maximum spend per run
-- maximum runs per day
-- concurrency limits
-- minimum cadence
-- permitted execution mode
-- anchoring permissions
-- ERC-8183 permissions
+- maximum **0.01 USDC per run**
+- maximum **3 runs per day**
+- concurrency **1**
+- minimum cadence **900 seconds**
+- G12 reservation, rate-limit, idempotency and fail-closed controls
+- ERC-8183 disabled for autonomous execution
+- anchoring disabled for autonomous execution
 
-The public production release currently keeps autonomy **OFF by default**.
-
-Autonomy is therefore a controlled execution capability rather than an unrestricted agent loop.
+Autonomous execution is therefore active, but explicitly bounded and operator-controlled.
 
 ---
 
@@ -410,7 +477,7 @@ The public frontend communicates with the API while payment authority remains is
 | Verified ERC-8183 callback | ✅ Demonstrated |
 | Base Sepolia Ticket anchoring | ✅ Demonstrated |
 | Authenticated M2M execution | ✅ Production |
-| Bounded autonomous execution | ✅ Demonstrated |
+| Bounded autonomous execution | ✅ Active in production |
 | AgentIdentity | ✅ Production |
 | O_AGENT v0 | ✅ Production |
 | Longitudinal trajectory intervention | Not yet implemented |
@@ -485,8 +552,8 @@ G13-C        PASS
 AgentIdentity  Production
 O_AGENT v0     Production
 
-Autonomy       OFF by default
-ERC-8183       Live writes disabled by default
+Autonomy       ACTIVE — bounded production policy
+ERC-8183       Live writes disabled
 ```
 
 PRAMA-Dynamagh remains centered on one primary invariant:
