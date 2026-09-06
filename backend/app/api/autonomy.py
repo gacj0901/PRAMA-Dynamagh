@@ -50,7 +50,7 @@ def _read(policy: AutonomyPolicy) -> dict:
 
 
 def _run(run: AutonomyRun) -> dict:
-    return {key: getattr(run, key) for key in ("run_id", "policy_id", "scheduled_for", "idempotency_key", "state", "mandate_id", "erc8183_job_id", "ticket_id", "planned_cost_usdc", "actual_cost_usdc", "skip_reason", "failure_code", "started_at", "finished_at", "created_at", "updated_at")}
+    return {key: getattr(run, key) for key in ("run_id", "policy_id", "agent_identity_id", "scheduled_for", "idempotency_key", "state", "mandate_id", "erc8183_job_id", "ticket_id", "planned_cost_usdc", "actual_cost_usdc", "skip_reason", "failure_code", "started_at", "finished_at", "created_at", "updated_at")}
 
 
 @router.post("/policies", status_code=201)

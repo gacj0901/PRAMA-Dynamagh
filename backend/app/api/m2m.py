@@ -34,6 +34,7 @@ from app.domain.mandates import (
     Ticket,
     UsageEvent,
 )
+from app.agents.identity import get_or_create_m2m_identity, mandate_attribution
 from app.persistence.database import get_session
 from app.public_safety import m2m_max_workflow_usdc, reserve_m2m_spend
 from app.workers.tasks import execute_acquisition
@@ -59,6 +60,7 @@ class M2MMandateRead(BaseModel):
     mandate_id: str
     idempotency_key: str | None = None
     agent_id: str
+    agent_identity_id: str | None = None
     client_id: str
     origin: str
     text: str
@@ -72,7 +74,13 @@ class M2MMandateRead(BaseModel):
     lineage: dict[str, Any] = Field(default_factory=dict)
 
 
-def require_m2m_auth(request: Request) -> None:
+def _m2m_context_id(token: str) -> str:
+    """Derive a non-secret stable scope from the authenticated Bearer."""
+
+    return "m2m-token-sha256:" + hashlib.sha256(token.encode()).hexdigest()
+
+
+def require_m2m_auth(request: Request) -> str:
     """Require the dedicated M2M Bearer secret, fail-closed if unconfigured."""
 
     expected = os.environ.get("PRAMA_M2M_API_TOKEN")
@@ -87,6 +95,7 @@ def require_m2m_auth(request: Request) -> None:
         raise HTTPException(status_code=401, detail="M2M_AUTH_REQUIRED", headers={"WWW-Authenticate": "Bearer"})
     if not hmac.compare_digest(supplied, expected):
         raise HTTPException(status_code=401, detail="M2M_AUTH_INVALID", headers={"WWW-Authenticate": "Bearer"})
+    return _m2m_context_id(supplied)
 
 
 def _request_hash(payload: M2MMandateCreate) -> str:
@@ -95,7 +104,7 @@ def _request_hash(payload: M2MMandateCreate) -> str:
 
 
 def _attribution(mandate: Mandate) -> dict[str, str]:
-    return {"origin": mandate.origin, "agent_id": mandate.agent_id or "", "client_id": mandate.client_id or ""}
+    return mandate_attribution(mandate)
 
 
 def _lineage(session: Session, mandate_id: str) -> dict[str, Any]:
@@ -121,6 +130,7 @@ def _read_mandate(session: Session, mandate: Mandate, idempotency_key: str | Non
         "mandate_id": mandate.mandate_id,
         "idempotency_key": idempotency_key,
         "agent_id": mandate.agent_id,
+        "agent_identity_id": mandate.agent_identity_id,
         "client_id": mandate.client_id,
         "origin": mandate.origin,
         "text": mandate.text,
@@ -143,9 +153,14 @@ def _read_mandate(session: Session, mandate: Mandate, idempotency_key: str | Non
     }
 
 
-def _get_m2m_mandate(session: Session, mandate_id: str) -> Mandate:
+def _get_m2m_mandate(session: Session, mandate_id: str, m2m_context_id: str | None = None) -> Mandate:
     mandate = session.get(Mandate, mandate_id)
     if mandate is None or mandate.origin != "M2M":
+        raise HTTPException(status_code=404, detail="M2M_MANDATE_MISSING")
+    # Rows created after G13-B are scoped to the authenticated token context.
+    # Legacy rows remain readable because their context is intentionally null;
+    # no unprovable historical binding is fabricated during migration.
+    if m2m_context_id and mandate.m2m_context_id and not hmac.compare_digest(mandate.m2m_context_id, m2m_context_id):
         raise HTTPException(status_code=404, detail="M2M_MANDATE_MISSING")
     return mandate
 
@@ -155,7 +170,7 @@ def create_m2m_mandate(
     payload: M2MMandateCreate,
     request: Request,
     session: Session = Depends(get_session),
-    _: None = Depends(require_m2m_auth),
+    m2m_context_id: str = Depends(require_m2m_auth),
 ) -> dict[str, Any]:
     """Create exactly one bounded, attributed, idempotent M2M workflow."""
 
@@ -167,15 +182,23 @@ def create_m2m_mandate(
     if existing is not None:
         if existing.request_hash != request_hash or existing.agent_id != payload.agent_id or existing.client_id != payload.client_id:
             raise HTTPException(status_code=409, detail="M2M_IDEMPOTENCY_KEY_REUSED")
-        mandate = _get_m2m_mandate(session, existing.mandate_id)
+        mandate = _get_m2m_mandate(session, existing.mandate_id, m2m_context_id)
         return _read_mandate(session, mandate, existing.idempotency_key)
 
     if payload.max_budget_usdc > m2m_max_workflow_usdc():
         raise HTTPException(status_code=422, detail="M2M_WORKFLOW_BUDGET_EXCEEDED")
     try:
+        identity = get_or_create_m2m_identity(session, payload.agent_id, m2m_context_id)
+    except ValueError as error:
+        session.rollback()
+        code = str(error)
+        raise HTTPException(status_code=403 if code == "M2M_AGENT_INACTIVE" else 409, detail=code) from error
+    try:
         mandate = Mandate(
             actor_id=f"m2m:{payload.client_id}:{payload.agent_id}",
             agent_id=payload.agent_id,
+            agent_identity_id=identity.agent_id,
+            m2m_context_id=m2m_context_id,
             client_id=payload.client_id,
             text=payload.text,
             mandate_type=payload.mandate_type,
@@ -226,7 +249,7 @@ def create_m2m_mandate(
             raise HTTPException(status_code=503, detail="M2M_IDEMPOTENCY_UNAVAILABLE")
         if existing.request_hash != request_hash or existing.agent_id != payload.agent_id or existing.client_id != payload.client_id:
             raise HTTPException(status_code=409, detail="M2M_IDEMPOTENCY_KEY_REUSED")
-        return _read_mandate(session, _get_m2m_mandate(session, existing.mandate_id), existing.idempotency_key)
+        return _read_mandate(session, _get_m2m_mandate(session, existing.mandate_id, m2m_context_id), existing.idempotency_key)
     except Exception as error:
         session.rollback()
         raise HTTPException(status_code=503, detail="M2M_SPEND_AUTHORIZATION_UNAVAILABLE") from error
@@ -253,9 +276,9 @@ def create_m2m_mandate(
 def get_m2m_mandate(
     mandate_id: str,
     session: Session = Depends(get_session),
-    _: None = Depends(require_m2m_auth),
+    m2m_context_id: str = Depends(require_m2m_auth),
 ) -> dict[str, Any]:
-    mandate = _get_m2m_mandate(session, mandate_id)
+    mandate = _get_m2m_mandate(session, mandate_id, m2m_context_id)
     request_row = session.query(M2MMandateRequest).filter_by(mandate_id=mandate_id).one_or_none()
     return _read_mandate(session, mandate, request_row.idempotency_key if request_row else None)
 
@@ -264,12 +287,12 @@ def get_m2m_mandate(
 def get_m2m_ticket(
     ticket_id: str,
     session: Session = Depends(get_session),
-    _: None = Depends(require_m2m_auth),
+    m2m_context_id: str = Depends(require_m2m_auth),
 ) -> dict[str, Any]:
     ticket = session.get(Ticket, ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail="M2M_TICKET_MISSING")
-    mandate = _get_m2m_mandate(session, ticket.mandate_id)
+    mandate = _get_m2m_mandate(session, ticket.mandate_id, m2m_context_id)
     decision = session.get(Decision, ticket.decision_id)
     evaluation = session.query(StructuralEvaluation).filter_by(mandate_id=mandate.mandate_id).order_by(StructuralEvaluation.created_at.desc()).first()
     evidence = session.query(Evidence).filter_by(mandate_id=mandate.mandate_id).order_by(Evidence.created_at).all()
@@ -278,6 +301,7 @@ def get_m2m_ticket(
         "ticket_id": ticket.ticket_id,
         "mandate_id": mandate.mandate_id,
         "agent_id": mandate.agent_id,
+        "agent_identity_id": mandate.agent_identity_id,
         "client_id": mandate.client_id,
         "origin": mandate.origin,
         "schema_version": ticket.schema_version,

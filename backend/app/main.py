@@ -3,11 +3,13 @@ from fastapi import FastAPI, HTTPException, status
 from app.api.mandates import router as mandates_router
 from app.api.autonomy import router as autonomy_router
 from app.api.m2m import router as m2m_router
+from app.api.agents import router as agents_router
 
 app = FastAPI(title="PRAMA-Dynamagh API", version="0.0.1")
 app.include_router(mandates_router)
 app.include_router(autonomy_router)
 app.include_router(m2m_router)
+app.include_router(agents_router)
 
 
 @app.post("/v1/erc8183/jobs", status_code=status.HTTP_404_NOT_FOUND, include_in_schema=False)

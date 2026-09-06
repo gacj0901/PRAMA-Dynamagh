@@ -40,7 +40,12 @@ def test_m2m_creation_requires_idempotency_and_rejects_capability_fields(monkeyp
 
 
 def test_m2m_rail_has_no_forbidden_capability_routes():
-    paths = {(route.path, method) for route in app.routes for method in route.methods or set() if route.path.startswith("/v1/m2m")}
+    paths = {
+        (path, method.upper())
+        for path, operations in app.openapi()["paths"].items()
+        for method in operations
+        if path.startswith("/v1/m2m")
+    }
     assert paths == {
         ("/v1/m2m/mandates", "POST"),
         ("/v1/m2m/mandates/{mandate_id}", "GET"),

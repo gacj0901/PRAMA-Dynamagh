@@ -13,6 +13,7 @@ from app.pramagraph.evaluation import classify, decide, digest
 from app.tickets.service import issue as issue_ticket
 from app.autonomy.service import claim_run, execute_claimed, finalize_http_run, recover_runs, schedule_due
 from app.domain.mandates import AutonomyPolicy
+from app.agents.identity import mandate_attribution
 from app.public_safety import (
     M2M_MAX_WORKFLOW_USDC,
     m2m_max_workflow_usdc,
@@ -26,7 +27,7 @@ def now(): return datetime.now(timezone.utc)
 
 
 def _attribution(mandate: Mandate) -> dict[str, str]:
-    return {"origin": mandate.origin, "agent_id": mandate.agent_id or "", "client_id": mandate.client_id or ""}
+    return mandate_attribution(mandate)
 
 
 @celery_app.task(name="prama.autonomy_tick")

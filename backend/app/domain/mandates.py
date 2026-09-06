@@ -35,6 +35,36 @@ class AcquisitionStatus(str, enum.Enum):
     FAILED = "FAILED"
 
 
+class AgentIdentityOrigin(str, enum.Enum):
+    INTERNAL_AUTONOMY = "INTERNAL_AUTONOMY"
+    EXTERNAL_API_AGENT = "EXTERNAL_API_AGENT"
+    MCP_AGENT = "MCP_AGENT"
+    LANGCHAIN_AGENT = "LANGCHAIN_AGENT"
+    CREWAI_AGENT = "CREWAI_AGENT"
+    OTHER = "OTHER"
+
+
+class AgentIdentityStatus(str, enum.Enum):
+    ACTIVE = "ACTIVE"
+    DISABLED = "DISABLED"
+
+
+class AgentIdentity(Base):
+    """Persistent subject for autonomous attribution, not an authority grant."""
+
+    __tablename__ = "agent_identities"
+    __table_args__ = (UniqueConstraint("policy_id", name="uq_agent_identities_policy_id"),)
+
+    agent_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    origin: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default=AgentIdentityStatus.ACTIVE.value)
+    policy_id: Mapped[str | None] = mapped_column(ForeignKey("autonomy_policies.policy_id"), nullable=True, index=True)
+    trajectory_version: Mapped[str] = mapped_column(String(64), nullable=False, default="g13-agent-identity-v1")
+    m2m_context_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+
+
 class Mandate(Base):
     __tablename__ = "mandates"
 
@@ -48,6 +78,8 @@ class Mandate(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=MandateStatus.RECEIVED.value)
     origin: Mapped[str] = mapped_column(String(32), nullable=False, default="MANUAL")
     agent_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    agent_identity_id: Mapped[str | None] = mapped_column(ForeignKey("agent_identities.agent_id"), nullable=True, index=True)
+    m2m_context_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     client_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     autonomy_policy_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     autonomy_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
@@ -257,6 +289,7 @@ class AutonomyRun(Base):
     scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False, default="SCHEDULED")
+    agent_identity_id: Mapped[str | None] = mapped_column(ForeignKey("agent_identities.agent_id"), nullable=True, index=True)
     mandate_id: Mapped[str | None] = mapped_column(ForeignKey("mandates.mandate_id"), nullable=True, index=True)
     erc8183_job_id: Mapped[str | None] = mapped_column(ForeignKey("erc8183_jobs.erc8183_job_id"), nullable=True, index=True)
     ticket_id: Mapped[str | None] = mapped_column(ForeignKey("tickets.ticket_id"), nullable=True, index=True)

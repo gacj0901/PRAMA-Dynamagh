@@ -26,6 +26,7 @@ from app.domain.mandates import (
     Ticket,
     UsageEvent,
 )
+from app.agents.identity import get_policy_identity, mandate_attribution, policy_identity_required
 from app.erc8183.evidence import replay_persisted
 from app.public_safety import M2M_MAX_WORKFLOW_USDC, reserve_autonomous_spend
 
@@ -93,7 +94,15 @@ def idempotency_key(policy: AutonomyPolicy, slot: datetime) -> str:
 def _event(session, run: AutonomyRun, event_type: str) -> None:
     existing = next((item for item in session.query(UsageEvent).filter_by(event_type=event_type) if item.metadata_.get("autonomy_run_id") == run.run_id), None)
     if existing is None:
-        session.add(UsageEvent(mandate_id=run.mandate_id, event_type=event_type, metadata_={"autonomy_run_id": run.run_id, "policy_id": run.policy_id}))
+        metadata = {
+            "origin": "AUTONOMOUS",
+            "agent_id": run.agent_identity_id or "",
+            "agent_identity_id": run.agent_identity_id or "",
+            "client_id": "prama-internal",
+            "autonomy_run_id": run.run_id,
+            "policy_id": run.policy_id,
+        }
+        session.add(UsageEvent(mandate_id=run.mandate_id, event_type=event_type, metadata_=metadata))
 
 
 def _day_bounds(instant: datetime) -> tuple[datetime, datetime]:
@@ -136,7 +145,8 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
         return None
     planned = _planned_cost(policy)
     reason = _budget_reason(session, policy, instant, planned)
-    run = AutonomyRun(policy_id=policy.policy_id, scheduled_for=slot, idempotency_key=key, state="SKIPPED" if reason else "SCHEDULED", planned_cost_usdc=planned, actual_cost_usdc=Decimal("0.000000"), skip_reason=reason)
+    identity = get_policy_identity(session, policy)
+    run = AutonomyRun(policy_id=policy.policy_id, agent_identity_id=identity.agent_id if identity else None, scheduled_for=slot, idempotency_key=key, state="SKIPPED" if reason else "SCHEDULED", planned_cost_usdc=planned, actual_cost_usdc=Decimal("0.000000"), skip_reason=reason)
     try:
         session.add(run); session.flush()
     except IntegrityError:
@@ -171,8 +181,14 @@ def execute_claimed(session, run: AutonomyRun) -> str:
         title = policy.mandate_template.get("title", "Autonomous PRAMA mandate")
         if not isinstance(instruction, str) or not instruction.strip() or not isinstance(title, str):
             run.state = "FAILED"; run.failure_code = "MANDATE_TEMPLATE_INVALID"; run.finished_at = now(); _event(session, run, "AUTONOMY_RUN_FAILED"); return run.state
+        try:
+            identity = policy_identity_required(session, policy)
+        except ValueError as error:
+            run.state = "FAILED"; run.failure_code = str(error)[:100]; run.finished_at = now(); _event(session, run, "AUTONOMY_RUN_FAILED")
+            return run.state
+        run.agent_identity_id = identity.agent_id
         mandate = Mandate(
-            actor_id="autonomy-controller", agent_id="autonomy-controller", client_id="prama-internal",
+            actor_id=identity.agent_id, agent_id=identity.agent_id, agent_identity_id=identity.agent_id, client_id="prama-internal",
             text=instruction.strip(), mandate_type="AUTONOMOUS",
             constraints={"title": title, "autonomy_policy_id": policy.policy_id, "autonomy_run_id": run.run_id},
             max_budget_usdc=Decimal(run.planned_cost_usdc), status=MandateStatus.RECEIVED.value,
@@ -196,10 +212,13 @@ def execute_claimed(session, run: AutonomyRun) -> str:
             status=AcquisitionStatus.QUEUED.value, ordinal=0,
         )
         session.add(acquisition); session.flush()
+        metadata = mandate_attribution(mandate)
+        metadata.update({"autonomy_run_id": run.run_id, "autonomy_policy_id": policy.policy_id})
+        queued_metadata = {**metadata}
         session.add_all([
             MandateTransition(mandate_id=mandate.mandate_id, from_status=None, to_status=MandateStatus.RECEIVED.value, reason="autonomy scheduler due slot"),
-            UsageEvent(mandate_id=mandate.mandate_id, event_type="MANDATE_CREATED", metadata_={"autonomy_run_id": run.run_id, "autonomy_policy_id": policy.policy_id}),
-            UsageEvent(mandate_id=mandate.mandate_id, acquisition_id=acquisition.acquisition_id, event_type="ACQUISITION_QUEUED", metadata_={"autonomy_run_id": run.run_id}),
+            UsageEvent(mandate_id=mandate.mandate_id, event_type="MANDATE_CREATED", metadata_=metadata),
+            UsageEvent(mandate_id=mandate.mandate_id, acquisition_id=acquisition.acquisition_id, event_type="ACQUISITION_QUEUED", metadata_=queued_metadata),
         ])
         run.mandate_id = mandate.mandate_id; run.state = "RUNNING"; run.skip_reason = None
         return "ACQUISITION_QUEUED"

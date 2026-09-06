@@ -25,7 +25,7 @@ from app.autonomy.service import (
     status,
     validate_policy,
 )
-from app.domain.mandates import AcquisitionTask, AutonomyPolicy, AutonomyRun, Mandate, UsageEvent
+from app.domain.mandates import AcquisitionTask, AgentIdentity, AutonomyPolicy, AutonomyRun, Mandate, UsageEvent
 from app.main import app
 
 LIVE_G9_JOB = "04e5ba3c-d4e2-45d1-a21e-cf10f510916c"
@@ -196,6 +196,14 @@ def test_replay_failure_is_terminal_and_emits_one_failed_event(session, monkeypa
 def test_http_scheduler_originates_an_autonomous_mandate_without_network(session, monkeypatch):
     value = policy(mandate_template={"title": "Autonomous Bitcoin price verification", "instruction": "What is the current price of Bitcoin in USD?"})
     session.add(value); session.flush()
+    identity = AgentIdentity(
+        agent_id="g13-autonomy-test-" + str(uuid.uuid4()),
+        name="G13 autonomy test",
+        origin="INTERNAL_AUTONOMY",
+        policy_id=value.policy_id,
+        trajectory_version="g13-agent-identity-v1",
+    )
+    session.add(identity); session.flush()
     run = schedule_due(session, value, datetime(2026, 9, 2, 20, 0, tzinfo=timezone.utc), global_switch=True)
     assert claim_run(session, run.run_id) is run
     import app.autonomy.service as autonomy
@@ -204,8 +212,9 @@ def test_http_scheduler_originates_an_autonomous_mandate_without_network(session
     session.flush()
     mandate = session.get(Mandate, run.mandate_id)
     acquisition = session.query(AcquisitionTask).filter_by(mandate_id=run.mandate_id).one()
-    assert run.state == "RUNNING" and mandate.origin == "AUTONOMOUS"
+    assert run.state == "RUNNING" and run.agent_identity_id == identity.agent_id and mandate.origin == "AUTONOMOUS"
     assert mandate.autonomy_policy_id == value.policy_id and mandate.autonomy_run_id == run.run_id
+    assert mandate.agent_identity_id == identity.agent_id and mandate.agent_id == identity.agent_id
     assert acquisition.status == "QUEUED" and acquisition.query == mandate.text
 
 
