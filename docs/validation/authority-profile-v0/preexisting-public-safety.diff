@@ -1,0 +1,40 @@
+diff --git a/backend/app/public_safety.py b/backend/app/public_safety.py
+index e7d9408..37944a4 100644
+--- a/backend/app/public_safety.py
++++ b/backend/app/public_safety.py
+@@ -23,9 +23,9 @@ from app.redis_config import redis_url
+ 
+ _MICRO = Decimal("0.000001")
+ MAX_WORKFLOW_SPEND_USDC = Decimal("0.050000")
+-MAX_DAILY_SPEND_CAP_USDC = Decimal("1.000000")
++MAX_DAILY_SPEND_CAP_USDC = Decimal("20.000000")
+ MAX_SINGLE_ACQUISITION_USDC = Decimal("0.010000")
+-M2M_MAX_WORKFLOW_USDC = Decimal("0.010000")
++M2M_MAX_WORKFLOW_USDC = Decimal("0.500000")
+ logger = logging.getLogger(__name__)
+ 
+ 
+@@ -123,9 +123,9 @@ def reserve_m2m_spend(session: Session, mandate_id: str, amount: Decimal) -> Non
+     _reserve_spend(session, mandate_id, amount, m2m_max_workflow_usdc(), "M2M")
+ 
+ 
+-def reserve_autonomous_spend(session: Session, mandate_id: str, amount: Decimal) -> None:
++def reserve_autonomous_spend(session: Session, mandate_id: str, amount: Decimal, maximum: Decimal | None = None) -> None:
+     """Atomically reserve a bounded paid autonomous budget on the same ledger."""
+-    _reserve_spend(session, mandate_id, amount, M2M_MAX_WORKFLOW_USDC, "AUTONOMOUS")
++    _reserve_spend(session, mandate_id, amount, maximum or M2M_MAX_WORKFLOW_USDC, "AUTONOMOUS")
+ 
+ 
+ def _reserve_spend(session: Session, mandate_id: str, amount: Decimal, maximum: Decimal, origin: str) -> None:
+@@ -203,9 +203,9 @@ def settle_m2m_spend(session: Session, mandate_id: str, actual_spend: Decimal, *
+     settle_spend(session, mandate_id, actual_spend, m2m_max_workflow_usdc(), "M2M", finalize=finalize)
+ 
+ 
+-def settle_autonomous_spend(session: Session, mandate_id: str, actual_spend: Decimal, *, finalize: bool = True) -> None:
++def settle_autonomous_spend(session: Session, mandate_id: str, actual_spend: Decimal, *, maximum: Decimal | None = None, finalize: bool = True) -> None:
+     """Settle an autonomous reservation in the same commit as the call."""
+-    settle_spend(session, mandate_id, actual_spend, M2M_MAX_WORKFLOW_USDC, "AUTONOMOUS", finalize=finalize)
++    settle_spend(session, mandate_id, actual_spend, maximum or M2M_MAX_WORKFLOW_USDC, "AUTONOMOUS", finalize=finalize)
+ 
+ 
+ def settle_spend(session: Session, mandate_id: str, actual_spend: Decimal, maximum: Decimal, origin: str, *, finalize: bool = True) -> None:

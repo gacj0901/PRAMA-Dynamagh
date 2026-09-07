@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.persistence.database import Base
 
@@ -64,6 +64,7 @@ class AgentIdentity(Base):
     trajectory_version: Mapped[str] = mapped_column(String(64), nullable=False, default="g13-agent-identity-v1")
     m2m_context_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     autonomy_state: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    authority_profiles: Mapped[list[AgentAuthorityProfile]] = relationship(back_populates="agent_identity", order_by="AgentAuthorityProfile.version")
 
 
 class Mandate(Base):
@@ -147,16 +148,34 @@ class AgentAuthorityProfile(Base):
     """Versioned authority delegated by one principal to one AgentIdentity."""
 
     __tablename__ = "agent_authority_profiles"
+    __table_args__ = (
+        UniqueConstraint("agent_identity_id", "version", name="uq_authority_agent_version"),
+        CheckConstraint("version > 0", name="ck_authority_version"),
+        CheckConstraint("status IN ('ACTIVE', 'SUSPENDED', 'REVOKED', 'EXPIRED')", name="ck_authority_status"),
+        CheckConstraint("valid_until IS NULL OR valid_until > valid_from", name="ck_authority_validity"),
+        CheckConstraint("COALESCE(economic_budget >= 0, true) AND COALESCE(per_action_budget >= 0, true) AND COALESCE(rolling_budget_usdc >= 0, true) AND COALESCE(review_required_above_usdc >= 0, true)", name="ck_authority_budgets"),
+        CheckConstraint("COALESCE(concurrency_limit > 0, true) AND COALESCE(cadence_seconds >= 0, true) AND COALESCE(rolling_window_seconds > 0, true) AND COALESCE(execution_window_seconds > 0, true) AND COALESCE(max_executions_per_window > 0, true)", name="ck_authority_windows"),
+    )
     authority_profile_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    principal_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    id = synonym("authority_profile_id")
+    principal_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     agent_identity_id: Mapped[str] = mapped_column(ForeignKey("agent_identities.agent_id"), nullable=False, index=True)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE", index=True)
     valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     allowed_intents: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     allowed_action_kinds: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     economic_budget: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    total_budget_usdc = synonym("economic_budget")
     per_action_budget: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    per_action_budget_usdc = synonym("per_action_budget")
+    rolling_budget_usdc: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    rolling_window_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cadence_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_executions_per_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    execution_window_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    review_required_above_usdc: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
     rolling_budget: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     concurrency_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cadence_policy: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
@@ -168,6 +187,31 @@ class AgentAuthorityProfile(Base):
     policy_version: Mapped[str] = mapped_column(String(64), nullable=False, default="agent-authority-v0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    authority_hash: Mapped[str | None] = mapped_column(String(66), nullable=True)
+    agent_identity: Mapped[AgentIdentity] = relationship(back_populates="authority_profiles")
+    lifecycle_events: Mapped[list[AuthorityProfileEvent]] = relationship(back_populates="profile", order_by="AuthorityProfileEvent.sequence")
+
+
+class AuthorityProfileEvent(Base):
+    """Append-only lifecycle; the original authority grant remains immutable."""
+
+    __tablename__ = "authority_profile_events"
+    __table_args__ = (
+        UniqueConstraint("authority_profile_id", "sequence", name="uq_authority_event_sequence"),
+        CheckConstraint("sequence > 0", name="ck_authority_event_sequence"),
+        CheckConstraint("status IN ('ACTIVE', 'SUSPENDED', 'REVOKED', 'EXPIRED')", name="ck_authority_event_status"),
+    )
+    event_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    authority_profile_id: Mapped[str] = mapped_column(ForeignKey("agent_authority_profiles.authority_profile_id"), nullable=False, index=True)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    authority_hash: Mapped[str] = mapped_column(String(66), nullable=False)
+    profile: Mapped[AgentAuthorityProfile] = relationship(back_populates="lifecycle_events")
 
 
 class ExecutionPermit(Base):

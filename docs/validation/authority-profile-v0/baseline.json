@@ -1,0 +1,64 @@
+{
+  "base_commit": "8a40ab71bd789e92caff1ea3ba25407a5ad2ec62",
+  "command": "python -m pytest -q -p no:cacheprovider --tb=short",
+  "counts": {
+    "failed": 7,
+    "passed": 239,
+    "skipped": 31
+  },
+  "failures": [
+    {
+      "nodeid": "tests/integration/test_autonomy.py::test_validation_defaults_and_public_template_boundary",
+      "cause": "validate_policy accepts cadence_seconds=60; test expects AUTONOMY_CADENCE_TOO_FAST. Existing committed autonomy service behavior.",
+      "preexisting_worktree_change": false
+    },
+    {
+      "nodeid": "tests/integration/test_autonomy.py::test_two_worker_sessions_have_one_durable_claim_winner",
+      "cause": "Test cleanup DELETE on append-only usage_events is rejected by the existing 0022 trigger.",
+      "preexisting_worktree_change": false
+    },
+    {
+      "nodeid": "tests/integration/test_autonomy.py::test_http_scheduler_originates_an_autonomous_mandate_without_network",
+      "cause": "execute_claimed returns FAILED instead of ACQUISITION_QUEUED; fixture has no persistent authorized identity/profile required by existing delegated runtime.",
+      "preexisting_worktree_change": false
+    },
+    {
+      "nodeid": "tests/integration/test_g13_agent_identity.py::test_autonomy_lineage_requires_persistent_identity_and_propagates_it",
+      "cause": "execute_claimed returns FAILED instead of ACQUISITION_QUEUED; fixture has identity but no enabled FULL_AUTONOMY/profile required by existing runtime.",
+      "preexisting_worktree_change": false
+    },
+    {
+      "nodeid": "tests/integration/test_track3_fanout.py::test_shadow_g13_is_persisted_for_real_run_artifacts[False]",
+      "cause": "Expected one mocked pipeline payment, got zero; autonomous fixture lacks delegated authority required by existing runtime.",
+      "preexisting_worktree_change": false
+    },
+    {
+      "nodeid": "tests/integration/test_track3_fanout.py::test_shadow_g13_is_persisted_for_real_run_artifacts[True]",
+      "cause": "Expected one mocked pipeline payment, got zero; autonomous fixture lacks delegated authority required by existing runtime.",
+      "preexisting_worktree_change": false
+    },
+    {
+      "nodeid": "tests/unit/test_competition_multi_intent.py::test_authorized_g12_limits_are_bounded",
+      "cause": "Expected m2m_max_workflow_usdc() == 0.010000, got 0.500000 from preexisting unstaged public_safety.py change.",
+      "preexisting_worktree_change": true
+    }
+  ],
+  "protected_sha256": {
+    "backend/app/public_safety.py": "dc82b0313f02f64124e51f02972dfb17400f8e48afa24079d78e04a92ceab06b",
+    "backend/app/autonomy/service.py": "7d98487b3dec1f927097a50aa24e9884abaec001e914fa9fa97bb697c379f7c7",
+    "backend/app/authority/delegated.py": "60e11190dbe84558bd3af476e3c285ef034322c3688eee7d5f5f6cc770b8c5ca",
+    "backend/app/authority/runtime.py": "e1a20626d86cdd532a979f81a7f2590f0b8b3b4d28f2e9e4582d6b4b1a529aa7",
+    "backend/app/authority/autonomy.py": "0ceafd373951c1695e7c51e6fa83e53d8c79bc6ecf9502fd7814b8a755d7d277",
+    "backend/app/pramagraph/evaluation.py": "fef8845756b1383f8477e1afa6a917402bdaa48fcc94005e76738fa5908fdeff",
+    "backend/app/workers/acquisition.py": "5596d796d75a2cfa17e9f29c201b4c9a8c5edb71bad47cb10fe6218106e5d240",
+    "backend/app/workers/tasks.py": "f1fd67f4d14eb2b5845ab62c49e00a7751b5c218a0700f1b00d295f3210ae736",
+    "backend/migrations/versions/0022_delegated_autonomy.py": "201e79120c0abe9674656d55a429eb159661a9ec4636be772d62ae6adf456fad",
+    "backend/tests/integration/test_autonomy.py": "ba0a0ebc66f15ef48f09f09fdddc8241adc1e042dd97dadea013c8295610b952",
+    "backend/tests/integration/test_g13_agent_identity.py": "d3472527843bc3d40b02bdceb500e20b733fcc43ff9e2418ef02d4e12ea9de64",
+    "backend/tests/integration/test_track3_fanout.py": "a84db5d1ae8db313a47beee37cdfaf3bc1ca8e4f2cf26e5c61b9075f35855817",
+    "backend/tests/unit/test_competition_multi_intent.py": "ab4eaf92702aab1438d614a1c9496c3ad196049efd5c09e5c5c9eafc3f43bf59"
+  },
+  "preexisting_worktree_files": [
+    "backend/app/public_safety.py"
+  ]
+}
