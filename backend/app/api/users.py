@@ -5,12 +5,14 @@ import uuid
 from datetime import datetime,timezone
 from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, SecretStr
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import text as sql
 from app.persistence.database import get_session
-from app.domain.mandates import Mandate, AcquisitionTask, MandateTransition, UsageEvent, Ticket, Evidence, Decision
+from app.domain.mandates import Mandate, AcquisitionTask, MandateTransition, UsageEvent, Ticket, Evidence, Decision, TelegraphCall
 from app.users import auth,credit
+from app.users.history_archive import cleanup_expired, write_archive
 from app.users.models import UserIdentity, UserSession, UserCreditAccount, UserCreditLedger, UserMandate
 from app.public_safety import MAX_SINGLE_ACQUISITION_USDC, public_max_mandate_usdc, enforce_public_rate_limit, _reserve_spend
 from app.workers.tasks import execute_acquisition
@@ -133,6 +135,55 @@ def mandate_json(session,m):
     return {'mandate_id':m.mandate_id,'text':m.text,'status':m.status,'budget':f'{m.max_budget_usdc:.6f}','created_at':m.created_at,'decision':decision.state if decision else None,'ticket_id':ticket.ticket_id if ticket else None,'ticket_hash':ticket.ticket_hash if ticket else None}
 
 
+def _selection_telemetry(task, call, evidence):
+    requested = task.requested_intent
+    resolved = call.intent if call else None
+    return {
+        'acquisition_id': task.acquisition_id,
+        'status': task.status,
+        'requested_intent': requested,
+        'resolved_intent': resolved,
+        'service': (call.miner_name or call.miner_id) if call else 'Telegraph upstream (sin respuesta)',
+        'miner_id': call.miner_id if call else None,
+        'miner_name': call.miner_name if call else None,
+        'signal_hash': call.signal_hash if call else None,
+        'cost_usdc': f'{call.cost_usd:.6f}' if call and call.cost_usd is not None else None,
+        'duration_ms': call.duration_ms if call else None,
+        'reasoning': call.reasoning if call else None,
+        'warnings': call.warnings if call else [],
+        'provenance_status': evidence.provenance_status if evidence else None,
+        'admissibility': evidence.admissibility if evidence else None,
+        'selection_rationale': {
+            'routing': 'TELEGRAPH_UPSTREAM_INTENT_ROUTING',
+            'explanation': (
+                'El Gateway envió la consulta a Telegraph y conserva el minero '
+                'que Telegraph devolvió para esa intención. No existe un ranking '
+                'local ni una selección manual de mineros en PRAMA-Dynamagh.'
+            ),
+            'requested_intent': requested,
+            'resolved_intent': resolved,
+            'proof_fields': ['miner_id', 'miner_name', 'signal_hash', 'provenance_status', 'cost_usdc', 'duration_ms'],
+        },
+    }
+
+
+def user_detail_json(session, m):
+    detail = mandate_json(session, m)
+    tasks = session.query(AcquisitionTask).filter_by(mandate_id=m.mandate_id).order_by(AcquisitionTask.ordinal, AcquisitionTask.acquisition_id).all()
+    calls = {c.acquisition_id: c for c in session.query(TelegraphCall).filter_by(mandate_id=m.mandate_id)}
+    evidence = {e.acquisition_id: e for e in session.query(Evidence).filter_by(mandate_id=m.mandate_id)}
+    detail['acquisitions'] = [_selection_telemetry(t, calls.get(t.acquisition_id), evidence.get(t.acquisition_id)) for t in tasks]
+    detail['state_transitions'] = [
+        {'from': row.from_status, 'to': row.to_status, 'reason': row.reason, 'created_at': row.created_at}
+        for row in session.query(MandateTransition).filter_by(mandate_id=m.mandate_id).order_by(MandateTransition.created_at, MandateTransition.transition_id)
+    ]
+    detail['results'] = [
+        {'evidence_id': e.evidence_id, 'admissibility': e.admissibility, 'result': e.normalized_payload.get('result', e.normalized_payload)}
+        for e in sorted(evidence.values(), key=lambda item: item.evidence_id)
+    ]
+    return detail
+
+
 @router.post('/me/mandates',status_code=202)
 def submit(payload:UserMandateInput,request:Request,response:Response,user=Depends(auth.current_user),session=Depends(get_session)):
     auth.require_enabled();enforce_public_rate_limit(request)
@@ -167,4 +218,19 @@ def detail(mandate_id:str,response:Response,user=Depends(auth.current_user),sess
     response.headers['Cache-Control']='no-store'
     m=session.get(Mandate,mandate_id)
     evidence=session.query(Evidence).filter_by(mandate_id=mandate_id).all()
-    return {**mandate_json(session,m),'results':[{'evidence_id':e.evidence_id,'admissibility':e.admissibility,'result':e.normalized_payload.get('result',e.normalized_payload)} for e in evidence]}
+    return user_detail_json(session, m)
+
+
+@router.get('/me/history/file')
+def history_file(user=Depends(auth.current_user), session=Depends(get_session)):
+    cleanup_expired()
+    rows = session.query(Mandate).join(UserMandate, UserMandate.mandate_id == Mandate.mandate_id).filter(UserMandate.user_id == user.user_id).order_by(Mandate.created_at.desc()).limit(100).all()
+    payload = {
+        'archive_schema': 'prama.user.history.archive.v1',
+        'user_id': user.user_id,
+        'retention_seconds': 7200,
+        'generated_at': datetime.now(timezone.utc),
+        'entries': [user_detail_json(session, row) for row in rows],
+    }
+    path = write_archive(user.user_id, payload)
+    return FileResponse(path, media_type='application/json', filename='prama-history-temporal.json', headers={'Cache-Control': 'private, max-age=7200'})

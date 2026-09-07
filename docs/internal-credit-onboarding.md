@@ -28,6 +28,15 @@ USER-origin artifacts are omitted from anonymous mandate listings and public sha
 - GET `/v1/users/me/credit` and `/me/credit/events`: derived balance and immutable events.
 - POST/GET `/v1/users/me/mandates`: authenticated request and history.
 - GET `/v1/users/me/mandates/{id}`: own request results.
+- GET `/v1/users/me/history/file`: per-user JSON history export, generated on demand and removed after two hours.
+
+The mandate detail includes acquisition telemetry: requested and resolved
+intent, miner/service identity, signal hash, cost, duration, reasoning,
+provenance, admissibility and the explicit selection rationale. The rationale
+states the evidence boundary accurately: PRAMA-Dynamagh forwards the intent to
+Telegraph and records the miner Telegraph returns; it does not invent a local
+miner ranking. The user interface renders the state path
+`Solicitud → Reserva → Adquisición → Evidencia → Evaluación → Decisión → Respuesta`.
 
 ## Deployment
 
