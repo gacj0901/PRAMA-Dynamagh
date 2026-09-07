@@ -6,20 +6,23 @@ admitted. Each request is still bounded by the existing public budget, rate
 limit, Redis coordination, reservation and settlement controls.
 
 The read-only activity surface reports the effective competition profile. The
-optional `COMPETITION_MAX_WORKFLOW_USDC` and
-`COMPETITION_DAILY_SPEND_CAP_USDC` settings default to the existing public
-limits and can only lower the effective limits; the G12 0.01 USDC workflow
-ceiling and global daily cap remain authoritative.
+bounded production defaults are `0.50 USDC` per workflow, `20.00 USDC` per
+shared daily ledger, and `0.05 USDC` per acquisition. The existing G12
+reservation, settlement, idempotency, Redis coordination, rate limiting and
+fail-closed checks remain authoritative. A workflow accepts at most five
+ordered caller-supplied acquisition tasks; each task remains opaque to the
+application and is routed through the normal Telegraph path.
 
 1. **Crypto price** — “What is the current price of Bitcoin in USD?”
 2. **Source comparison** — “Compare the current USD price of Bitcoin from the available intelligence sources.”
 3. **Protocol lookup** — “What is the current status and official documentation URL for the requested protocol?”
 4. **Market snapshot** — “Provide a current, source-attributed market snapshot for the requested asset.”
 
-The current public API creates one acquisition task per manual mandate. A
-multi-intent workflow is not advertised until the Gateway contract and worker
-coordination can express it without increasing the workflow budget or creating
-duplicate paid attempts.
+The public API accepts an optional ordered list of acquisition tasks. Each task
+carries a caller-supplied query and optional opaque intent label; the
+Gateway/Telegraph path remains responsible for the actual Miner and returned
+intent. Tasks execute sequentially under one durable workflow reservation, and
+the final Decision/Ticket is emitted only after all required tasks finish.
 
 ## Public activity scope
 

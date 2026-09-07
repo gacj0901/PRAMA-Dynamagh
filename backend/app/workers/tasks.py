@@ -1,4 +1,4 @@
-import json, os
+import json, logging, os
 from time import sleep
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -15,6 +15,7 @@ from app.autonomy.service import claim_run, execute_claimed, finalize_http_run, 
 from app.domain.mandates import AutonomyPolicy
 from app.agents.identity import mandate_attribution
 from app.public_safety import (
+    MAX_SINGLE_ACQUISITION_USDC,
     M2M_MAX_WORKFLOW_USDC,
     m2m_max_workflow_usdc,
     release_spend_reservation,
@@ -22,6 +23,8 @@ from app.public_safety import (
     verify_spend_reservation,
 )
 from app.redis_config import redis_url
+
+logger = logging.getLogger(__name__)
 
 def now(): return datetime.now(timezone.utc)
 
@@ -104,22 +107,41 @@ def execute_acquisition(self, mandate_id: str, acquisition_id: str):
             paid_reservation = True
         s.add(UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id, event_type="TELEGRAPH_REQUEST", metadata_=_attribution(mandate)))
         s.commit()
-        data = json.dumps({"query": task.query, "context": {}, "causal_request_id": mandate_id, "budget_usdc": str(remaining)}).encode()
+        context = {"requested_intent": task.requested_intent} if task.requested_intent else {}
+        acquisition_budget = min(remaining, MAX_SINGLE_ACQUISITION_USDC)
+        data = json.dumps({"query": task.query, "context": context, "causal_request_id": mandate_id, "budget_usdc": str(acquisition_budget)}).encode()
         req = Request(os.environ["GATEWAY_URL"] + "/ask", data=data, headers={"content-type": "application/json"}, method="POST")
         network_attempted = True
         with urlopen(req, timeout=45) as r: raw = json.loads(r.read())
         if not raw.get("miner_id") or not raw.get("intent") or not raw.get("signal_hash"): raise RuntimeError("TELEGRAPH_INVALID_RESPONSE")
         actual_cost = Decimal(str(raw.get("cost_usd") or "0"))
-        if actual_cost > remaining: raise RuntimeError("BUDGET_EXHAUSTED")
-        if paid_reservation: settle_spend(s, mandate_id, actual_cost, reservation_maximum, reservation_origin)
+        if actual_cost > acquisition_budget: raise RuntimeError("SINGLE_ACQUISITION_BUDGET_EXCEEDED")
+        queued_next = s.query(AcquisitionTask).filter_by(mandate_id=mandate_id, status=AcquisitionStatus.QUEUED.value).order_by(AcquisitionTask.ordinal.asc()).first()
+        if paid_reservation:
+            settle_spend(
+                s,
+                mandate_id,
+                actual_cost,
+                reservation_maximum,
+                reservation_origin,
+                finalize=queued_next is None,
+            )
         call = TelegraphCall(mandate_id=mandate_id, acquisition_id=acquisition_id, causal_request_id=mandate_id, miner_id=str(raw.get("miner_id")), miner_name=raw.get("miner_name"), intent=raw.get("intent"), signal_hash=raw.get("signal_hash"), cost_usd=actual_cost, duration_ms=raw.get("duration_ms"), reasoning=raw.get("reasoning"), warnings=raw.get("warnings", []), raw_response=raw, status="SUCCEEDED", completed_at=now())
-        s.add(call); task.status = AcquisitionStatus.SUCCEEDED.value; task.completed_at = now(); transition_mandate(s, mandate, MandateStatus.EVALUATING)
+        s.add(call); task.status = AcquisitionStatus.SUCCEEDED.value; task.completed_at = now()
         metadata = _attribution(mandate)
         s.add_all([UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id, event_type="TELEGRAPH_RESPONSE", metadata_=metadata), UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id, event_type="ACQUISITION_COMPLETED", metadata_=metadata)])
+        if queued_next is not None:
+            s.commit()
+            try:
+                execute_acquisition.delay(mandate_id, queued_next.acquisition_id)
+            except Exception:
+                logger.warning("NEXT_ACQUISITION_DISPATCH_UNCERTAIN mandate_id=%s", mandate_id)
+            return "ACQUISITION_CONTINUED"
+        transition_mandate(s, mandate, MandateStatus.EVALUATING)
         s.commit(); return evaluate_mandate(mandate_id)
     except Exception as e:
         raw_code = getattr(e, "detail", str(e))
-        known = {"BUDGET_EXHAUSTED", "TELEGRAPH_INVALID_RESPONSE", "PUBLIC_SPEND_AUTHORIZATION_INVALID", "PUBLIC_SPEND_AUTHORIZATION_UNAVAILABLE", "PUBLIC_SPEND_SETTLEMENT_INVALID", "M2M_WORKFLOW_BUDGET_EXCEEDED", "AUTONOMOUS_WORKFLOW_BUDGET_EXCEEDED"}
+        known = {"BUDGET_EXHAUSTED", "SINGLE_ACQUISITION_BUDGET_EXCEEDED", "TELEGRAPH_INVALID_RESPONSE", "PUBLIC_SPEND_AUTHORIZATION_INVALID", "PUBLIC_SPEND_AUTHORIZATION_UNAVAILABLE", "PUBLIC_SPEND_SETTLEMENT_INVALID", "M2M_WORKFLOW_BUDGET_EXCEEDED", "AUTONOMOUS_WORKFLOW_BUDGET_EXCEEDED"}
         code = raw_code if raw_code in known else "GATEWAY_UNAVAILABLE"
         # Before the outbound request, the reservation is certainly unspent and
         # can be released.  After any network attempt it is deliberately held
@@ -145,6 +167,9 @@ def evaluate_mandate(mandate_id):
         mandate = s.get(Mandate, mandate_id)
         if mandate.status == "DECIDED":
             return "ALREADY_DECIDED"
+        tasks = s.query(AcquisitionTask).filter_by(mandate_id=mandate_id).all()
+        if any(item.required and item.status != AcquisitionStatus.SUCCEEDED.value for item in tasks):
+            return "WAITING_FOR_ACQUISITIONS"
         calls = s.query(TelegraphCall).filter_by(mandate_id=mandate_id, status="SUCCEEDED").all()
         if mandate.status == "EVALUATING":
             transition_mandate(s, mandate, MandateStatus.DECIDING)

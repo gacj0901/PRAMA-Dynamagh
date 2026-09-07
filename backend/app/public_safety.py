@@ -22,7 +22,10 @@ from app.domain.mandates import PublicManualSpendLedger, PublicManualSpendReserv
 from app.redis_config import redis_url
 
 _MICRO = Decimal("0.000001")
-M2M_MAX_WORKFLOW_USDC = Decimal("0.010000")
+MAX_WORKFLOW_SPEND_USDC = Decimal("0.500000")
+MAX_DAILY_SPEND_CAP_USDC = Decimal("20.000000")
+MAX_SINGLE_ACQUISITION_USDC = Decimal("0.050000")
+M2M_MAX_WORKFLOW_USDC = MAX_WORKFLOW_SPEND_USDC
 logger = logging.getLogger(__name__)
 
 
@@ -37,7 +40,7 @@ def _decimal_setting(name: str, default: str) -> Decimal:
 
 
 def public_max_mandate_usdc() -> Decimal:
-    return _decimal_setting("PUBLIC_MAX_MANDATE_USDC", "0.010000")
+    return min(_decimal_setting("PUBLIC_MAX_MANDATE_USDC", str(MAX_WORKFLOW_SPEND_USDC)), MAX_WORKFLOW_SPEND_USDC)
 
 
 def public_daily_spend_cap_usdc() -> Decimal:
@@ -46,14 +49,14 @@ def public_daily_spend_cap_usdc() -> Decimal:
 
 def global_daily_spend_cap_usdc() -> Decimal:
     """Return the one shared daily cap for manual, M2M, and autonomous spend."""
-    fallback = os.environ.get("PUBLIC_DAILY_SPEND_CAP_USDC", "0.50")
-    return _decimal_setting("GLOBAL_DAILY_SPEND_CAP_USDC", fallback)
+    fallback = os.environ.get("PUBLIC_DAILY_SPEND_CAP_USDC", "20.00")
+    return min(_decimal_setting("GLOBAL_DAILY_SPEND_CAP_USDC", fallback), MAX_DAILY_SPEND_CAP_USDC)
 
 
 def m2m_max_workflow_usdc() -> Decimal:
     """Return the hard M2M paid-workflow ceiling.
 
-    This is intentionally not configurable above 0.01 USDC.  A deployment
+    This is intentionally not configurable above the bounded workflow ceiling.  A deployment
     may lower the ceiling, but no API or environment typo can raise it.
     """
     try:
@@ -62,7 +65,7 @@ def m2m_max_workflow_usdc() -> Decimal:
         raise RuntimeError("M2M_MAX_WORKFLOW_USDC_INVALID") from error
     if configured <= 0 or configured.as_tuple().exponent < -6:
         raise RuntimeError("M2M_MAX_WORKFLOW_USDC_INVALID")
-    return min(configured.quantize(_MICRO), M2M_MAX_WORKFLOW_USDC)
+    return min(configured.quantize(_MICRO), MAX_WORKFLOW_SPEND_USDC)
 
 
 def public_rate_limit() -> tuple[int, int]:
@@ -190,23 +193,28 @@ def verify_spend_reservation(session: Session, mandate_id: str, maximum: Decimal
         raise RuntimeError("PUBLIC_SPEND_AUTHORIZATION_UNAVAILABLE") from error
 
 
-def settle_public_manual_spend(session: Session, mandate_id: str, actual_spend: Decimal) -> None:
+def settle_public_manual_spend(session: Session, mandate_id: str, actual_spend: Decimal, *, finalize: bool = True) -> None:
     """Settle a manual reservation in the same commit as the call."""
-    settle_spend(session, mandate_id, actual_spend, public_max_mandate_usdc(), "MANUAL")
+    settle_spend(session, mandate_id, actual_spend, public_max_mandate_usdc(), "MANUAL", finalize=finalize)
 
 
-def settle_m2m_spend(session: Session, mandate_id: str, actual_spend: Decimal) -> None:
+def settle_m2m_spend(session: Session, mandate_id: str, actual_spend: Decimal, *, finalize: bool = True) -> None:
     """Settle an M2M reservation in the same commit as the Telegraph call."""
-    settle_spend(session, mandate_id, actual_spend, m2m_max_workflow_usdc(), "M2M")
+    settle_spend(session, mandate_id, actual_spend, m2m_max_workflow_usdc(), "M2M", finalize=finalize)
 
 
-def settle_autonomous_spend(session: Session, mandate_id: str, actual_spend: Decimal) -> None:
+def settle_autonomous_spend(session: Session, mandate_id: str, actual_spend: Decimal, *, finalize: bool = True) -> None:
     """Settle an autonomous reservation in the same commit as the call."""
-    settle_spend(session, mandate_id, actual_spend, M2M_MAX_WORKFLOW_USDC, "AUTONOMOUS")
+    settle_spend(session, mandate_id, actual_spend, M2M_MAX_WORKFLOW_USDC, "AUTONOMOUS", finalize=finalize)
 
 
-def settle_spend(session: Session, mandate_id: str, actual_spend: Decimal, maximum: Decimal, origin: str) -> None:
-    """Convert a reservation into immutable actual spend atomically."""
+def settle_spend(session: Session, mandate_id: str, actual_spend: Decimal, maximum: Decimal, origin: str, *, finalize: bool = True) -> None:
+    """Atomically settle one call while preserving a multi-call reservation.
+
+    A final settlement closes the reservation as before.  A non-final
+    settlement moves only the actual amount from reserved to spent and keeps
+    the remaining workflow reservation open for the next sequential task.
+    """
     reservation = verify_spend_reservation(session, mandate_id, maximum, origin)
     actual = actual_spend.quantize(_MICRO)
     if actual < 0 or actual > reservation.reserved_usdc:
@@ -214,10 +222,14 @@ def settle_spend(session: Session, mandate_id: str, actual_spend: Decimal, maxim
     ledger = session.get(PublicManualSpendLedger, reservation.spend_date, with_for_update=True)
     if ledger is None or ledger.reserved_usdc < reservation.reserved_usdc:
         raise RuntimeError("PUBLIC_SPEND_AUTHORIZATION_INVALID")
-    ledger.reserved_usdc -= reservation.reserved_usdc
+    ledger.reserved_usdc -= actual
     ledger.spent_usdc += actual
-    reservation.actual_spend_usdc = actual
-    reservation.status = "SETTLED"
+    reservation.actual_spend_usdc = (reservation.actual_spend_usdc or Decimal("0")) + actual
+    reservation.reserved_usdc -= actual
+    if finalize:
+        ledger.reserved_usdc -= reservation.reserved_usdc
+        reservation.reserved_usdc = Decimal("0")
+        reservation.status = "SETTLED"
 
 
 def release_public_manual_reservation(session: Session, mandate_id: str) -> None:

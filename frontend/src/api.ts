@@ -206,6 +206,7 @@ export interface PublicActivity {
     effective_max_usdc_per_workflow: string;
     configured_daily_spend_cap_usdc: string;
     effective_daily_spend_cap_usdc: string;
+    max_single_acquisition_usdc: string;
     max_real_calls_per_workflow: number;
     multi_intent_enabled: boolean;
     g12_hard_cap_applied: boolean;
