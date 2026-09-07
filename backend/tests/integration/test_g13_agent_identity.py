@@ -3,7 +3,7 @@
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from threading import Barrier
 
@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.agents.identity import get_or_create_m2m_identity
 from app.autonomy.service import claim_run, execute_claimed, schedule_due
-from app.domain.mandates import AgentIdentity, AutonomyPolicy, AutonomyRun, Mandate, UsageEvent
+from app.domain.mandates import AgentAuthorityProfile, AgentIdentity, AutonomyPolicy, AutonomyRun, Mandate, UsageEvent
 
 
 @pytest.fixture
@@ -46,6 +46,18 @@ def _policy(name: str, policy_id: str | None = None) -> AutonomyPolicy:
         max_runs_per_day=3,
         max_concurrent_runs=1,
         state="ACTIVE",
+    )
+
+
+def _authority_profile(agent_id: str) -> AgentAuthorityProfile:
+    return AgentAuthorityProfile(
+        principal_id="g13-identity-test-principal", agent_identity_id=agent_id,
+        status="ACTIVE", valid_from=datetime.now(timezone.utc) - timedelta(seconds=1),
+        allowed_intents=[], allowed_action_kinds=[], economic_budget=Decimal("0.010000"),
+        per_action_budget=Decimal("0.010000"), rolling_budget=None, concurrency_limit=1,
+        cadence_policy=None, external_execution_allowed=True, telegraph_allowed=True,
+        anchoring_allowed=False, erc8183_allowed=False, human_review_thresholds={},
+        policy_version="agent-authority-v0",
     )
 
 
@@ -116,6 +128,8 @@ def test_autonomy_lineage_requires_persistent_identity_and_propagates_it(session
     )
     session.add(policy); session.flush()
     session.add(identity); session.flush()
+    session.add(_authority_profile(identity.agent_id)); session.flush()
+    monkeypatch.setenv("FULL_AUTONOMY_ENABLED", "true")
     run = schedule_due(session, policy, datetime(2026, 9, 2, 20, 0, tzinfo=timezone.utc), global_switch=True)
     assert run is not None and run.agent_identity_id == identity.agent_id
     assert claim_run(session, run.run_id) is run

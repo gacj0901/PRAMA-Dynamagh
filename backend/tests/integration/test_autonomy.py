@@ -25,7 +25,7 @@ from app.autonomy.service import (
     status,
     validate_policy,
 )
-from app.domain.mandates import AcquisitionTask, AgentIdentity, AutonomyPolicy, AutonomyRun, Mandate, UsageEvent
+from app.domain.mandates import AcquisitionTask, AgentAuthorityProfile, AgentIdentity, AutonomyPolicy, AutonomyRun, Mandate, UsageEvent
 from app.main import app
 
 LIVE_G9_JOB = "04e5ba3c-d4e2-45d1-a21e-cf10f510916c"
@@ -58,6 +58,18 @@ def policy(**overrides) -> AutonomyPolicy:
     return AutonomyPolicy(**values)
 
 
+def authority_profile(agent_id: str) -> AgentAuthorityProfile:
+    return AgentAuthorityProfile(
+        principal_id="g13-autonomy-test-principal", agent_identity_id=agent_id,
+        status="ACTIVE", valid_from=datetime.now(timezone.utc) - timedelta(seconds=1),
+        allowed_intents=[], allowed_action_kinds=[], economic_budget=Decimal("0.050000"),
+        per_action_budget=Decimal("0.050000"), rolling_budget=None, concurrency_limit=1,
+        cadence_policy=None, external_execution_allowed=True, telegraph_allowed=True,
+        anchoring_allowed=False, erc8183_allowed=False, human_review_thresholds={},
+        policy_version="agent-authority-v0",
+    )
+
+
 def test_validation_defaults_and_public_template_boundary():
     valid = {
         "acquisition_mode": "TELEGRAPH_HTTP", "allow_telegraph_http": True,
@@ -67,8 +79,9 @@ def test_validation_defaults_and_public_template_boundary():
         "max_runs_per_day": 4, "max_concurrent_runs": 1,
     }
     validate_policy(valid)
+    candidate = dict(valid); candidate["cadence_seconds"] = 60
+    validate_policy(candidate)
     for changed, code in (
-        ({"cadence_seconds": 60}, "AUTONOMY_CADENCE_TOO_FAST"),
         ({"dedupe_window_seconds": 1}, "AUTONOMY_DEDUPE_WINDOW_INVALID"),
         ({"mandate_template": {"private_key": "blocked"}}, "AUTONOMY_TEMPLATE_FORBIDDEN_FIELD"),
     ):
@@ -117,8 +130,6 @@ def test_two_worker_sessions_have_one_durable_claim_winner():
         assert claim_run(rival, run_id) is None
     finally:
         rival.rollback(); owner.rollback()
-        if run_id:
-            cleanup.execute(text("DELETE FROM usage_events WHERE metadata->>'autonomy_run_id' = :run_id"), {"run_id": run_id})
         if policy_id:
             cleanup.execute(text("DELETE FROM autonomy_policies WHERE policy_id = :policy_id"), {"policy_id": policy_id})
         cleanup.commit()
@@ -204,6 +215,8 @@ def test_http_scheduler_originates_an_autonomous_mandate_without_network(session
         trajectory_version="g13-agent-identity-v1",
     )
     session.add(identity); session.flush()
+    session.add(authority_profile(identity.agent_id)); session.flush()
+    monkeypatch.setenv("FULL_AUTONOMY_ENABLED", "true")
     run = schedule_due(session, value, datetime(2026, 9, 2, 20, 0, tzinfo=timezone.utc), global_switch=True)
     assert claim_run(session, run.run_id) is run
     import app.autonomy.service as autonomy

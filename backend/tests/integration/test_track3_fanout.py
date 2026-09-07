@@ -73,6 +73,7 @@ def pipeline(monkeypatch,track3_database):
     monkeypatch.setenv('GLOBAL_DAILY_SPEND_CAP_USDC','1.00')
     monkeypatch.setenv('GATEWAY_URL','http://gateway.test')
     monkeypatch.setenv('FANOUT_MAX_TASKS_PER_MANDATE','5')
+    monkeypatch.setenv('FULL_AUTONOMY_ENABLED','true')
     monkeypatch.setattr(api,'enforce_public_rate_limit',lambda request:None)
     locks=Locks();monkeypatch.setattr(tasks.redis,'from_url',lambda *a,**k:locks)
     queue=[];payments=[]
@@ -220,14 +221,15 @@ def test_shadow_g13_is_persisted_for_real_run_artifacts(pipeline, monkeypatch, c
         def fail_composition(*args, **kwargs):
             raise ValueError("synthetic composition failure")
         monkeypatch.setattr(runtime, "run_pre_next_action_authority_check", fail_composition)
-    from datetime import datetime,timezone
-    from app.domain.mandates import AgentIdentity,AutonomyPolicy,AutonomyRun,Mandate
+    from datetime import datetime,timedelta,timezone
+    from app.domain.mandates import AgentAuthorityProfile,AgentIdentity,AutonomyPolicy,AutonomyRun,Mandate
     mid=pipeline.create(['price-one'])
     with SessionLocal() as s:
         policy=AutonomyPolicy(name='shadow-test-'+uuid.uuid4().hex,enabled=False,version='autonomy-policy-v0',mandate_template={},acquisition_mode='TELEGRAPH_HTTP',allow_telegraph_http=True,allow_erc8183=False,allow_anchor=False,strict_verification=True,read_only_replay=False,cadence_seconds=900,dedupe_window_seconds=900,max_usdc_per_run=Decimal('0.01'),max_usdc_per_day=Decimal('0.03'),max_runs_per_day=3,max_concurrent_runs=1,state='DRAFT')
         s.add(policy);s.flush()
         identity=AgentIdentity(agent_id=str(uuid.uuid4()),origin='INTERNAL_AUTONOMY',status='ACTIVE',policy_id=policy.policy_id,name='Synthetic shadow agent')
         s.add(identity);s.flush()
+        s.add(AgentAuthorityProfile(principal_id='track3-test-principal',agent_identity_id=identity.agent_id,status='ACTIVE',valid_from=datetime.now(timezone.utc)-timedelta(seconds=1),allowed_intents=[],allowed_action_kinds=[],economic_budget=Decimal('0.01'),per_action_budget=Decimal('0.01'),rolling_budget=None,concurrency_limit=1,cadence_policy=None,external_execution_allowed=True,telegraph_allowed=True,anchoring_allowed=False,erc8183_allowed=False,human_review_thresholds={},policy_version='agent-authority-v0'));s.flush()
         run=AutonomyRun(policy_id=policy.policy_id,agent_identity_id=identity.agent_id,scheduled_for=datetime.now(timezone.utc),idempotency_key=uuid.uuid4().hex,state='COMPLETED',planned_cost_usdc=Decimal('0.01'),actual_cost_usdc=Decimal('0'),mandate_id=mid)
         s.add(run);s.flush()
         mandate=s.get(Mandate,mid);mandate.agent_identity_id=identity.agent_id;mandate.autonomy_run_id=run.run_id
@@ -242,9 +244,11 @@ def test_shadow_g13_is_persisted_for_real_run_artifacts(pipeline, monkeypatch, c
         assert any(x.result_core['details']['run_id']==run.run_id for x in checkpoints)
         assert s.query(PolicyEvaluation).filter_by(policy_type='STRUCTURAL_AUTONOMY',policy_subject_id=identity.agent_id).count()>0
 
-        assert len(pipeline.payments) == 1
-        assert s.query(Ticket).filter_by(mandate_id=mid).count() == 1
         action = s.query(AcquisitionTask).filter_by(mandate_id=mid).one()
+        assert len(pipeline.payments) == 0
+        assert action.status == "FAILED"
+        assert action.failure_code == ("AUTHORITY_COMPOSITION_RESTRICTED" if not composition_failure else "GATEWAY_UNAVAILABLE")
+        assert s.query(Ticket).filter_by(mandate_id=mid).count() == 1
         if composition_failure:
             failure = s.query(PolicyEvaluation).filter_by(policy_subject_id=mid, policy_id="AUTHORITY_SHADOW_COMPOSITION").one()
             assert failure.result == "UNAVAILABLE"
@@ -252,9 +256,11 @@ def test_shadow_g13_is_persisted_for_real_run_artifacts(pipeline, monkeypatch, c
         else:
             composed = s.query(PolicyEvaluation).filter_by(policy_type="AUTHORITY_COMPOSITION", policy_subject_id=action.acquisition_id).one()
             assert composed.result == "RESTRICT"
-            assert composed.input_core["applicability"]["CD"] == "MISSING"
+            assert composed.input_core["applicability"]["CD"] == "NOT_APPLICABLE"
             assert composed.result_core["enforcement"] == "SHADOW_ONLY"
             assert composed.input_core["g12"]["result"] == "PERMIT"
             longitudinal = s.query(PolicyEvaluation).filter_by(policy_type="STRUCTURAL_AUTONOMY", policy_subject_id=identity.agent_id).all()
-            assert all(row.input_core["trajectory_lineage_id"].endswith(":run:" + run.run_id) for row in longitudinal)
+            lineages = {row.input_core["trajectory_lineage_id"] for row in longitudinal}
+            assert lineages <= {"o-agent-v0:" + identity.agent_id, "o-agent-v0:" + identity.agent_id + ":run:" + run.run_id}
+            assert any(lineage.endswith(":run:" + run.run_id) for lineage in lineages)
             assert all(not row.input_core["integrity_violations"] for row in longitudinal)
