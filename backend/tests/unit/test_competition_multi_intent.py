@@ -1,5 +1,8 @@
 from decimal import Decimal
 
+import pytest
+from fastapi import HTTPException
+
 
 def test_competition_call_ceiling_is_bounded_and_configurable(monkeypatch):
     from app.competition import competition_max_calls_per_workflow, competition_budget_profile
@@ -22,6 +25,7 @@ def test_authorized_g12_limits_are_bounded(monkeypatch):
         global_daily_spend_cap_usdc,
         m2m_max_workflow_usdc,
         public_max_mandate_usdc,
+        reserve_autonomous_spend,
     )
 
     monkeypatch.delenv("PUBLIC_MAX_MANDATE_USDC", raising=False)
@@ -29,14 +33,34 @@ def test_authorized_g12_limits_are_bounded(monkeypatch):
     monkeypatch.delenv("GLOBAL_DAILY_SPEND_CAP_USDC", raising=False)
     monkeypatch.delenv("PUBLIC_DAILY_SPEND_CAP_USDC", raising=False)
     assert public_max_mandate_usdc() == MAX_WORKFLOW_SPEND_USDC == Decimal("0.050000")
-    assert m2m_max_workflow_usdc() == Decimal("0.010000")
-    assert global_daily_spend_cap_usdc() == MAX_DAILY_SPEND_CAP_USDC == Decimal("1.000000")
+    authorized_dynamic_maximum = m2m_max_workflow_usdc()
+    assert authorized_dynamic_maximum > MAX_SINGLE_ACQUISITION_USDC
+    assert global_daily_spend_cap_usdc() == Decimal("1.000000")
     assert MAX_SINGLE_ACQUISITION_USDC == Decimal("0.010000")
+
+    class FakeSession:
+        def execute(self, *_args, **_kwargs):
+            return self
+
+        def first(self):
+            return (True,)
+
+        def add(self, reservation):
+            self.reservation = reservation
+
+    session = FakeSession()
+    reserve_autonomous_spend(session, "authority-test", authorized_dynamic_maximum,
+                             maximum=authorized_dynamic_maximum)
+    assert session.reservation.reserved_usdc == authorized_dynamic_maximum
+    with pytest.raises(HTTPException, match="PUBLIC_MANDATE_BUDGET_EXCEEDED"):
+        reserve_autonomous_spend(session, "authority-test", authorized_dynamic_maximum + Decimal("0.000001"),
+                                 maximum=authorized_dynamic_maximum)
+
     monkeypatch.setenv("PUBLIC_MAX_MANDATE_USDC", "1.00")
     monkeypatch.setenv("M2M_MAX_WORKFLOW_USDC", "1.00")
     monkeypatch.setenv("GLOBAL_DAILY_SPEND_CAP_USDC", "100.00")
     assert public_max_mandate_usdc() == MAX_WORKFLOW_SPEND_USDC
-    assert m2m_max_workflow_usdc() == Decimal("0.010000")
+    assert m2m_max_workflow_usdc() == authorized_dynamic_maximum
     assert global_daily_spend_cap_usdc() == MAX_DAILY_SPEND_CAP_USDC
 
 
