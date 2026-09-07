@@ -24,6 +24,7 @@ from app.domain.mandates import (
     TelegraphCall,
     Ticket,
 )
+from app.competition import competition_budget_profile
 from app.persistence.database import get_session
 
 
@@ -63,6 +64,7 @@ def public_activity(session: Session) -> dict[str, Any]:
     mandate_ids = [item.mandate_id for item in mandates]
     if not mandate_ids:
         return {
+            "budget_profile": competition_budget_profile(),
             "scope": {
                 "included_origins": list(PUBLIC_ORIGINS),
                 "excluded_origins": ["AUTONOMOUS", "INTERNAL", "SHADOW"],
@@ -105,6 +107,7 @@ def public_activity(session: Session) -> dict[str, Any]:
     public_spend = sum((Decimal(item.cost_usd or 0) for item in successful_calls), Decimal("0"))
 
     return {
+        "budget_profile": competition_budget_profile(),
         "scope": {
             "included_origins": list(PUBLIC_ORIGINS),
             "excluded_origins": ["AUTONOMOUS", "INTERNAL", "SHADOW"],

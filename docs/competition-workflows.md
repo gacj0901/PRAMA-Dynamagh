@@ -5,6 +5,12 @@ are not fixtures, synthetic activity, or a promise that every request will be
 admitted. Each request is still bounded by the existing public budget, rate
 limit, Redis coordination, reservation and settlement controls.
 
+The read-only activity surface reports the effective competition profile. The
+optional `COMPETITION_MAX_WORKFLOW_USDC` and
+`COMPETITION_DAILY_SPEND_CAP_USDC` settings default to the existing public
+limits and can only lower the effective limits; the G12 0.01 USDC workflow
+ceiling and global daily cap remain authoritative.
+
 1. **Crypto price** — “What is the current price of Bitcoin in USD?”
 2. **Source comparison** — “Compare the current USD price of Bitcoin from the available intelligence sources.”
 3. **Protocol lookup** — “What is the current status and official documentation URL for the requested protocol?”

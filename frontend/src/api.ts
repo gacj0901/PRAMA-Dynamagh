@@ -201,6 +201,16 @@ export interface MandateDetails {
 }
 
 export interface PublicActivity {
+  budget_profile: {
+    configured_max_usdc_per_workflow: string;
+    effective_max_usdc_per_workflow: string;
+    configured_daily_spend_cap_usdc: string;
+    effective_daily_spend_cap_usdc: string;
+    max_real_calls_per_workflow: number;
+    multi_intent_enabled: boolean;
+    g12_hard_cap_applied: boolean;
+    operator_approval_required_for_raise: boolean;
+  };
   scope: {
     included_origins: string[];
     excluded_origins: string[];
