@@ -1,4 +1,6 @@
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Depends
+from app.users.auth import protect_user_artifact
+from app.api.users import router as users_router
 
 from app.api.mandates import router as mandates_router
 from app.api.autonomy import router as autonomy_router
@@ -7,7 +9,8 @@ from app.api.agents import router as agents_router
 from app.api.observer import router as observer_router
 from app.api.public_surfaces import router as public_surfaces_router
 
-app = FastAPI(title="PRAMA-Dynamagh API", version="0.0.1")
+app = FastAPI(title="PRAMA-Dynamagh API", version="0.0.1", dependencies=[Depends(protect_user_artifact)])
+app.include_router(users_router)
 app.include_router(mandates_router)
 app.include_router(autonomy_router)
 app.include_router(m2m_router)
@@ -170,7 +173,8 @@ def verify_ticket(ticket_id: str):
 
 @app.get("/health")
 def health() -> dict:
-    from app.public_safety import public_daily_spend_cap_usdc, public_max_mandate_usdc, public_rate_limit
+    from app.public_safety import public_daily_spend_cap_usdc, public_max_mandate_usdc, public_rate_limit, m2m_max_workflow_usdc, MAX_SINGLE_ACQUISITION_USDC
+    from app.competition import competition_max_calls_per_workflow
     from app.redis_config import redis_runtime_diagnostics
     rate_limit, rate_window = public_rate_limit()
     return {
@@ -181,6 +185,12 @@ def health() -> dict:
             "daily_spend_cap_usdc": f"{public_daily_spend_cap_usdc():.6f}",
             "rate_limit": rate_limit,
             "rate_window_seconds": rate_window,
+            "max_single_acquisition_usdc": f"{MAX_SINGLE_ACQUISITION_USDC:.6f}",
+            "m2m_max_workflow_usdc": f"{m2m_max_workflow_usdc():.6f}",
+            "fanout_max_tasks_per_mandate": competition_max_calls_per_workflow(),
+            "typed_epistemic_contracts": ["CRYPTO_PRICE"],
+            "typed_epistemic_runtime": "ONLY_WHERE_PERSISTED_E1_EXISTS",
+            "authority_mode": "SHADOW_ONLY",
         },
         "redis_runtime": redis_runtime_diagnostics(),
     }

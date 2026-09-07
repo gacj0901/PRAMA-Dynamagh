@@ -10,8 +10,14 @@ from app.domain.mandates import AcquisitionTask, AcquisitionStatus, Mandate, Man
 from app.workers.tasks import execute_acquisition
 from app.persistence.database import get_session
 from app.public_safety import enforce_public_budget, enforce_public_rate_limit, reserve_public_manual_spend
+from app.competition import competition_max_calls_per_workflow
 
 router = APIRouter(prefix="/v1/mandates", tags=["mandates"])
+
+
+class AcquisitionInput(BaseModel):
+    query: str = Field(min_length=1, max_length=20_000)
+    requested_intent: str | None = Field(default=None, min_length=1, max_length=255)
 
 
 class MandateCreate(BaseModel):
@@ -21,6 +27,7 @@ class MandateCreate(BaseModel):
     constraints: dict[str, Any] = Field(default_factory=dict)
     max_budget_usdc: Decimal = Field(gt=0, max_digits=18, decimal_places=6)
     deadline: datetime | None = None
+    acquisitions: list[AcquisitionInput] = Field(default_factory=list, max_length=5)
 
 
 class MandateRead(BaseModel):
@@ -49,7 +56,7 @@ def list_mandates(session: Session = Depends(get_session)) -> list[Mandate]:
     The endpoint intentionally returns only persisted Mandate fields.  Detailed
     artifacts remain available through the existing mandate-scoped endpoints.
     """
-    return session.query(Mandate).order_by(Mandate.updated_at.desc()).all()
+    return session.query(Mandate).filter(Mandate.origin != 'USER').order_by(Mandate.updated_at.desc()).all()
 
 
 @router.post("", response_model=MandateRead, status_code=status.HTTP_202_ACCEPTED)
@@ -58,16 +65,39 @@ def create_mandate(payload: MandateCreate, request: Request, session: Session = 
     enforce_public_rate_limit(request)
     enforce_public_budget(payload.max_budget_usdc)
     try:
-        mandate = Mandate(**payload.model_dump(), status=MandateStatus.RECEIVED.value, origin="MANUAL")
+        if len(payload.acquisitions) > competition_max_calls_per_workflow():
+            raise HTTPException(status_code=422, detail="WORKFLOW_ACQUISITION_COUNT_EXCEEDED")
+        mandate = Mandate(
+            actor_id=payload.actor_id,
+            text=payload.text,
+            mandate_type=payload.mandate_type,
+            constraints=payload.constraints,
+            max_budget_usdc=payload.max_budget_usdc,
+            deadline=payload.deadline,
+            status=MandateStatus.RECEIVED.value,
+            origin="MANUAL",
+        )
         session.add(mandate)
         session.flush()
         reserve_public_manual_spend(session, mandate.mandate_id, mandate.max_budget_usdc)
-        task = AcquisitionTask(mandate_id=mandate.mandate_id, query=mandate.text, required=True, status=AcquisitionStatus.QUEUED.value, ordinal=0)
+        plan = payload.acquisitions or [AcquisitionInput(query=mandate.text)]
+        tasks = [
+            AcquisitionTask(
+                mandate_id=mandate.mandate_id,
+                query=item.query,
+                requested_intent=item.requested_intent,
+                required=True,
+                status=AcquisitionStatus.QUEUED.value,
+                ordinal=ordinal,
+            )
+            for ordinal, item in enumerate(plan)
+        ]
+        session.add_all(tasks)
+        session.flush()  # Attribute queued events to materialized task identities.
         session.add_all([
             MandateTransition(mandate_id=mandate.mandate_id, from_status=None, to_status=MandateStatus.RECEIVED.value, reason="mandate created"),
-            task,
             UsageEvent(mandate_id=mandate.mandate_id, event_type="MANDATE_CREATED", metadata_={}),
-            UsageEvent(mandate_id=mandate.mandate_id, acquisition_id=task.acquisition_id, event_type="ACQUISITION_QUEUED", metadata_={}),
+            *[UsageEvent(mandate_id=mandate.mandate_id, acquisition_id=task.acquisition_id, event_type="ACQUISITION_QUEUED", metadata_={}) for task in tasks],
         ])
         session.commit()
         session.refresh(mandate)
@@ -79,8 +109,8 @@ def create_mandate(payload: MandateCreate, request: Request, session: Session = 
         raise HTTPException(status_code=503, detail="PUBLIC_SPEND_AUTHORIZATION_UNAVAILABLE") from error
     # A broker outage retains the reservation instead of authorizing an
     # unaccounted retry.  The worker therefore remains fail-closed on spend.
-    execute_acquisition.delay(mandate.mandate_id, task.acquisition_id)
-    mandate.acquisitions = []
+    execute_acquisition.delay(mandate.mandate_id, tasks[0].acquisition_id)
+    mandate.acquisitions = [{"acquisition_id": task.acquisition_id, "ordinal": task.ordinal, "query": task.query, "status": task.status} for task in tasks]
     return mandate
 
 
@@ -90,7 +120,7 @@ def get_mandate(mandate_id: str, session: Session = Depends(get_session)) -> Man
     if mandate is None:
         raise HTTPException(status_code=404, detail="mandate not found")
     tasks = session.query(AcquisitionTask).filter_by(mandate_id=mandate_id).all()
-    mandate.acquisitions = [{"acquisition_id": t.acquisition_id, "status": t.status, "attempt_count": t.attempt_count, "failure_code": t.failure_code} for t in tasks]
+    mandate.acquisitions = [{"acquisition_id": t.acquisition_id, "status": t.status, "requested_intent": t.requested_intent, "attempt_count": t.attempt_count, "failure_code": t.failure_code} for t in tasks]
     return mandate
 
 
@@ -134,7 +164,7 @@ def acquisitions(mandate_id: str, session: Session = Depends(get_session)) -> di
     output=[]
     for t in tasks:
         call=session.query(TelegraphCall).filter_by(acquisition_id=t.acquisition_id).one_or_none()
-        output.append({"acquisition_id":t.acquisition_id,"status":t.status,"intent":call.intent if call else None,"miner_id":call.miner_id if call else None,"miner_name":call.miner_name if call else None,"signal_hash":call.signal_hash if call else None,"cost_usd":float(call.cost_usd) if call and call.cost_usd is not None else None,"duration_ms":call.duration_ms if call else None})
+        output.append({"acquisition_id":t.acquisition_id,"status":t.status,"requested_intent":t.requested_intent,"intent":call.intent if call else None,"miner_id":call.miner_id if call else None,"miner_name":call.miner_name if call else None,"signal_hash":call.signal_hash if call else None,"cost_usd":float(call.cost_usd) if call and call.cost_usd is not None else None,"duration_ms":call.duration_ms if call else None})
     return {"mandate_id": mandate_id, "acquisitions": output}
 
 @router.get("/{mandate_id}/evidence")

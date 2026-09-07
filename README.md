@@ -26,6 +26,35 @@ The result is a decision pipeline in which acquisition, evidence, evaluation, de
 
 ---
 
+## Consolidated implementation status
+
+The canonical checkout contains Track 3 fan-out, the internal-credit onboarding,
+and the pending authority composition work. Registration uses email/password,
+a server-side session and a single internal welcome-credit grant. User requests
+reserve and settle credit alongside the existing global G12 budget. See
+[the onboarding contract](docs/internal-credit-onboarding.md).
+
+These additions require deployment and migration `0020_user_credit` before
+activation. Local validation does not establish production registration or paid
+user execution. The operator interface remains at `/operator`.
+
+The acquisition worker preserves the Gateway response before Evidence
+normalization. The Gateway already transforms the provider response; this is
+not a claim of byte-identical preservation of the original Telegraph payload.
+The paid pipeline uses its structural evaluation and Decision contracts;
+O_EPISTEMIC E1 relational evaluation remains a separate typed surface. An absent
+E1 evaluation is explicitly missing and is not manufactured by the worker.
+
+CD/G12/CDG checkpoints and their autonomous composition are shadow-only.
+G12 retains its existing enforcement. Composition preserves O_AGENT ordering
+and run lineage; failures produce an explicit unavailable checkpoint when the
+database permits. Gamma supplies no Decision authority. See
+[authority runtime semantics](docs/authority-runtime-shadow.md).
+
+The former alternative README has been consolidated here. Its unverified claims
+about all provider intents, raw provider bytes and automatic E1 execution are
+not implementation guarantees. Its original text remains in Git history.
+
 ## Live application
 
 **https://prama-dynamagh.up.railway.app/**

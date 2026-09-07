@@ -37,10 +37,16 @@ from app.domain.mandates import (
 from app.agents.identity import get_or_create_m2m_identity, mandate_attribution
 from app.persistence.database import get_session
 from app.public_safety import m2m_max_workflow_usdc, reserve_m2m_spend
+from app.competition import competition_max_calls_per_workflow
 from app.workers.tasks import execute_acquisition
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/m2m", tags=["m2m"])
+
+
+class M2MAcquisitionInput(BaseModel):
+    query: str = Field(min_length=1, max_length=20_000)
+    requested_intent: str | None = Field(default=None, min_length=1, max_length=255)
 
 
 class M2MMandateCreate(BaseModel):
@@ -52,8 +58,9 @@ class M2MMandateCreate(BaseModel):
     client_id: str = Field(min_length=1, max_length=255)
     text: str = Field(min_length=1, max_length=20_000)
     mandate_type: str = Field(default="GENERAL", min_length=1, max_length=100)
-    max_budget_usdc: Decimal = Field(default=Decimal("0.010000"), gt=0, max_digits=18, decimal_places=6)
+    max_budget_usdc: Decimal = Field(default=Decimal("0.500000"), gt=0, max_digits=18, decimal_places=6)
     deadline: datetime | None = None
+    acquisitions: list[M2MAcquisitionInput] = Field(default_factory=list, max_length=5)
 
 
 class M2MMandateRead(BaseModel):
@@ -144,6 +151,7 @@ def _read_mandate(session: Session, mandate: Mandate, idempotency_key: str | Non
             {
                 "acquisition_id": item.acquisition_id,
                 "status": item.status,
+                "requested_intent": item.requested_intent,
                 "attempt_count": item.attempt_count,
                 "failure_code": item.failure_code,
             }
@@ -187,6 +195,12 @@ def create_m2m_mandate(
 
     if payload.max_budget_usdc > m2m_max_workflow_usdc():
         raise HTTPException(status_code=422, detail="M2M_WORKFLOW_BUDGET_EXCEEDED")
+    if len(payload.acquisitions) > competition_max_calls_per_workflow():
+        raise HTTPException(status_code=422, detail="WORKFLOW_ACQUISITION_COUNT_EXCEEDED")
+    plan = payload.acquisitions or [M2MAcquisitionInput(query=payload.text)]
+    for item in plan:
+        if not item.query.strip():
+            raise HTTPException(status_code=422, detail="WORKFLOW_ACQUISITION_INVALID")
     try:
         identity = get_or_create_m2m_identity(session, payload.agent_id, m2m_context_id)
     except ValueError as error:
@@ -211,14 +225,18 @@ def create_m2m_mandate(
         session.add(mandate)
         session.flush()
         reserve_m2m_spend(session, mandate.mandate_id, payload.max_budget_usdc)
-        task = AcquisitionTask(
-            mandate_id=mandate.mandate_id,
-            query=mandate.text,
-            required=True,
-            status="QUEUED",
-            ordinal=0,
-        )
-        session.add(task)
+        tasks = [
+            AcquisitionTask(
+                mandate_id=mandate.mandate_id,
+                query=item.query,
+                requested_intent=item.requested_intent,
+                required=True,
+                status="QUEUED",
+                ordinal=ordinal,
+            )
+            for ordinal, item in enumerate(plan)
+        ]
+        session.add_all(tasks)
         session.flush()
         session.add(
             M2MMandateRequest(
@@ -234,7 +252,7 @@ def create_m2m_mandate(
             [
                 MandateTransition(mandate_id=mandate.mandate_id, from_status=None, to_status=MandateStatus.RECEIVED.value, reason="m2m mandate created"),
                 UsageEvent(mandate_id=mandate.mandate_id, event_type="MANDATE_CREATED", metadata_=metadata),
-                UsageEvent(mandate_id=mandate.mandate_id, acquisition_id=task.acquisition_id, event_type="ACQUISITION_QUEUED", metadata_=metadata),
+                *[UsageEvent(mandate_id=mandate.mandate_id, acquisition_id=task.acquisition_id, event_type="ACQUISITION_QUEUED", metadata_=metadata) for task in tasks],
             ]
         )
         session.commit()
@@ -258,7 +276,7 @@ def create_m2m_mandate(
     # and therefore cannot authorize an unaccounted paid retry.  A later retry
     # with the same key receives the same mandate and remains idempotent.
     try:
-        execute_acquisition.delay(mandate.mandate_id, task.acquisition_id)
+        execute_acquisition.delay(mandate.mandate_id, tasks[0].acquisition_id)
     except Exception:
         logger.warning("M2M_TASK_DISPATCH_UNCERTAIN mandate_id=%s", mandate.mandate_id)
         session.add(

@@ -24,6 +24,8 @@ celery_app = Celery(
     backend=redis_url(),
 )
 celery_app.conf.task_default_queue = "prama-dynamagh"
+celery_app.conf.worker_concurrency = 2
+celery_app.conf.worker_prefetch_multiplier = 1
 # RabbitMQ 4 disables transient non-exclusive pidbox queues by default.
 # PRAMA does not use remote-control commands for any durable workflow, so
 # disabling that optional channel preserves broker delivery semantics while

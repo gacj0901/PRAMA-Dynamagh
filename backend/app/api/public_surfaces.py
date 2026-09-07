@@ -206,6 +206,7 @@ def public_ticket_summary(session: Session, ticket_id: str, request: Request) ->
             {
                 "acquisition_id": task.acquisition_id,
                 "status": task.status,
+                "requested_intent": getattr(task, "requested_intent", None),
                 "intent": calls_by_acquisition.get(task.acquisition_id).intent if calls_by_acquisition.get(task.acquisition_id) else None,
                 "miner": calls_by_acquisition.get(task.acquisition_id).miner_name if calls_by_acquisition.get(task.acquisition_id) else None,
                 "cost_usdc": _money(calls_by_acquisition.get(task.acquisition_id).cost_usd) if calls_by_acquisition.get(task.acquisition_id) else "0.000000",

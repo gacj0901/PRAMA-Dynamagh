@@ -19,3 +19,6 @@ postgres-data/
 /PRAMA-Dynamagh_Blueprint_v0.1.md
 /contracts/artifacts/
 /contracts/cache/
+
+# Transient pytest cache directories on Windows.
+pytest-cache-files-*/

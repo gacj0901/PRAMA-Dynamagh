@@ -453,7 +453,7 @@ import sys
 try:
     import psycopg
     with psycopg.connect(
-        os.environ["DATABASE_URL"],
+        os.environ["DATABASE_URL"].replace("postgresql+psycopg://", "postgresql://", 1),
         connect_timeout=10,
         options="-c default_transaction_read_only=on",
     ) as connection:
@@ -483,8 +483,8 @@ except Exception as error:
         if ($diagnosticCurrent.ExitCode -ne 0) {
             throw "Alembic current failed"
         }
-        if (@($diagnosticDatabase.current_revisions) -notcontains "0019_shared_policy_gate" -or $diagnosticCurrent.Output -notmatch "0019_shared_policy_gate") {
-            throw "Alembic current revision is not 0019_shared_policy_gate"
+        if (@($diagnosticDatabase.current_revisions) -notcontains "0020_user_credit" -or $diagnosticCurrent.Output -notmatch "0020_user_credit") {
+            throw "Alembic current revision is not 0020_user_credit"
         }
 
         $targetedResult = Invoke-TargetedAuthorityTests
@@ -655,11 +655,13 @@ expected_schema_error = None
 try:
     from app.persistence.database import Base
     import app.domain.mandates  # noqa: F401
+    import app.users.models  # noqa: F401
     expected_tables = {
         f"{table.schema or 'public'}.{table.name}"
         for table in Base.metadata.tables.values()
     }
     expected_tables.add("public.alembic_version")
+    expected_tables.add("public.user_credit_balances")  # SQL view created by 0020
 except Exception as error:
     expected_schema_error = error
 
@@ -720,7 +722,7 @@ host = None
 port = None
 
 try:
-    raw_url = os.environ["DATABASE_URL"]
+    raw_url = os.environ["DATABASE_URL"].replace("postgresql+psycopg://", "postgresql://", 1)
     parsed = urlsplit(raw_url)
     host = parsed.hostname
     port = parsed.port or 5432
@@ -847,8 +849,8 @@ if ($DiagnosePostgresSuite) {
         } else {
             "NONE"
         }
-        if (-not $databaseCheck.ok -or $currentCheck.ExitCode -ne 0 -or $currentRevisionText -notmatch "0019_shared_policy_gate") {
-            throw "Disposable PostgreSQL precondition failed; expected Alembic revision 0019_shared_policy_gate"
+        if (-not $databaseCheck.ok -or $currentCheck.ExitCode -ne 0 -or $currentRevisionText -notmatch "0020_user_credit") {
+            throw "Disposable PostgreSQL precondition failed; expected Alembic revision 0020_user_credit"
         }
 
         $collection = Invoke-StreamingChildProcess `
@@ -1011,7 +1013,7 @@ import sys
 try:
     import psycopg
     with psycopg.connect(
-        os.environ["DATABASE_URL"],
+        os.environ["DATABASE_URL"].replace("postgresql+psycopg://", "postgresql://", 1),
         connect_timeout=10,
         options="-c default_transaction_read_only=on",
     ) as connection:
@@ -1072,7 +1074,7 @@ except Exception as error:
     $headCount = $headRevisions.Count
     $historyText = if ($null -ne $diagnosticHistory) { $diagnosticHistory.Output } else { "" }
     $headsText = if ($null -ne $diagnosticHeads) { $diagnosticHeads.Output } else { "" }
-    $migrationDiscoverable = if (($headsText + [Environment]::NewLine + $historyText) -match "0019_shared_policy_gate") { "YES" } else { "NO" }
+    $migrationDiscoverable = if (($headsText + [Environment]::NewLine + $historyText) -match "0020_user_credit") { "YES" } else { "NO" }
     $dependencyMatch = [regex]::Match($historyText, '(?m)([A-Za-z0-9_]+)\s+->\s+([A-Za-z0-9_]+)')
     $dependencyChain = if ($dependencyMatch.Success) {
         "$($dependencyMatch.Groups[1].Value) -> $($dependencyMatch.Groups[2].Value)"
@@ -1089,7 +1091,7 @@ except Exception as error:
         $headCount -gt 0 -and
         $currentRevisions.Count -eq $headRevisions.Count -and
         @($currentRevisions | Where-Object { $_ -notin $headRevisions }).Count -eq 0 -and
-        $currentRevisions -contains "0019_shared_policy_gate"
+        $currentRevisions -contains "0020_user_credit"
     )
     if ($currentTables.Count -eq 0 -and $alembicVersionPresent -eq "NO") {
         $failedState = "EMPTY"
@@ -1124,7 +1126,7 @@ except Exception as error:
     Write-Output ("ALEMBIC_CURRENT_REVISION: " + $(if ($currentRevisions.Count -eq 0) { "NONE" } else { ($currentRevisions -join ", ") }))
     Write-Output ("ALEMBIC_HEAD_REVISION: " + $(if ($headRevisions.Count -eq 0) { "NONE" } else { ($headRevisions -join ", ") }))
     Write-Output ("ALEMBIC_HEAD_COUNT: " + $headCount)
-    Write-Output ("MIGRATION_0019_DISCOVERABLE: " + $migrationDiscoverable)
+    Write-Output ("MIGRATION_0020_DISCOVERABLE: " + $migrationDiscoverable)
     Write-Output ("MIGRATION_DEPENDENCY_CHAIN: " + $dependencyChain)
     Write-Output ("ALEMBIC_CURRENT_INSPECTION: " + $(if ($currentCommandOk) { "PASS" } else { "FAIL" }))
     Write-Output ("ALEMBIC_HEADS_INSPECTION: " + $(if ($headsCommandOk) { "PASS" } else { "FAIL" }))
@@ -1184,11 +1186,11 @@ try {
         @()
     }
     $headRevisions = @($headMatches | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
-    $migrationDiscoverable = $headsResult.ExitCode -eq 0 -and $headsResult.Output -match "0019_shared_policy_gate"
+    $migrationDiscoverable = $headsResult.ExitCode -eq 0 -and $headsResult.Output -match "0020_user_credit"
     $currentRevisions = @($preflightResult.ALEMBIC_CURRENT_REVISION)
-    $exactCurrentRevision = $currentRevisions.Count -eq 1 -and $currentRevisions[0] -eq "0019_shared_policy_gate"
-    $exactSingleHead = $headRevisions.Count -eq 1 -and $headRevisions[0] -eq "0019_shared_policy_gate"
-    $noUnknownRevision = $currentRevisions.Count -eq 0 -or ($currentRevisions | Where-Object { $_ -ne "0019_shared_policy_gate" }).Count -eq 0
+    $exactCurrentRevision = $currentRevisions.Count -eq 1 -and $currentRevisions[0] -eq "0020_user_credit"
+    $exactSingleHead = $headRevisions.Count -eq 1 -and $headRevisions[0] -eq "0020_user_credit"
+    $noUnknownRevision = $currentRevisions.Count -eq 0 -or ($currentRevisions | Where-Object { $_ -ne "0020_user_credit" }).Count -eq 0
     $isFreshEmpty = $actualTableCount -eq 0 -and $emptyDatabase -eq "PASS" -and $preflightResult.ALEMBIC_VERSION_TABLE_PRESENT -eq "NO"
     if ($isFreshEmpty) {
         $preflightMode = "FRESH_EMPTY"
@@ -1211,7 +1213,7 @@ try {
     } else {
         $preflightFailureStage = "migrated_reuse_compatibility"
         $preflightExceptionType = "ValidationDatabaseStateNotReusable"
-        $preflightErrorSanitized = "Non-empty database is neither fresh-empty nor a compatible 0019_shared_policy_gate validation database"
+        $preflightErrorSanitized = "Non-empty database is neither fresh-empty nor a compatible 0020_user_credit validation database"
         throw $preflightErrorSanitized
     }
     $preflight = "PASS"
@@ -1234,7 +1236,7 @@ try {
         if ($upgradeResult.ExitCode -ne 0) { throw "Alembic base-to-head failed" }
         $headsResult = Invoke-AlembicReadCommand -Arguments @("heads")
         $currentResult = Invoke-AlembicReadCommand -Arguments @("current")
-        if ($headsResult.ExitCode -ne 0 -or $currentResult.ExitCode -ne 0 -or $headsResult.Output -notmatch "0019_shared_policy_gate" -or $currentResult.Output -notmatch "0019_shared_policy_gate") {
+        if ($headsResult.ExitCode -ne 0 -or $currentResult.ExitCode -ne 0 -or $headsResult.Output -notmatch "0020_user_credit" -or $currentResult.Output -notmatch "0020_user_credit") {
             $failedInspection = if ($headsResult.ExitCode -ne 0) { $headsResult } else { $currentResult }
             $alembicCommandStage = $failedInspection.Arguments
             $alembicExitCode = $failedInspection.ExitCode
@@ -1242,9 +1244,9 @@ try {
             $alembicErrorSanitized = $failedInspection.Sanitized
             if ($alembicExitCode -eq 0) {
                 $alembicExceptionType = "MigrationHeadConfirmationError"
-                $alembicErrorSanitized = "Expected Alembic head 0019_shared_policy_gate was not confirmed"
+                $alembicErrorSanitized = "Expected Alembic head 0020_user_credit was not confirmed"
             }
-            throw "Expected Alembic head 0019_shared_policy_gate was not confirmed"
+            throw "Expected Alembic head 0020_user_credit was not confirmed"
         }
         $migration = "PASS"
     }
@@ -1263,7 +1265,7 @@ expected_columns = {
     "replay_identity", "created_at",
 }
 try:
-    with psycopg.connect(os.environ["DATABASE_URL"], connect_timeout=10) as connection:
+    with psycopg.connect(os.environ["DATABASE_URL"].replace("postgresql+psycopg://", "postgresql://", 1), connect_timeout=10) as connection:
         with connection.cursor() as cursor:
             cursor.execute("""
                 SELECT column_name
@@ -1623,7 +1625,7 @@ Write-Output ("SCHEMA_INSPECTION: " + $schemaInspection)
 Write-Output ("EMPTY_DATABASE_PREFLIGHT: " + $emptyDatabase)
 Write-Output ("PREFLIGHT_MODE: " + $preflightMode)
 Write-Output ("MIGRATED_REUSE_PREFLIGHT: " + $migratedReusePreflight)
-Write-Output ("ALEMBIC_CURRENT_REVISION: " + $(if ($migration -eq "PASS") { "0019_shared_policy_gate" } elseif ($null -ne $preflightResult -and $null -ne $preflightResult.ALEMBIC_CURRENT_REVISION) { (@($preflightResult.ALEMBIC_CURRENT_REVISION) -join ", ") } else { "NOT_RUN" }))
+Write-Output ("ALEMBIC_CURRENT_REVISION: " + $(if ($migration -eq "PASS") { "0020_user_credit" } elseif ($null -ne $preflightResult -and $null -ne $preflightResult.ALEMBIC_CURRENT_REVISION) { (@($preflightResult.ALEMBIC_CURRENT_REVISION) -join ", ") } else { "NOT_RUN" }))
 Write-Output ("EXPECTED_TABLE_COUNT: " + $expectedTableCount)
 Write-Output ("ACTUAL_TABLE_COUNT: " + $actualTableCount)
 Write-Output ("MISSING_EXPECTED_TABLES: " + $(if ($missingExpectedTables.Count -eq 0) { "NONE" } else { ($missingExpectedTables -join ", ") }))
@@ -1650,9 +1652,9 @@ if ($null -ne $targetedResult) {
     Write-Output "TOTAL_TARGETED_DISCOVERED: NOT_RUN"
     Write-Output "TOTAL_TARGETED_PASSED: NOT_RUN"
 }
-Write-Output "VALIDATIONS_INCLUDED: empty-database preflight; Alembic base-to-0019; PolicyEvaluation schema/constraints; append-only trigger; E3-A/G13 roundtrip, replay, idempotency and independent-session concurrency; policy/agent isolation; semantic ordering; Decision parity; exact G13 rules; PostgreSQL integration suite; complete backend regression"
+Write-Output "VALIDATIONS_INCLUDED: empty-database preflight; Alembic base-to-0020; PolicyEvaluation schema/constraints; append-only trigger; E3-A/G13 roundtrip, replay, idempotency and independent-session concurrency; policy/agent isolation; semantic ordering; Decision parity; exact G13 rules; PostgreSQL integration suite; complete backend regression"
 Write-Output "EXISTING_TEST_INFRASTRUCTURE_REUSED: YES — backend/.venv, Alembic, pytest, SQLAlchemy SessionLocal and existing authority tests"
-Write-Output "FILES_CREATED: scripts/validate_authority_postgres.ps1"
+Write-Output "FILES_CREATED: none"
 Write-Output "FILES_CHANGED: none"
 Write-Output ("READY_FOR_LOCAL_EXECUTION: " + $(if ($null -eq $failure) { "YES" } else { "NO" }))
 Write-Output "LOCAL_COMMAND: .\scripts\validate_authority_postgres.ps1"
@@ -1661,3 +1663,5 @@ if ($null -ne $failure) {
 } else {
     Write-Output "BLOCKERS: none"
 }
+
+exit $(if ($null -ne $failure) { 1 } else { 0 })
