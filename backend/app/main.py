@@ -170,7 +170,8 @@ def verify_ticket(ticket_id: str):
 
 @app.get("/health")
 def health() -> dict:
-    from app.public_safety import public_daily_spend_cap_usdc, public_max_mandate_usdc, public_rate_limit
+    from app.public_safety import public_daily_spend_cap_usdc, public_max_mandate_usdc, public_rate_limit, m2m_max_workflow_usdc, MAX_SINGLE_ACQUISITION_USDC
+    from app.competition import competition_max_calls_per_workflow
     from app.redis_config import redis_runtime_diagnostics
     rate_limit, rate_window = public_rate_limit()
     return {
@@ -181,6 +182,12 @@ def health() -> dict:
             "daily_spend_cap_usdc": f"{public_daily_spend_cap_usdc():.6f}",
             "rate_limit": rate_limit,
             "rate_window_seconds": rate_window,
+            "max_single_acquisition_usdc": f"{MAX_SINGLE_ACQUISITION_USDC:.6f}",
+            "m2m_max_workflow_usdc": f"{m2m_max_workflow_usdc():.6f}",
+            "fanout_max_tasks_per_mandate": competition_max_calls_per_workflow(),
+            "typed_epistemic_contracts": ["CRYPTO_PRICE"],
+            "typed_epistemic_runtime": "ONLY_WHERE_PERSISTED_E1_EXISTS",
+            "authority_mode": "SHADOW_ONLY",
         },
         "redis_runtime": redis_runtime_diagnostics(),
     }

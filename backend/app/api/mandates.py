@@ -92,11 +92,12 @@ def create_mandate(payload: MandateCreate, request: Request, session: Session = 
             )
             for ordinal, item in enumerate(plan)
         ]
+        session.add_all(tasks)
+        session.flush()  # Attribute queued events to materialized task identities.
         session.add_all([
             MandateTransition(mandate_id=mandate.mandate_id, from_status=None, to_status=MandateStatus.RECEIVED.value, reason="mandate created"),
             UsageEvent(mandate_id=mandate.mandate_id, event_type="MANDATE_CREATED", metadata_={}),
             *[UsageEvent(mandate_id=mandate.mandate_id, acquisition_id=task.acquisition_id, event_type="ACQUISITION_QUEUED", metadata_={}) for task in tasks],
-            *tasks,
         ])
         session.commit()
         session.refresh(mandate)
@@ -109,7 +110,7 @@ def create_mandate(payload: MandateCreate, request: Request, session: Session = 
     # A broker outage retains the reservation instead of authorizing an
     # unaccounted retry.  The worker therefore remains fail-closed on spend.
     execute_acquisition.delay(mandate.mandate_id, tasks[0].acquisition_id)
-    mandate.acquisitions = []
+    mandate.acquisitions = [{"acquisition_id": task.acquisition_id, "ordinal": task.ordinal, "query": task.query, "status": task.status} for task in tasks]
     return mandate
 
 
