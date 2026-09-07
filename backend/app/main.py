@@ -1,4 +1,6 @@
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Depends
+from app.users.auth import protect_user_artifact
+from app.api.users import router as users_router
 
 from app.api.mandates import router as mandates_router
 from app.api.autonomy import router as autonomy_router
@@ -7,7 +9,8 @@ from app.api.agents import router as agents_router
 from app.api.observer import router as observer_router
 from app.api.public_surfaces import router as public_surfaces_router
 
-app = FastAPI(title="PRAMA-Dynamagh API", version="0.0.1")
+app = FastAPI(title="PRAMA-Dynamagh API", version="0.0.1", dependencies=[Depends(protect_user_artifact)])
+app.include_router(users_router)
 app.include_router(mandates_router)
 app.include_router(autonomy_router)
 app.include_router(m2m_router)

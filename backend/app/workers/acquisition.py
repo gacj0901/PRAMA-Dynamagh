@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 from app.domain.mandates import AcquisitionTask, TelegraphCall, Mandate, MandateStatus, PublicManualSpendReservation, UsageEvent
 from app.domain.state_machine import transition_mandate
 from app.persistence.database import SessionLocal
+from app.users import credit as user_credit
 from app.public_safety import MAX_SINGLE_ACQUISITION_USDC, M2M_MAX_WORKFLOW_USDC, m2m_max_workflow_usdc, public_max_mandate_usdc, verify_spend_reservation, settle_spend, release_spend_reservation
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,7 @@ now = lambda: datetime.now(timezone.utc)
 
 
 def maximum(mandate):
+    if mandate.origin == "USER": return min(MAX_SINGLE_ACQUISITION_USDC, public_max_mandate_usdc())
     if mandate.origin == "M2M": return m2m_max_workflow_usdc()
     if mandate.origin == "AUTONOMOUS": return M2M_MAX_WORKFLOW_USDC
     return public_max_mandate_usdc()
@@ -61,6 +63,7 @@ def execute_one(mandate_id, acquisition_id):
         available = reservation.reserved_usdc - uncertain_hold(session, mandate_id)
         budget = min(available, MAX_SINGLE_ACQUISITION_USDC)
         if budget <= 0: raise RuntimeError("BUDGET_EXHAUSTED")
+        user_credit.verify_reserved(session, mandate, budget)
         if not task.query.strip(): raise RuntimeError("ACQUISITION_QUERY_INVALID")
         call = TelegraphCall(mandate_id=mandate_id, acquisition_id=acquisition_id, causal_request_id=mandate_id, raw_response={}, status="REQUESTED", cost_usd=None)
         session.add(call)
@@ -84,7 +87,9 @@ def execute_one(mandate_id, acquisition_id):
             raise RuntimeError("SINGLE_ACQUISITION_BUDGET_EXCEEDED")
         mandate = session.query(Mandate).filter_by(mandate_id=mandate_id).with_for_update().one()
         queued = session.query(AcquisitionTask).filter(AcquisitionTask.mandate_id==mandate_id,AcquisitionTask.status.in_(["QUEUED","PENDING"])).count()
-        settle_spend(session,mandate_id,actual,cap,mandate.origin,finalize=not queued and uncertain_hold(session,mandate_id)==0)
+        finalize = not queued and uncertain_hold(session,mandate_id)==0
+        user_credit.settle(session,mandate,acquisition_id,actual,finalize=finalize)
+        settle_spend(session,mandate_id,actual,cap,mandate.origin,finalize=finalize)
         for name in ["miner_id","miner_name","intent","signal_hash","duration_ms","reasoning"]:
             setattr(call,name,raw.get(name))
         call.miner_id = str(raw["miner_id"])
@@ -145,6 +150,7 @@ def advance(mandate_id):
         if mandate.status == "ACQUIRING":
             reservation = session.get(PublicManualSpendReservation,mandate_id)
             if reservation and reservation.status=="RESERVED" and uncertain_hold(session,mandate_id)==0:
+                user_credit.release(session,mandate)
                 if reservation.reserved_usdc>0:
                     settle_spend(session,mandate_id,Decimal("0"),maximum(mandate),mandate.origin,finalize=True)
                 else:

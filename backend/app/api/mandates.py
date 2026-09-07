@@ -56,7 +56,7 @@ def list_mandates(session: Session = Depends(get_session)) -> list[Mandate]:
     The endpoint intentionally returns only persisted Mandate fields.  Detailed
     artifacts remain available through the existing mandate-scoped endpoints.
     """
-    return session.query(Mandate).order_by(Mandate.updated_at.desc()).all()
+    return session.query(Mandate).filter(Mandate.origin != 'USER').order_by(Mandate.updated_at.desc()).all()
 
 
 @router.post("", response_model=MandateRead, status_code=status.HTTP_202_ACCEPTED)
