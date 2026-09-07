@@ -1,7 +1,16 @@
 #!/bin/sh
 set -eu
 
-api_upstream="${API_UPSTREAM:-https://api-production-1870.up.railway.app}"
+public_api_upstream="https://api-production-1870.up.railway.app"
+api_upstream="${API_UPSTREAM:-$public_api_upstream}"
+
+case "$api_upstream" in
+  http://api.railway.internal|https://api.railway.internal|http://api.railway.internal:*|https://api.railway.internal:*)
+    echo "API_UPSTREAM_LEGACY_PRIVATE: REPLACED"
+    api_upstream="$public_api_upstream"
+    ;;
+esac
+
 port="${PORT:-80}"
 
 case "$api_upstream" in
