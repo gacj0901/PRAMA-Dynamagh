@@ -96,9 +96,7 @@ services:
     networks: [prama_internal, external_services]
 
   frontend:
-    build:
-      context: .
-      dockerfile: frontend/Dockerfile
+    build: ./frontend
     ports:
       - "${WEB_PORT:-5173}:80"
     environment:

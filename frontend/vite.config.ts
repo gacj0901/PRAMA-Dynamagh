@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  // The approved PRAMA assets remain the source of truth outside the app.
-  // Vite copies them verbatim into the production bundle.
-  publicDir: "../UI",
+  // Static application assets are kept inside this service so the Railway
+  // frontend build remains self-contained when its root directory is /frontend.
+  publicDir: "public",
 });
