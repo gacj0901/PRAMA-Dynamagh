@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-api_upstream="${API_UPSTREAM:-http://api:8000}"
+api_upstream="${API_UPSTREAM:-https://api-production-1870.up.railway.app}"
 port="${PORT:-80}"
 
 case "$api_upstream" in
