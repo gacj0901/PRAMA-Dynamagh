@@ -1,0 +1,256 @@
+"""G13-D/E longitudinal autonomy policy specialization."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Iterable, Mapping
+
+from app.agents.observation import OAgentObservation, O_AGENT_SCHEMA_VERSION
+from app.policy_gate.substrate import PolicyEvaluationCore, PolicyInputTypeError, replay_policy
+
+
+G13_STRUCTURAL_AUTONOMY_POLICY_V0_1 = "G13_STRUCTURAL_AUTONOMY_POLICY_V0_1"
+G13_STRUCTURAL_AUTONOMY_POLICY_VERSION = "g13-d-structural-autonomy-v0.1"
+G13_POLICY_TYPE = "STRUCTURAL_AUTONOMY"
+G13_OUTPUTS = frozenset({"CONTINUE", "THROTTLE", "REVIEW", "HALT"})
+G13_PRECEDENCE = {"CONTINUE": 0, "THROTTLE": 1, "REVIEW": 2, "HALT": 3}
+G13_RULES = {
+    "G13_REQUIRED_TRAJECTORY_MISSING": {
+        "phenomenon": "required ordered trajectory is unavailable",
+        "input_fields": ["ordered_observations", "window_definition"],
+        "history": "the supplied trajectory window",
+        "predicate": "ordered_observations is empty",
+        "authority_consequence": "autonomous continuation cannot be reconstructed",
+        "output": "REVIEW",
+        "recovery": "a later valid trajectory window",
+        "falsification": "a valid non-empty window must not trigger this rule",
+    },
+    "G13_IDENTITY_OR_TRAJECTORY_INTEGRITY": {
+        "phenomenon": "agent or trajectory identity integrity is violated",
+        "input_fields": ["agent_id", "trajectory_lineage_id", "ordered_observations", "integrity_violations"],
+        "history": "the supplied window",
+        "predicate": "integrity_violations is non-empty",
+        "authority_consequence": "identity-contaminated continuation is prohibited",
+        "output": "HALT",
+        "recovery": "operator review and a new valid window; no row mutation",
+        "falsification": "cross-agent or conflicting duplicate input must never be accepted as CONTINUE",
+    },
+    "G13_CURRENT_CRITICAL_OBSERVATION_MISSING": {
+        "phenomenon": "the latest observation explicitly carries missing data",
+        "input_fields": ["ordered_observations", "missing_data"],
+        "history": "latest supplied observation only",
+        "predicate": "latest missing_data is non-empty",
+        "authority_consequence": "current longitudinal state is not reconstructible",
+        "output": "REVIEW",
+        "recovery": "a later complete observation",
+        "falsification": "a complete latest observation must not trigger this rule",
+    },
+    "G13_REPEATED_LOCAL_BLOCK": {
+        "phenomenon": "repeated local Decision BLOCK observations",
+        "input_fields": ["facts.local_decision_state"],
+        "history": "the supplied ordered window",
+        "predicate": "at least two BLOCK observations",
+        "authority_consequence": "autonomous continuation requires review",
+        "output": "REVIEW",
+        "recovery": "a later window without the repeated degradation",
+        "falsification": "one or zero BLOCK observations must not trigger this rule",
+    },
+    "G13_LOCAL_BLOCK_DEGRADATION": {
+        "phenomenon": "one local Decision BLOCK observation",
+        "input_fields": ["facts.local_decision_state"],
+        "history": "the supplied ordered window",
+        "predicate": "exactly one BLOCK observation",
+        "authority_consequence": "continuation is permitted only under throttle constraints",
+        "output": "THROTTLE",
+        "recovery": "a later window without the degradation",
+        "falsification": "zero BLOCK observations must not trigger this rule",
+    },
+    "G13_REPEATED_EXECUTION_FAILURE": {
+        "phenomenon": "repeated persisted execution failures",
+        "input_fields": ["facts.failure_code", "facts.failure_event_types"],
+        "history": "the supplied ordered window",
+        "predicate": "at least two failure-bearing observations",
+        "authority_consequence": "autonomous continuation requires review",
+        "output": "REVIEW",
+        "recovery": "a later window without repeated failure",
+        "falsification": "one or zero failure-bearing observations must not trigger this rule",
+    },
+    "G13_EXECUTION_FAILURE_DEGRADATION": {
+        "phenomenon": "one persisted execution failure",
+        "input_fields": ["facts.failure_code", "facts.failure_event_types"],
+        "history": "the supplied ordered window",
+        "predicate": "exactly one failure-bearing observation",
+        "authority_consequence": "continuation is permitted only under throttle constraints",
+        "output": "THROTTLE",
+        "recovery": "a later window without the failure",
+        "falsification": "zero failure-bearing observations must not trigger this rule",
+    },
+}
+
+
+@dataclass(frozen=True)
+class G13PolicyInput:
+    agent_id: str
+    trajectory_lineage_id: str
+    observation_refs: tuple[str, ...]
+    ordered_observations: tuple[Mapping[str, Any], ...]
+    window_definition: Mapping[str, Any]
+    o_agent_contract_version: str
+    policy_version: str = G13_STRUCTURAL_AUTONOMY_POLICY_VERSION
+    missing_data: tuple[str, ...] = ()
+    integrity_violations: tuple[str, ...] = ()
+
+    @classmethod
+    def from_observations(
+        cls,
+        agent_id: str,
+        observations: Iterable[OAgentObservation],
+        *,
+        trajectory_lineage_id: str | None = None,
+    ) -> "G13PolicyInput":
+        ordered = sorted(list(observations), key=lambda item: (item.sequence, item.observation_id))
+        seen: dict[str, str] = {}
+        integrity: set[str] = set()
+        deduped: list[OAgentObservation] = []
+        for item in ordered:
+            if item.agent_identity_id != agent_id or item.source_lineage.agent_identity_id != agent_id:
+                integrity.add("AGENT_IDENTITY_LINEAGE_MISMATCH")
+            previous_hash = seen.get(item.observation_id)
+            if previous_hash is not None:
+                if previous_hash != item.content_hash:
+                    integrity.add("DUPLICATE_OBSERVATION_HASH_CONFLICT")
+                continue
+            seen[item.observation_id] = item.content_hash
+            deduped.append(item)
+            if item.schema_version != O_AGENT_SCHEMA_VERSION:
+                integrity.add("UNSUPPORTED_O_AGENT_VERSION")
+        if any(item.sequence != index for index, item in enumerate(deduped, start=1)):
+            integrity.add("TRAJECTORY_SEQUENCE_NOT_CONTIGUOUS")
+        if trajectory_lineage_id is None:
+            trajectory_lineage_id = f"{O_AGENT_SCHEMA_VERSION}:{agent_id}"
+        payloads = tuple({**item.canonical_payload(), "content_hash": item.content_hash} for item in deduped)
+        refs = tuple(item.observation_id for item in deduped)
+        missing = tuple(sorted({code for item in deduped for code in item.missing_data}))
+        return cls(
+            agent_id=agent_id,
+            trajectory_lineage_id=trajectory_lineage_id,
+            observation_refs=refs,
+            ordered_observations=payloads,
+            window_definition={
+                "kind": "ordered_o_agent_stream",
+                "start_sequence": 1 if deduped else None,
+                "end_sequence": len(deduped) if deduped else None,
+                "source": "caller_supplied_observation_window",
+            },
+            o_agent_contract_version=O_AGENT_SCHEMA_VERSION,
+            missing_data=missing,
+            integrity_violations=tuple(sorted(integrity)),
+        )
+
+    def canonical_core(self) -> dict[str, Any]:
+        return {
+            "input_contract": "g13-d-policy-input-v0.1",
+            "agent_id": self.agent_id,
+            "trajectory_lineage_id": self.trajectory_lineage_id,
+            "observation_refs": list(self.observation_refs),
+            "ordered_observations": [dict(item) for item in self.ordered_observations],
+            "window_definition": dict(self.window_definition),
+            "o_agent_contract_version": self.o_agent_contract_version,
+            "policy_version": self.policy_version,
+            "missing_data": list(self.missing_data),
+            "integrity_violations": list(self.integrity_violations),
+        }
+
+
+def _facts(input_value: G13PolicyInput) -> list[Mapping[str, Any]]:
+    return [dict(item.get("facts") or {}) for item in input_value.ordered_observations]
+
+
+def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
+    if policy_input.policy_version != G13_STRUCTURAL_AUTONOMY_POLICY_VERSION:
+        raise ValueError("G13_POLICY_VERSION_UNSUPPORTED")
+
+    facts = _facts(policy_input)
+    source_observations = policy_input.ordered_observations
+    triggered: list[str] = []
+    outcome = "CONTINUE"
+
+    def trigger(rule_id: str, result: str) -> None:
+        nonlocal outcome
+        triggered.append(rule_id)
+        if G13_PRECEDENCE[result] > G13_PRECEDENCE[outcome]:
+            outcome = result
+
+    if not source_observations:
+        trigger("G13_REQUIRED_TRAJECTORY_MISSING", "REVIEW")
+    if policy_input.integrity_violations:
+        trigger("G13_IDENTITY_OR_TRAJECTORY_INTEGRITY", "HALT")
+
+    # The latest explicitly supplied observation is the only source for a
+    # current missing-data judgment; historical missing markers remain in the
+    # input for audit and do not become a hidden score.
+    if source_observations and (source_observations[-1].get("missing_data") or ()):
+        trigger("G13_CURRENT_CRITICAL_OBSERVATION_MISSING", "REVIEW")
+
+    block_count = sum(1 for item in facts if item.get("local_decision_state") == "BLOCK")
+    failure_count = sum(1 for item in facts if item.get("failure_code") or item.get("failure_event_types"))
+    if block_count >= 2:
+        trigger("G13_REPEATED_LOCAL_BLOCK", "REVIEW")
+    elif block_count == 1:
+        trigger("G13_LOCAL_BLOCK_DEGRADATION", "THROTTLE")
+    if failure_count >= 2:
+        trigger("G13_REPEATED_EXECUTION_FAILURE", "REVIEW")
+    elif failure_count == 1:
+        trigger("G13_EXECUTION_FAILURE_DEGRADATION", "THROTTLE")
+
+    return PolicyEvaluationCore(
+        policy_id=G13_STRUCTURAL_AUTONOMY_POLICY_V0_1,
+        policy_version=G13_STRUCTURAL_AUTONOMY_POLICY_VERSION,
+        policy_type=G13_POLICY_TYPE,
+        policy_subject_type="AGENT_IDENTITY",
+        policy_subject_id=policy_input.agent_id,
+        observation_refs=policy_input.observation_refs,
+        observation_contract_versions={"o_agent": policy_input.o_agent_contract_version},
+        input_core=policy_input.canonical_core(),
+        triggered_rule_ids=tuple(triggered),
+        result=outcome,
+        result_core={
+            "autonomy_state": outcome,
+            "rule_precedence": ["HALT", "REVIEW", "THROTTLE", "CONTINUE"],
+            "recovery": "re-evaluate a later valid ordered window; no historical row is mutated",
+        },
+    )
+
+
+def replay_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
+    computed = evaluate_g13_policy(policy_input)
+    return replay_policy(computed, lambda: evaluate_g13_policy(policy_input))
+
+
+def pre_next_action_gate(
+    *,
+    local_decision: str,
+    economic_authorized: bool,
+    longitudinal_result: str,
+    throttled_constraints_satisfied: bool = False,
+) -> tuple[bool, str]:
+    """Compose independent authorities without allowing an override."""
+
+    if local_decision != "PERMIT":
+        return False, "LOCAL_EPISTEMIC_DENIAL"
+    if not economic_authorized:
+        return False, "G12_ECONOMIC_DENIAL"
+    if longitudinal_result == "HALT":
+        return False, "G13_HALT"
+    if longitudinal_result == "REVIEW":
+        return False, "G13_REVIEW"
+    if longitudinal_result == "THROTTLE" and not throttled_constraints_satisfied:
+        return False, "G13_THROTTLE_CONSTRAINTS_REQUIRED"
+    if longitudinal_result not in G13_OUTPUTS:
+        return False, "G13_RESULT_UNSUPPORTED"
+    return True, "NEXT_ACTION_AUTHORIZED"
+
+
+def assert_g13_policy_type(evaluation: PolicyEvaluationCore) -> None:
+    if evaluation.policy_type != G13_POLICY_TYPE:
+        raise PolicyInputTypeError("POLICY_INPUT_TYPE_MISMATCH")

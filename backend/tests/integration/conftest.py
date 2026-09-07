@@ -22,6 +22,7 @@ from app.domain.mandates import (
 )
 from app.erc8183.evidence import DIAMOND, RECEIVER, VERSION
 from app.pramagraph.evaluation import decide, digest
+from app.persistence.database import SessionLocal
 from app.tickets.core import build as build_ticket_core, hash_core
 
 
@@ -31,6 +32,20 @@ SOURCE_TICKET = "ca4d6936-f0ed-47ee-a2ce-ca509a36c8aa"
 SOURCE_ACQUISITION = "g13-fixture-acquisition"
 SOURCE_EVALUATION = "g13-fixture-evaluation"
 SOURCE_DECISION = "g13-fixture-decision"
+
+
+@pytest.fixture
+def session():
+    """Provide the application's real PostgreSQL session to integration tests."""
+
+    value = SessionLocal()
+    try:
+        yield value
+    finally:
+        try:
+            value.rollback()
+        finally:
+            value.close()
 
 
 def _delete_fixture(session) -> None:

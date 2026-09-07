@@ -461,6 +461,46 @@ class AutonomyRun(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 
 
+class PolicyEvaluation(Base):
+    """Immutable shared policy-gate evaluation record.
+
+    The input and result JSON columns contain typed, specialization-owned
+    cores. The surrounding columns keep policy identity, subject identity,
+    hashes, rule attribution and replay provenance queryable without making
+    the epistemic and autonomy policies interchangeable.
+    """
+
+    __tablename__ = "policy_evaluations"
+    __table_args__ = (
+        UniqueConstraint(
+            "policy_id",
+            "policy_version",
+            "policy_type",
+            "policy_subject_type",
+            "policy_subject_id",
+            "input_hash",
+            name="uq_policy_evaluations_input_identity",
+        ),
+    )
+
+    policy_evaluation_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    policy_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    policy_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    policy_subject_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    policy_subject_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    observation_refs: Mapped[list] = mapped_column(JSONB, nullable=False)
+    observation_contract_versions: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    input_core: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(66), nullable=False, index=True)
+    triggered_rule_ids: Mapped[list] = mapped_column(JSONB, nullable=False)
+    result: Mapped[str] = mapped_column(String(32), nullable=False)
+    result_core: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    result_hash: Mapped[str] = mapped_column(String(66), nullable=False, index=True)
+    replay_identity: Mapped[str] = mapped_column(String(66), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
 class OEvidenceProvenanceContract(Base):
     __tablename__ = "o_evidence_provenance_contracts"
     observer_id: Mapped[str] = mapped_column(String(64), primary_key=True)
