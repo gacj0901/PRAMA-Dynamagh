@@ -36,7 +36,7 @@ reserve and settle credit alongside the existing global G12 budget. See
 
 These additions require deployment and migration `0020_user_credit` before
 activation. Local validation does not establish production registration or paid
-user execution. The operator interface remains at `/operator`.
+user execution. The technical operator interface is restored at the original root URL `/` and remains available at `/operator`.
 
 The acquisition worker preserves the Gateway response before Evidence
 normalization. The Gateway already transforms the provider response; this is

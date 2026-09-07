@@ -1,6 +1,6 @@
 # Email onboarding and internal credit
 
-A person can register with an email and password, receive 0.25 internal credit once, and submit a request without managing a payment wallet. The existing Gateway funds real acquisitions. The public anonymous route remains available with its original G12 limits. The new default frontend shows the account, available credit, requests and results; the existing technical interface is at `/operator`.
+The repository still contains an authenticated user-credit API for bounded experiments, but it is not exposed through the product frontend. The original technical operator interface is restored at `/` and remains available at `/operator`; agents should use the authenticated machine-facing API rather than a human account workspace. The existing Gateway funds real acquisitions and the public anonymous route remains available with its original G12 limits.
 
 ## Accounting contract
 
