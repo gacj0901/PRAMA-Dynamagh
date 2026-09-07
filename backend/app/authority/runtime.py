@@ -1,4 +1,4 @@
-"""Shadow-only authority checkpoint for the autonomous execution boundary."""
+"""Authority checkpoint for the autonomous execution boundary."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from app.domain.mandates import (
     Mandate,
     Decision,
     PublicManualSpendReservation,
+    AgentIdentity,
 )
 from app.epistemic.contracts import canonical_hash
 from app.policy_gate.substrate import PolicyEvaluationCore, persist_policy_evaluation
@@ -77,13 +78,15 @@ def run_pre_next_action_authority_check(
     g12_reservation: Any | None = None,
     current_runtime_action: str = "CONTINUE_TO_GATEWAY",
     throttled_constraints_satisfied: bool = False,
+    enforce: bool = False,
 ) -> AuthorityShadowCheckpoint:
-    """Evaluate and persist CD/G12/CDG composition without enforcement.
+    """Evaluate and persist CD/G12/G13 composition at the action boundary.
 
     This function is deliberately called after durable G12 reservation
-    verification and before the external Gateway request.  It writes only the
-    existing append-only policy substrate; its result is never used to block
-    the caller in this shadow gate.
+    verification and before the external Gateway request.  ``enforce=True``
+    marks the checkpoint as binding; callers must stop before network I/O when
+    the composed result is ``RESTRICT``.  The default remains diagnostic for
+    existing observation paths.
     """
 
     agent_id = run.agent_identity_id or mandate.agent_identity_id
@@ -100,21 +103,35 @@ def run_pre_next_action_authority_check(
         epistemic_id = epistemic_core.policy_evaluation_id
         epistemic_hash = epistemic_core.result_hash
     else:
-        # No E1 snapshot exists before a first acquisition.  Preserve the
-        # existing fail-closed CD semantics explicitly rather than permitting.
-        epistemic_result = "REVIEW"
-        epistemic_applicability = "MISSING"
+        # Evidence acquisition precedes the first E1 decision.  CD is therefore
+        # explicitly not applicable at this boundary; G12 and binding G13
+        # remain fully authoritative for the external acquisition action.
+        epistemic_result = "PERMIT"
+        epistemic_applicability = "NOT_APPLICABLE"
         epistemic_id = None
         epistemic_hash = None
 
-    observations = build_o_agent_stream(session, agent_id, run_id=run.run_id)
+    # G13 is longitudinal: evaluate the complete persisted O_AGENT history
+    # for this identity, including prior runs and the current run.  Passing a
+    # run scope here would silently turn the authority decision back into a
+    # per-run observation.
+    observations = build_o_agent_stream(session, agent_id)
     longitudinal_input = G13PolicyInput.from_observations(
         agent_id,
         observations,
-        trajectory_lineage_id=f"o-agent-v0:{agent_id}:run:{run.run_id}",
+        trajectory_lineage_id=f"o-agent-v0:{agent_id}",
     )
     longitudinal_core = evaluate_g13_policy(longitudinal_input)
     persist_policy_evaluation(session, longitudinal_core)
+    if enforce:
+        identity = session.get(AgentIdentity, agent_id)
+        if identity is not None:
+            identity.autonomy_state = {
+                "CONTINUE": "ACTIVE",
+                "THROTTLE": "THROTTLED",
+                "REVIEW": "REVIEW_REQUIRED",
+                "HALT": "HALTED",
+            }[longitudinal_core.result]
 
     composition_input = AuthorityCompositionInput(
         agent_id=agent_id,
@@ -136,7 +153,7 @@ def run_pre_next_action_authority_check(
         longitudinal_result_hash=longitudinal_core.result_hash,
         throttled_constraints_satisfied=throttled_constraints_satisfied,
         current_runtime_action=current_runtime_action,
-        shadow_mode=True,
+        shadow_mode=not enforce,
     )
     composition_core = evaluate_authority_composition(composition_input)
     persist_policy_evaluation(session, composition_core)

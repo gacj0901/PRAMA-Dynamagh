@@ -31,6 +31,7 @@ def _read(identity: AgentIdentity) -> dict:
         "origin": identity.origin,
         "created_at": identity.created_at,
         "status": identity.status,
+        "autonomy_state": identity.autonomy_state,
         "policy_id": identity.policy_id,
         "trajectory_version": identity.trajectory_version,
     }

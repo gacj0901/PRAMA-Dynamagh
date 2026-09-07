@@ -40,7 +40,7 @@ def append_event(session, event_type, *, ticket=None, identity_id=None, response
     event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{VERSION}:{event_type}:{logical_key}")) if logical_key else str(uuid.uuid4())
     occurred = at or utcnow()
     core = {
-        "schema_version": VERSION, "event_id": event_id, "event_type": event_type,
+        "append_only": True, "schema_version": VERSION, "event_id": event_id, "event_type": event_type,
         "response_hash": response_hash, "ticket_id": ticket.ticket_id if ticket else None,
         "agent_identity_id": identity_id, "mandate_id": mandate.mandate_id if mandate else None,
         "run_id": mandate.autonomy_run_id if mandate else None,

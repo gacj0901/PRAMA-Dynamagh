@@ -1,8 +1,7 @@
 """Authority composition helpers for the pre-next-action boundary.
 
 The composition is an explicit policy evaluation of independent authority
-inputs.  It has no production enforcement side effect; callers decide whether
-to consume the shadow result.
+inputs.  Binding callers consume the result before external action.
 """
 
 from __future__ import annotations
@@ -115,7 +114,7 @@ def evaluate_authority_composition(value: AuthorityCompositionInput) -> PolicyEv
             "current_runtime_action": value.current_runtime_action,
             "shadow_divergence": runtime_allows != allowed,
             "authority_families": ["CD", "G12", "CDG"],
-            "enforcement": "SHADOW_ONLY",
+            "enforcement": "SHADOW_ONLY" if value.shadow_mode else "BINDING",
         },
     )
 

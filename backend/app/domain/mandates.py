@@ -63,6 +63,7 @@ class AgentIdentity(Base):
     policy_id: Mapped[str | None] = mapped_column(ForeignKey("autonomy_policies.policy_id"), nullable=True, index=True)
     trajectory_version: Mapped[str] = mapped_column(String(64), nullable=False, default="g13-agent-identity-v1")
     m2m_context_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    autonomy_state: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
 
 
 class Mandate(Base):
@@ -140,6 +141,55 @@ class UsageEvent(Base):
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class AgentAuthorityProfile(Base):
+    """Versioned authority delegated by one principal to one AgentIdentity."""
+
+    __tablename__ = "agent_authority_profiles"
+    authority_profile_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    principal_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    agent_identity_id: Mapped[str] = mapped_column(ForeignKey("agent_identities.agent_id"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    allowed_intents: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    allowed_action_kinds: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    economic_budget: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    per_action_budget: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    rolling_budget: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    concurrency_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cadence_policy: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    external_execution_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    telegraph_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    anchoring_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    erc8183_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    human_review_thresholds: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False, default="agent-authority-v0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class ExecutionPermit(Base):
+    """One immutable, single-action authorization consumed at point of action."""
+
+    __tablename__ = "execution_permits"
+    permit_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    principal_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    agent_identity_id: Mapped[str] = mapped_column(ForeignKey("agent_identities.agent_id"), nullable=False, index=True)
+    mandate_id: Mapped[str] = mapped_column(ForeignKey("mandates.mandate_id"), nullable=False, index=True)
+    action_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    action_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    authority_profile_id: Mapped[str] = mapped_column(ForeignKey("agent_authority_profiles.authority_profile_id"), nullable=False)
+    g12_result: Mapped[str] = mapped_column(String(32), nullable=False)
+    g13_result: Mapped[str] = mapped_column(String(32), nullable=False)
+    decision_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    constraints: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    authority_hash: Mapped[str] = mapped_column(String(66), nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    result_hash: Mapped[str | None] = mapped_column(String(66), nullable=True)
 
 
 class PublicManualSpendLedger(Base):

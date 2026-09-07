@@ -10,6 +10,7 @@ from app.api.observer import router as observer_router
 from app.api.public_surfaces import router as public_surfaces_router
 from app.api.titular_check import router as titular_check_router
 from app.api.disclosure import router as disclosure_router
+from app.api.authority import router as authority_router
 from app.tickets.delivery import DisclosureMiddleware
 
 app = FastAPI(title="PRAMA-Dynamagh API", version="0.0.1", dependencies=[Depends(protect_user_artifact)])
@@ -22,6 +23,7 @@ app.include_router(observer_router)
 app.include_router(public_surfaces_router)
 app.include_router(titular_check_router)
 app.include_router(disclosure_router)
+app.include_router(authority_router)
 app.add_middleware(DisclosureMiddleware)
 
 
@@ -196,7 +198,7 @@ def health() -> dict:
             "fanout_max_tasks_per_mandate": competition_max_calls_per_workflow(),
             "typed_epistemic_contracts": ["CRYPTO_PRICE"],
             "typed_epistemic_runtime": "ONLY_WHERE_PERSISTED_E1_EXISTS",
-            "authority_mode": "SHADOW_ONLY",
+            "authority_mode": "BINDING",
         },
         "redis_runtime": redis_runtime_diagnostics(),
     }

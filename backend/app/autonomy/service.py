@@ -29,6 +29,8 @@ from app.domain.mandates import (
 from app.agents.identity import get_policy_identity, mandate_attribution, policy_identity_required
 from app.erc8183.evidence import replay_persisted
 from app.public_safety import M2M_MAX_WORKFLOW_USDC, reserve_autonomous_spend
+from app.domain.mandates import AgentAuthorityProfile
+from app.authority.delegated import full_autonomy_enabled, resolve_profile
 
 PAID_MIN_CADENCE_SECONDS = 900
 MODES = {"TELEGRAPH_HTTP", "TELEGRAPH_ERC8183", "REPLAY_ONLY"}
@@ -49,8 +51,8 @@ def validate_policy(values: dict) -> None:
     if mode not in MODES:
         raise ValueError("AUTONOMY_MODE_INVALID")
     cadence = int(values.get("cadence_seconds", PAID_MIN_CADENCE_SECONDS))
-    if cadence < PAID_MIN_CADENCE_SECONDS:
-        raise ValueError("AUTONOMY_CADENCE_TOO_FAST")
+    if cadence < 1:
+        raise ValueError("AUTONOMY_CADENCE_INVALID")
     if int(values.get("dedupe_window_seconds", cadence)) < cadence:
         raise ValueError("AUTONOMY_DEDUPE_WINDOW_INVALID")
     if int(values.get("max_runs_per_day", 0)) < 1 or int(values.get("max_concurrent_runs", 0)) < 1:
@@ -80,10 +82,29 @@ def _validate_template(value: object) -> None:
             _validate_template(nested)
 
 
-def execution_slot(policy: AutonomyPolicy, when: datetime) -> datetime:
+def execution_slot(policy: AutonomyPolicy, when: datetime, cadence: int | None = None) -> datetime:
     instant = when.astimezone(timezone.utc)
     seconds = int(instant.timestamp())
-    return datetime.fromtimestamp(seconds - seconds % policy.cadence_seconds, tz=timezone.utc)
+    cadence = cadence or policy.cadence_seconds
+    return datetime.fromtimestamp(seconds - seconds % cadence, tz=timezone.utc)
+
+
+def _authority_profile(session, policy: AutonomyPolicy) -> AgentAuthorityProfile | None:
+    identity = get_policy_identity(session, policy)
+    if identity is None:
+        return None
+    try:
+        return resolve_profile(session, identity.agent_id)
+    except ValueError:
+        return None
+
+
+def _effective_cadence(policy: AutonomyPolicy, profile: AgentAuthorityProfile | None) -> int:
+    if profile and profile.cadence_policy:
+        value = profile.cadence_policy.get("cadence_seconds")
+        if value is not None and int(value) >= 1:
+            return int(value)
+    return policy.cadence_seconds
 
 
 def idempotency_key(policy: AutonomyPolicy, slot: datetime) -> str:
@@ -95,6 +116,7 @@ def _event(session, run: AutonomyRun, event_type: str) -> None:
     existing = next((item for item in session.query(UsageEvent).filter_by(event_type=event_type) if item.metadata_.get("autonomy_run_id") == run.run_id), None)
     if existing is None:
         metadata = {
+            "append_only": True,
             "origin": "AUTONOMOUS",
             "agent_id": run.agent_identity_id or "",
             "agent_identity_id": run.agent_identity_id or "",
@@ -115,18 +137,26 @@ def _planned_cost(policy: AutonomyPolicy) -> Decimal:
 
 
 def _budget_reason(session, policy: AutonomyPolicy, instant: datetime, planned: Decimal) -> str | None:
+    profile = _authority_profile(session, policy)
     start, end = _day_bounds(instant)
     day_runs = session.query(AutonomyRun).filter(AutonomyRun.policy_id == policy.policy_id, AutonomyRun.scheduled_for >= start, AutonomyRun.scheduled_for < end).all()
-    if len(day_runs) >= policy.max_runs_per_day:
+    max_runs = policy.max_runs_per_day
+    if profile and profile.rolling_budget and profile.rolling_budget.get("max_runs_per_day") is not None:
+        max_runs = int(profile.rolling_budget["max_runs_per_day"])
+    if max_runs > 0 and len(day_runs) >= max_runs:
         return "DAILY_RUN_CAP"
     active = [run for run in day_runs if run.state in ACTIVE_RUN_STATES]
-    if len(active) >= policy.max_concurrent_runs:
+    concurrency = profile.concurrency_limit if profile and profile.concurrency_limit is not None else policy.max_concurrent_runs
+    if concurrency and len(active) >= concurrency:
         return "CONCURRENCY_CAP"
     spent = sum((Decimal(run.actual_cost_usdc) for run in day_runs if run.state == "COMPLETED"), Decimal("0"))
     reserved = sum((Decimal(run.planned_cost_usdc) for run in active), Decimal("0"))
-    if planned > Decimal(policy.max_usdc_per_run):
+    per_run = profile.per_action_budget if profile and profile.per_action_budget is not None else policy.max_usdc_per_run
+    if planned > Decimal(per_run):
         return "RUN_BUDGET_CAP"
-    if spent + reserved + planned > Decimal(policy.max_usdc_per_day):
+    daily = profile.rolling_budget.get("max_usdc_per_day") if profile and profile.rolling_budget else None
+    daily = Decimal(str(daily)) if daily is not None else Decimal(policy.max_usdc_per_day)
+    if spent + reserved + planned > daily:
         return "DAILY_BUDGET_CAP"
     return None
 
@@ -136,7 +166,15 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
     enabled = global_enabled() if global_switch is None else global_switch
     if not enabled or not policy.enabled or policy.state != "ACTIVE":
         return None
-    slot = execution_slot(policy, instant)
+    profile = _authority_profile(session, policy)
+    identity = get_policy_identity(session, policy)
+    if identity is not None and identity.autonomy_state in {"HALTED", "REVIEW_REQUIRED"}:
+        return None
+    if identity is not None and full_autonomy_enabled(identity.agent_id) and profile is None:
+        return None
+    if profile and not full_autonomy_enabled(identity.agent_id if identity else None):
+        return None
+    slot = execution_slot(policy, instant, _effective_cadence(policy, profile))
     key = idempotency_key(policy, slot)
     existing = session.query(AutonomyRun).filter_by(idempotency_key=key).one_or_none()
     if existing:
@@ -145,7 +183,6 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
         return None
     planned = _planned_cost(policy)
     reason = _budget_reason(session, policy, instant, planned)
-    identity = get_policy_identity(session, policy)
     run = AutonomyRun(policy_id=policy.policy_id, agent_identity_id=identity.agent_id if identity else None, scheduled_for=slot, idempotency_key=key, state="SKIPPED" if reason else "SCHEDULED", planned_cost_usdc=planned, actual_cost_usdc=Decimal("0.000000"), skip_reason=reason)
     try:
         session.add(run); session.flush()
@@ -186,39 +223,62 @@ def execute_claimed(session, run: AutonomyRun) -> str:
         except ValueError as error:
             run.state = "FAILED"; run.failure_code = str(error)[:100]; run.finished_at = now(); _event(session, run, "AUTONOMY_RUN_FAILED")
             return run.state
+        if not full_autonomy_enabled(identity.agent_id):
+            run.state = "FAILED"; run.failure_code = "FULL_AUTONOMY_DISABLED"; run.finished_at = now(); _event(session, run, "AUTONOMY_RUN_FAILED")
+            return run.state
+        try:
+            authority_profile = resolve_profile(session, identity.agent_id)
+        except ValueError as error:
+            run.state = "FAILED"; run.failure_code = str(error)[:100]; run.finished_at = now(); _event(session, run, "AUTONOMY_RUN_FAILED")
+            return run.state
+        if authority_profile.economic_budget is None or not authority_profile.external_execution_allowed or not authority_profile.telegraph_allowed:
+            run.state = "FAILED"; run.failure_code = "AUTHORITY_ACTION_NOT_ALLOWED"; run.finished_at = now(); _event(session, run, "AUTONOMY_RUN_FAILED")
+            return run.state
         run.agent_identity_id = identity.agent_id
         mandate = Mandate(
             actor_id=identity.agent_id, agent_id=identity.agent_id, agent_identity_id=identity.agent_id, client_id="prama-internal",
             text=instruction.strip(), mandate_type="AUTONOMOUS",
-            constraints={"title": title, "autonomy_policy_id": policy.policy_id, "autonomy_run_id": run.run_id},
+            constraints={"title": title, "autonomy_policy_id": policy.policy_id, "autonomy_run_id": run.run_id, "authority_profile_id": authority_profile.authority_profile_id},
             max_budget_usdc=Decimal(run.planned_cost_usdc), status=MandateStatus.RECEIVED.value,
             origin="AUTONOMOUS", autonomy_policy_id=policy.policy_id, autonomy_run_id=run.run_id,
         )
         session.add(mandate); session.flush()
-        # Bounded paid autonomy shares the G12 global daily reservation ledger.
-        # Legacy over-budget policies may still be observed in the scheduler,
-        # but the worker will fail them closed before any Gateway request.
-        if Decimal(run.planned_cost_usdc) <= M2M_MAX_WORKFLOW_USDC:
-            try:
-                reserve_autonomous_spend(session, mandate.mandate_id, Decimal(run.planned_cost_usdc))
-            except Exception as error:
-                code = getattr(error, "detail", str(error))
-                mandate.status = MandateStatus.FAILED.value
-                session.add(MandateTransition(mandate_id=mandate.mandate_id, from_status=MandateStatus.RECEIVED.value, to_status=MandateStatus.FAILED.value, reason=str(code)[:255]))
-                run.state = "FAILED"; run.failure_code = str(code)[:100]; run.finished_at = now(); _event(session, run, "AUTONOMY_RUN_FAILED")
-                return run.state
-        acquisition = AcquisitionTask(
-            mandate_id=mandate.mandate_id, query=mandate.text, required=True,
-            status=AcquisitionStatus.QUEUED.value, ordinal=0,
-        )
-        session.add(acquisition); session.flush()
+        # Every autonomous run is reserved against the delegated profile. The
+        # legacy M2M cap remains only as a fallback for non-profile rails.
+        try:
+            reserve_autonomous_spend(
+                session,
+                mandate.mandate_id,
+                Decimal(run.planned_cost_usdc),
+                maximum=Decimal(authority_profile.economic_budget),
+            )
+        except Exception as error:
+            code = getattr(error, "detail", str(error))
+            mandate.status = MandateStatus.FAILED.value
+            session.add(MandateTransition(mandate_id=mandate.mandate_id, from_status=MandateStatus.RECEIVED.value, to_status=MandateStatus.FAILED.value, reason=str(code)[:255]))
+            run.state = "FAILED"; run.failure_code = str(code)[:100]; run.finished_at = now(); _event(session, run, "AUTONOMY_RUN_FAILED")
+            return run.state
+        acquisitions = policy.mandate_template.get("acquisitions")
+        if not isinstance(acquisitions, list) or not acquisitions:
+            acquisitions = [{"query": mandate.text, "requested_intent": None}]
+        tasks = []
+        for ordinal, item in enumerate(acquisitions):
+            if not isinstance(item, dict) or not isinstance(item.get("query", mandate.text), str) or not item.get("query", mandate.text).strip():
+                run.state = "FAILED"; run.failure_code = "MANDATE_TEMPLATE_INVALID"; run.finished_at = now(); _event(session, run, "AUTONOMY_RUN_FAILED"); return run.state
+            task = AcquisitionTask(
+                mandate_id=mandate.mandate_id, query=item.get("query", mandate.text).strip(),
+                requested_intent=item.get("requested_intent") if isinstance(item.get("requested_intent"), str) else None,
+                required=bool(item.get("required", True)), status=AcquisitionStatus.QUEUED.value, ordinal=ordinal,
+            )
+            tasks.append(task)
+        session.add_all(tasks); session.flush()
         metadata = mandate_attribution(mandate)
         metadata.update({"autonomy_run_id": run.run_id, "autonomy_policy_id": policy.policy_id})
         queued_metadata = {**metadata}
         session.add_all([
             MandateTransition(mandate_id=mandate.mandate_id, from_status=None, to_status=MandateStatus.RECEIVED.value, reason="autonomy scheduler due slot"),
             UsageEvent(mandate_id=mandate.mandate_id, event_type="MANDATE_CREATED", metadata_=metadata),
-            UsageEvent(mandate_id=mandate.mandate_id, acquisition_id=acquisition.acquisition_id, event_type="ACQUISITION_QUEUED", metadata_=queued_metadata),
+            *[UsageEvent(mandate_id=mandate.mandate_id, acquisition_id=task.acquisition_id, event_type="ACQUISITION_QUEUED", metadata_=queued_metadata) for task in tasks],
         ])
         run.mandate_id = mandate.mandate_id; run.state = "RUNNING"; run.skip_reason = None
         return "ACQUISITION_QUEUED"

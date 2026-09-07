@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from app.authority.composition import (
@@ -61,6 +63,15 @@ def test_missing_longitudinal_trajectory_preserves_g13_review_semantics():
 
     assert result.result == "RESTRICT"
     assert result.result_core["authority_reason"] == "G13_REVIEW"
+
+
+def test_binding_composition_marks_g13_as_enforced():
+    value = _input(cdg="HALT")
+    value = replace(value, shadow_mode=False)
+    result = evaluate_authority_composition(value)
+    assert result.result == "RESTRICT"
+    assert result.result_core["authority_reason"] == "G13_HALT"
+    assert result.result_core["enforcement"] == "BINDING"
 
 
 def test_missing_epistemic_input_is_explicit_and_not_permission():
