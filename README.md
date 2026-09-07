@@ -210,11 +210,22 @@ The acquisition result is then converted into a PRAMA-Dynamagh Evidence artifact
 
 ## PRAMAgraph
 
-PRAMAgraph is the structural evaluation layer used by PRAMA-Dynamagh.
+PRAMA-Dynamagh keeps the deterministic Evidence Admission Gate separate from
+the PRAMAgraph observation layer.
 
-Its role is not to replace provenance or provider verification.
+The Evidence Admission Gate performs the minimal deterministic immediate
+admission checks used by the existing workflow.
 
-Its role is to determine whether available evidence is structurally admissible for the decision being constructed.
+PRAMAgraph currently includes **O_EVIDENCE_PROVENANCE v0.1**, running the
+certified PRAMA Protokol v0.3.0 as a causal structural
+provenance-trajectory observer in shadow mode.
+
+The observer reads persisted Mandate → AcquisitionTask → TelegraphCall →
+Evidence lineage and does not determine admission or alter the Decision Gate.
+Its coordinates do not currently determine admissibility, and they make no
+claim about truth, viability, or forecasting.
+
+This is not the complete PRAMAgraph research framework.
 
 This preserves an important distinction:
 
