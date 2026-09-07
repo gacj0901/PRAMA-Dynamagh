@@ -609,3 +609,16 @@ def build_observation_stream(*args: Any, **kwargs: Any) -> list[OAgentObservatio
     """Compatibility alias for callers that do not need the O_AGENT name."""
 
     return build_o_agent_stream(*args, **kwargs)
+
+
+def build_o_agent_disclosure(session: Session, agent_identity_id: str, *, as_of: datetime) -> dict:
+    """Additive O_AGENT dimension; preserve the frozen o-agent-v0 fact schema."""
+    from app.agents.disclosure_memory import build_disclosure_memory
+    if session.get(AgentIdentity, agent_identity_id) is None:
+        raise ValueError("AGENT_IDENTITY_MISSING")
+    return {
+        "observer": "O_AGENT", "dimension": "DISCLOSURE_COMPLIANCE",
+        "agent_identity_id": agent_identity_id,
+        "memory": build_disclosure_memory(session, agent_identity_id, as_of=as_of),
+        "decision_gate_integration": "NONE", "g13_enforcement": "UNCHANGED",
+    }

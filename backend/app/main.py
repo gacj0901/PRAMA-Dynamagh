@@ -8,6 +8,9 @@ from app.api.m2m import router as m2m_router
 from app.api.agents import router as agents_router
 from app.api.observer import router as observer_router
 from app.api.public_surfaces import router as public_surfaces_router
+from app.api.titular_check import router as titular_check_router
+from app.api.disclosure import router as disclosure_router
+from app.tickets.delivery import DisclosureMiddleware
 
 app = FastAPI(title="PRAMA-Dynamagh API", version="0.0.1", dependencies=[Depends(protect_user_artifact)])
 app.include_router(users_router)
@@ -17,6 +20,9 @@ app.include_router(m2m_router)
 app.include_router(agents_router)
 app.include_router(observer_router)
 app.include_router(public_surfaces_router)
+app.include_router(titular_check_router)
+app.include_router(disclosure_router)
+app.add_middleware(DisclosureMiddleware)
 
 
 @app.post("/v1/erc8183/jobs", status_code=status.HTTP_404_NOT_FOUND, include_in_schema=False)

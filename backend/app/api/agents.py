@@ -1,6 +1,7 @@
 """Narrow authenticated creation and read-only inspection of M2M subjects."""
 
 import hmac
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -61,6 +62,15 @@ def create_agent_identity(
         raise HTTPException(status_code=409, detail="AGENT_IDENTITY_EXISTS") from error
     session.refresh(identity)
     return _read(identity)
+
+
+@router.get("/{agent_id}/disclosure")
+def agent_disclosure(agent_id: str, as_of: datetime | None = None,
+                     session: Session = Depends(get_session),
+                     m2m_context_id: str = Depends(require_m2m_auth)):
+    get_agent_identity(agent_id, session, m2m_context_id)
+    from app.agents.observation import build_o_agent_disclosure
+    return build_o_agent_disclosure(session, agent_id, as_of=as_of or datetime.now(timezone.utc))
 
 
 @router.get("/{agent_id}")

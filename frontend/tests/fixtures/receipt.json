@@ -1,0 +1,15 @@
+{
+  "issuer": "PRAMA-Dynamagh",
+  "response_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "created_at": "2026-09-07T12:00:00Z",
+  "workflow": {"origin": "M2M", "status": "TICKETED", "mandate_type": "GENERAL"},
+  "acquisitions": [{"status": "SUCCEEDED", "intent": "CRYPTO_PRICE", "requested_intent": "CRYPTO_PRICE", "miner": "Fixture intelligence provider", "cost_usdc": "0.010000", "duration_ms": 0}],
+  "cost_usdc": "0.010000",
+  "evidence": [{"evidence_id": "fixture-evidence", "admissibility": "ADMITTED", "provenance_status": "VERIFIED", "source_intent": "CRYPTO_PRICE", "content_hash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],
+  "evaluation": {"structural_state": "STRUCTURALLY_ADMISSIBLE", "limitations": [], "contradictions": []},
+  "decision": {"state": "PERMIT", "reason_codes": ["ALL_REQUIRED_EVIDENCE_ADMITTED"]},
+  "limitations": [],
+  "ticket": {"schema_version": "prama.ticket.v0", "anchor_status": "LOCAL_ONLY"},
+  "verification": {"status": "VALID", "payload_hash_match": true, "source_artifacts_match": true, "reconstructed_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "replay": {"status": "VALID"}
+}

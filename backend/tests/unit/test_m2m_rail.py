@@ -50,6 +50,7 @@ def test_m2m_rail_has_no_forbidden_capability_routes():
         ("/v1/m2m/mandates", "POST"),
         ("/v1/m2m/mandates/{mandate_id}", "GET"),
         ("/v1/m2m/tickets/{ticket_id}", "GET"),
+        ("/v1/m2m/titular-check/presented", "POST"),
     }
     for path, method in (
         ("/v1/m2m/gateway", "POST"),

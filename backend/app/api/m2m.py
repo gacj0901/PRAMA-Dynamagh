@@ -39,6 +39,7 @@ from app.persistence.database import get_session
 from app.public_safety import m2m_max_workflow_usdc, reserve_m2m_spend
 from app.competition import competition_max_calls_per_workflow
 from app.workers.tasks import execute_acquisition
+from app.tickets.public_identity import titular_check_contract
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/m2m", tags=["m2m"])
@@ -79,6 +80,7 @@ class M2MMandateRead(BaseModel):
     updated_at: datetime
     acquisitions: list[dict[str, Any]] = Field(default_factory=list)
     lineage: dict[str, Any] = Field(default_factory=dict)
+    titular_check: dict[str, Any]
 
 
 def _m2m_context_id(token: str) -> str:
@@ -133,7 +135,9 @@ def _lineage(session: Session, mandate_id: str) -> dict[str, Any]:
 
 def _read_mandate(session: Session, mandate: Mandate, idempotency_key: str | None = None) -> dict[str, Any]:
     tasks = session.query(AcquisitionTask).filter_by(mandate_id=mandate.mandate_id).order_by(AcquisitionTask.ordinal).all()
+    ticket = session.query(Ticket).filter_by(mandate_id=mandate.mandate_id).order_by(Ticket.created_at.desc()).first()
     return {
+        "titular_check": titular_check_contract(ticket),
         "mandate_id": mandate.mandate_id,
         "idempotency_key": idempotency_key,
         "agent_id": mandate.agent_id,
@@ -324,6 +328,7 @@ def get_m2m_ticket(
         "origin": mandate.origin,
         "schema_version": ticket.schema_version,
         "ticket_hash": ticket.ticket_hash,
+        "titular_check": titular_check_contract(ticket),
         "hash_algorithm": ticket.hash_algorithm,
         "anchor_status": ticket.anchor_status,
         "decision": None
