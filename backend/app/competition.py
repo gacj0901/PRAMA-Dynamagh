@@ -38,7 +38,7 @@ def competition_max_calls_per_workflow() -> int:
     whether each task may contact Telegraph.
     """
 
-    raw = os.environ.get("COMPETITION_MAX_CALLS_PER_WORKFLOW")
+    raw = os.environ.get("FANOUT_MAX_TASKS_PER_MANDATE", os.environ.get("COMPETITION_MAX_CALLS_PER_WORKFLOW"))
     if raw is None:
         return DEFAULT_MAX_CALLS_PER_WORKFLOW
     try:
@@ -60,7 +60,7 @@ def competition_budget_profile() -> dict[str, Any]:
         "COMPETITION_MAX_WORKFLOW_USDC",
         public_max_mandate_usdc(),
     )
-    effective_workflow = min(configured_workflow, public_max_mandate_usdc(), M2M_MAX_WORKFLOW_USDC)
+    effective_workflow = min(configured_workflow, public_max_mandate_usdc())
     configured_daily = _configured_decimal(
         "COMPETITION_DAILY_SPEND_CAP_USDC",
         public_daily_spend_cap_usdc(),
@@ -73,6 +73,8 @@ def competition_budget_profile() -> dict[str, Any]:
         "effective_daily_spend_cap_usdc": f"{effective_daily:.6f}",
         "max_single_acquisition_usdc": f"{MAX_SINGLE_ACQUISITION_USDC:.6f}",
         "max_real_calls_per_workflow": competition_max_calls_per_workflow(),
+        "fanout_max_tasks_per_mandate": competition_max_calls_per_workflow(),
+        "m2m_max_workflow_usdc": f"{M2M_MAX_WORKFLOW_USDC:.6f}",
         "multi_intent_enabled": competition_max_calls_per_workflow() > 1,
         "g12_hard_cap_applied": effective_workflow < configured_workflow,
         "operator_approval_required_for_raise": True,

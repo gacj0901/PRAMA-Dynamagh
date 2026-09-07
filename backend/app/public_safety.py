@@ -22,10 +22,10 @@ from app.domain.mandates import PublicManualSpendLedger, PublicManualSpendReserv
 from app.redis_config import redis_url
 
 _MICRO = Decimal("0.000001")
-MAX_WORKFLOW_SPEND_USDC = Decimal("0.500000")
-MAX_DAILY_SPEND_CAP_USDC = Decimal("20.000000")
-MAX_SINGLE_ACQUISITION_USDC = Decimal("0.050000")
-M2M_MAX_WORKFLOW_USDC = MAX_WORKFLOW_SPEND_USDC
+MAX_WORKFLOW_SPEND_USDC = Decimal("0.050000")
+MAX_DAILY_SPEND_CAP_USDC = Decimal("1.000000")
+MAX_SINGLE_ACQUISITION_USDC = Decimal("0.010000")
+M2M_MAX_WORKFLOW_USDC = Decimal("0.010000")
 logger = logging.getLogger(__name__)
 
 
@@ -49,7 +49,7 @@ def public_daily_spend_cap_usdc() -> Decimal:
 
 def global_daily_spend_cap_usdc() -> Decimal:
     """Return the one shared daily cap for manual, M2M, and autonomous spend."""
-    fallback = os.environ.get("PUBLIC_DAILY_SPEND_CAP_USDC", "20.00")
+    fallback = os.environ.get("PUBLIC_DAILY_SPEND_CAP_USDC", "1.00")
     return min(_decimal_setting("GLOBAL_DAILY_SPEND_CAP_USDC", fallback), MAX_DAILY_SPEND_CAP_USDC)
 
 
@@ -65,12 +65,12 @@ def m2m_max_workflow_usdc() -> Decimal:
         raise RuntimeError("M2M_MAX_WORKFLOW_USDC_INVALID") from error
     if configured <= 0 or configured.as_tuple().exponent < -6:
         raise RuntimeError("M2M_MAX_WORKFLOW_USDC_INVALID")
-    return min(configured.quantize(_MICRO), MAX_WORKFLOW_SPEND_USDC)
+    return min(configured.quantize(_MICRO), M2M_MAX_WORKFLOW_USDC)
 
 
 def public_rate_limit() -> tuple[int, int]:
     try:
-        limit = int(os.environ.get("PUBLIC_MANDATE_RATE_LIMIT", "3"))
+        limit = int(os.environ.get("PUBLIC_MANDATE_RATE_LIMIT", "5"))
         window = int(os.environ.get("PUBLIC_MANDATE_RATE_WINDOW_SECONDS", "3600"))
     except ValueError as error:
         raise RuntimeError("PUBLIC_MANDATE_RATE_LIMIT_INVALID") from error

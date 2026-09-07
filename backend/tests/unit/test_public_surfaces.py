@@ -57,7 +57,7 @@ def test_public_activity_is_aggregate_only_and_origin_scoped():
     assert result["autonomous_runs"] == 1
     assert result["public_spend_usdc"] == "0.001000"
     assert result["scope"]["test_classification"] == "NOT_PERSISTED_SEPARATELY"
-    assert result["budget_profile"]["effective_max_usdc_per_workflow"] == "0.500000"
+    assert result["budget_profile"]["effective_max_usdc_per_workflow"] == "0.050000"
     assert result["budget_profile"]["max_real_calls_per_workflow"] == 5
     assert result["budget_profile"]["multi_intent_enabled"] is True
 
@@ -69,8 +69,8 @@ def test_competition_budget_profile_reports_authorized_g12_cap(monkeypatch):
     result = competition_budget_profile()
 
     assert result["configured_max_usdc_per_workflow"] == "0.500000"
-    assert result["effective_max_usdc_per_workflow"] == "0.500000"
-    assert result["g12_hard_cap_applied"] is False
+    assert result["effective_max_usdc_per_workflow"] == "0.050000"
+    assert result["g12_hard_cap_applied"] is True
 
 
 def test_ticket_summary_never_returns_mandate_text_or_raw_provider_payload():
