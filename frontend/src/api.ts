@@ -200,6 +200,52 @@ export interface MandateDetails {
   timeline: Timeline | null;
 }
 
+export interface PublicActivity {
+  scope: {
+    included_origins: string[];
+    excluded_origins: string[];
+    test_classification: string;
+  };
+  real_users: number;
+  workflows_started: number;
+  workflows_completed: number;
+  returning_users: number;
+  telegraph_calls: number;
+  telegraph_successful_calls: number;
+  real_miners_used: string[];
+  intents_used: string[];
+  multi_intent_workflows: number;
+  evidence_created: number;
+  decisions_emitted: number;
+  tickets_emitted: number;
+  autonomous_runs: number;
+  completion_rate: number;
+  average_calls_per_workflow: number;
+  average_evidence_per_workflow: number;
+  average_latency_ms: number | null;
+  public_spend_usdc: string | number;
+}
+
+export interface PublicTicketSummary {
+  share_schema: string;
+  workflow: {
+    mandate_id: string;
+    mandate_type: string;
+    origin: string;
+    status: string;
+    summary: string;
+    created_at: string | null;
+  };
+  acquisitions: Array<{ acquisition_id: string; status: string; intent: string | null; miner: string | null; cost_usdc: string; duration_ms: number | null }>;
+  evidence: Array<{ evidence_id: string; admissibility: string; provenance_status: string; source_intent: string | null; content_hash: string }>;
+  evaluation: { structural_state: string; limitations: string[]; contradictions: string[] } | null;
+  decision: { state: string; reason_codes: string[] } | null;
+  ticket: { ticket_id: string; schema_version: string; ticket_hash: string; anchor_status: string; created_at: string | null };
+  limitations: string[];
+  verification: { status: string; url: string };
+  replay: { status: string; url: string };
+}
+
 const API_PREFIX = "/api";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -230,6 +276,8 @@ export const api = {
   policies: () => request<AutonomyPolicy[]>("/v1/autonomy/policies"),
   runs: () => request<AutonomyRun[]>("/v1/autonomy/runs"),
   autonomy: () => request<AutonomyStatus>("/v1/autonomy/status"),
+  activity: () => request<PublicActivity>("/v1/public/activity"),
+  ticketShare: (ticketId: string) => request<PublicTicketSummary>(`/v1/tickets/${ticketId}/share`),
   lineage: (jobId: string) => optional<Lineage>(`/v1/erc8183/jobs/${jobId}/lineage`),
   mandateDetails: async (mandateId: string): Promise<MandateDetails> => {
     const mandate = await request<Mandate>(`/v1/mandates/${mandateId}`);
