@@ -17,7 +17,7 @@ from app.epistemic.contracts import canonical_hash
 
 
 POLICY_GATE_SUBSTRATE_VERSION = "policy-gate-substrate-v0.1"
-POLICY_TYPES = frozenset({"EPISTEMIC_DECISION", "STRUCTURAL_AUTONOMY"})
+POLICY_TYPES = frozenset({"EPISTEMIC_DECISION", "STRUCTURAL_AUTONOMY", "AUTHORITY_COMPOSITION"})
 
 
 class PolicyInputTypeError(ValueError):

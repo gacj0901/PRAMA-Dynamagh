@@ -2,16 +2,18 @@ import json, os
 from time import sleep
 from datetime import datetime, timezone
 from decimal import Decimal
+import logging
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 import redis
 from app.workers.celery_app import celery_app
 from app.persistence.database import SessionLocal
-from app.domain.mandates import AcquisitionTask, AcquisitionStatus, AnchorAttempt, Mandate, MandateStatus, TelegraphCall, Ticket, UsageEvent, Evidence, StructuralEvaluation, Decision
+from app.domain.mandates import AcquisitionTask, AcquisitionStatus, AnchorAttempt, AutonomyRun, Mandate, MandateStatus, TelegraphCall, Ticket, UsageEvent, Evidence, StructuralEvaluation, Decision
 from app.domain.state_machine import transition_mandate
 from app.pramagraph.evaluation import classify, decide, digest
 from app.tickets.service import issue as issue_ticket
 from app.autonomy.service import claim_run, execute_claimed, finalize_http_run, recover_runs, schedule_due
+from app.authority.runtime import run_pre_next_action_authority_check
 from app.domain.mandates import AutonomyPolicy
 from app.agents.identity import mandate_attribution
 from app.public_safety import (
@@ -22,6 +24,8 @@ from app.public_safety import (
     verify_spend_reservation,
 )
 from app.redis_config import redis_url
+
+logger = logging.getLogger(__name__)
 
 def now(): return datetime.now(timezone.utc)
 
@@ -104,6 +108,30 @@ def execute_acquisition(self, mandate_id: str, acquisition_id: str):
             paid_reservation = True
         s.add(UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id, event_type="TELEGRAPH_REQUEST", metadata_=_attribution(mandate)))
         s.commit()
+        if mandate.origin == "AUTONOMOUS":
+            try:
+                run = s.query(AutonomyRun).filter_by(mandate_id=mandate_id).one_or_none()
+                if run is None:
+                    raise RuntimeError("AUTONOMY_RUN_MISSING")
+                run_pre_next_action_authority_check(
+                    s,
+                    mandate=mandate,
+                    acquisition=task,
+                    run=run,
+                    g12_authorized=paid_reservation,
+                    g12_reservation=reservation if paid_reservation else None,
+                )
+                s.commit()
+            except Exception as error:
+                # Shadow evaluation must never change the already validated
+                # execution path.  The failure is observable, but Gateway
+                # execution remains governed by the existing G12 checks.
+                s.rollback()
+                logger.warning(
+                    "PRE_NEXT_ACTION_AUTHORITY_CHECK_FAILED run_mandate_id=%s error=%s",
+                    mandate_id,
+                    type(error).__name__,
+                )
         data = json.dumps({"query": task.query, "context": {}, "causal_request_id": mandate_id, "budget_usdc": str(remaining)}).encode()
         req = Request(os.environ["GATEWAY_URL"] + "/ask", data=data, headers={"content-type": "application/json"}, method="POST")
         network_attempted = True
