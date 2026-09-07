@@ -8,7 +8,7 @@ from app.users.models import UserCreditAccount, UserCreditLedger, UserMandate
 
 def welcome_amount():
     try:
-        amount=Decimal(os.environ.get('WELCOME_CREDIT_USDC','0.25'))
+        amount=Decimal(os.environ.get('WELCOME_CREDIT_USDC','0.05'))
         if not amount.is_finite() or amount<=0 or amount.as_tuple().exponent < -6: raise ValueError()
         return amount.quantize(Decimal('0.000001'))
     except (ValueError,InvalidOperation):raise RuntimeError('WELCOME_CREDIT_INVALID') from None

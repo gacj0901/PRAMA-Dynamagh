@@ -31,7 +31,7 @@ USER-origin artifacts are omitted from anonymous mandate listings and public sha
 
 ## Deployment
 
-Additive migration `0020_user_credit` follows `0019_shared_policy_gate`. Set API pre-deploy command to `python -m alembic upgrade head`; deploy API and worker from the same commit before enabling `USER_ONBOARDING_ENABLED=true`. `WELCOME_CREDIT_USDC` defaults to 0.25; changing it affects only future identities, not existing grants. `USER_WEB_ORIGINS` lists exact allowed browser origins, defaulting to the production frontend. Cookies require HTTPS. Disabling new registrations/submissions does not disable settlement of already reserved user mandates. Roll back by disabling the module and restoring the matching UI; do not destroy or downgrade its ledger. No Gateway variable or payment code changes are needed.
+Additive migration `0020_user_credit` follows `0019_shared_policy_gate`. Set API pre-deploy command to `python -m alembic upgrade head`; deploy API and worker from the same commit before enabling `USER_ONBOARDING_ENABLED=true`. `WELCOME_CREDIT_USDC` defaults to 0.05 internally, displayed as 5 credits (1 credit = 0.01 internal USDC); changing it affects only future identities, not existing grants. `USER_WEB_ORIGINS` lists exact allowed browser origins, defaulting to the production frontend. Cookies require HTTPS. Disabling new registrations/submissions does not disable settlement of already reserved user mandates. Roll back by disabling the module and restoring the matching UI; do not destroy or downgrade its ledger. No Gateway variable or payment code changes are needed.
 
 ## Out of scope
 
