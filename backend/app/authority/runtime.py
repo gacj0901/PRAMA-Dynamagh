@@ -32,7 +32,7 @@ from app.policy_gate.substrate import PolicyEvaluationCore, persist_policy_evalu
 
 logger = logging.getLogger(__name__)
 RUNTIME_CHECKPOINT_VERSION = "pre-next-action-authority-check-v0.1"
-G13_ENFORCEMENT_WINDOW_SIZE = 64
+G13_ENFORCEMENT_WINDOW_SIZE = 16
 G13_PRE_ACTION_EXPECTED_MISSING = (
     "EVIDENCE_NOT_PRESENT",
     "EVALUATION_NOT_PRESENT",
