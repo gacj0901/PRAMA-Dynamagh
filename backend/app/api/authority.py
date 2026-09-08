@@ -11,7 +11,7 @@ router = APIRouter(prefix="/v1/authority", tags=["delegated-authority"])
 
 
 def _read(profile):
-    return {key: getattr(profile, key) for key in ("authority_profile_id", "principal_id", "agent_identity_id", "status", "valid_from", "valid_until", "allowed_intents", "allowed_action_kinds", "economic_budget", "per_action_budget", "rolling_budget", "concurrency_limit", "cadence_policy", "external_execution_allowed", "telegraph_allowed", "anchoring_allowed", "erc8183_allowed", "human_review_thresholds", "policy_version", "created_at", "updated_at")}
+    return {key: getattr(profile, key) for key in ("authority_profile_id", "principal_id", "agent_identity_id", "status", "valid_from", "valid_until", "allowed_intents", "allowed_action_kinds", "economic_budget", "per_action_budget", "rolling_budget", "concurrency_limit", "cadence_policy", "external_execution_allowed", "telegraph_allowed", "anchoring_allowed", "erc8183_allowed", "human_review_thresholds", "unlimited_budget", "unlimited_execution_rate", "policy_version", "created_at", "updated_at")}
 
 
 # AUTHORITY_WRITE_API_DEFERRED: true. The existing M2M token identifies an

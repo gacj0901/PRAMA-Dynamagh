@@ -229,7 +229,8 @@ def test_shadow_g13_is_persisted_for_real_run_artifacts(pipeline, monkeypatch, c
         s.add(policy);s.flush()
         identity=AgentIdentity(agent_id=str(uuid.uuid4()),origin='INTERNAL_AUTONOMY',status='ACTIVE',policy_id=policy.policy_id,name='Synthetic shadow agent')
         s.add(identity);s.flush()
-        s.add(AgentAuthorityProfile(principal_id='track3-test-principal',agent_identity_id=identity.agent_id,status='ACTIVE',valid_from=datetime.now(timezone.utc)-timedelta(seconds=1),allowed_intents=[],allowed_action_kinds=[],economic_budget=Decimal('0.01'),per_action_budget=Decimal('0.01'),rolling_budget=None,concurrency_limit=1,cadence_policy=None,external_execution_allowed=True,telegraph_allowed=True,anchoring_allowed=False,erc8183_allowed=False,human_review_thresholds={},policy_version='agent-authority-v0'));s.flush()
+        from app.authority.profiles import compute_authority_hash
+        profile=AgentAuthorityProfile(principal_id='track3-test-principal',agent_identity_id=identity.agent_id,version=1,created_by='pytest',status='ACTIVE',valid_from=datetime.now(timezone.utc)-timedelta(seconds=1),allowed_intents=[],allowed_action_kinds=[],economic_budget=Decimal('0.01'),per_action_budget=Decimal('0.01'),rolling_budget=None,concurrency_limit=1,cadence_policy=None,external_execution_allowed=True,telegraph_allowed=True,anchoring_allowed=False,erc8183_allowed=False,human_review_thresholds={},policy_version='agent-authority-v0');profile.authority_hash=compute_authority_hash(profile);s.add(profile);s.flush()
         run=AutonomyRun(policy_id=policy.policy_id,agent_identity_id=identity.agent_id,scheduled_for=datetime.now(timezone.utc),idempotency_key=uuid.uuid4().hex,state='COMPLETED',planned_cost_usdc=Decimal('0.01'),actual_cost_usdc=Decimal('0'),mandate_id=mid)
         s.add(run);s.flush()
         mandate=s.get(Mandate,mid);mandate.agent_identity_id=identity.agent_id;mandate.autonomy_run_id=run.run_id

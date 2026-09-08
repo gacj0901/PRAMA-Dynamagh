@@ -176,6 +176,8 @@ class AgentAuthorityProfile(Base):
     max_executions_per_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
     execution_window_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     review_required_above_usdc: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    unlimited_budget: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    unlimited_execution_rate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     rolling_budget: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     concurrency_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cadence_policy: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
@@ -219,7 +221,7 @@ class ExecutionPermit(Base):
 
     __tablename__ = "execution_permits"
     permit_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    principal_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    principal_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     agent_identity_id: Mapped[str] = mapped_column(ForeignKey("agent_identities.agent_id"), nullable=False, index=True)
     mandate_id: Mapped[str] = mapped_column(ForeignKey("mandates.mandate_id"), nullable=False, index=True)
     action_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)

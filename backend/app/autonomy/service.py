@@ -100,6 +100,8 @@ def _authority_profile(session, policy: AutonomyPolicy) -> AgentAuthorityProfile
 
 
 def _effective_cadence(policy: AutonomyPolicy, profile: AgentAuthorityProfile | None) -> int:
+    if profile and profile.unlimited_execution_rate:
+        return 1
     if profile and profile.cadence_policy:
         value = profile.cadence_policy.get("cadence_seconds")
         if value is not None and int(value) >= 1:
@@ -132,8 +134,10 @@ def _day_bounds(instant: datetime) -> tuple[datetime, datetime]:
     return start, start + timedelta(days=1)
 
 
-def _planned_cost(policy: AutonomyPolicy) -> Decimal:
-    return Decimal("0.000000") if policy.acquisition_mode == "REPLAY_ONLY" else Decimal(policy.max_usdc_per_run)
+def _planned_cost(policy: AutonomyPolicy, profile: AgentAuthorityProfile | None = None) -> Decimal:
+    if policy.acquisition_mode == "REPLAY_ONLY" or profile and profile.unlimited_budget:
+        return Decimal("0.000000")
+    return Decimal(policy.max_usdc_per_run)
 
 
 def _budget_reason(session, policy: AutonomyPolicy, instant: datetime, planned: Decimal) -> str | None:
@@ -143,7 +147,7 @@ def _budget_reason(session, policy: AutonomyPolicy, instant: datetime, planned: 
     max_runs = policy.max_runs_per_day
     if profile and profile.rolling_budget and profile.rolling_budget.get("max_runs_per_day") is not None:
         max_runs = int(profile.rolling_budget["max_runs_per_day"])
-    if max_runs > 0 and len(day_runs) >= max_runs:
+    if not (profile and profile.unlimited_execution_rate) and max_runs > 0 and len(day_runs) >= max_runs:
         return "DAILY_RUN_CAP"
     active = [run for run in day_runs if run.state in ACTIVE_RUN_STATES]
     concurrency = profile.concurrency_limit if profile and profile.concurrency_limit is not None else policy.max_concurrent_runs
@@ -151,13 +155,14 @@ def _budget_reason(session, policy: AutonomyPolicy, instant: datetime, planned: 
         return "CONCURRENCY_CAP"
     spent = sum((Decimal(run.actual_cost_usdc) for run in day_runs if run.state == "COMPLETED"), Decimal("0"))
     reserved = sum((Decimal(run.planned_cost_usdc) for run in active), Decimal("0"))
-    per_run = profile.per_action_budget if profile and profile.per_action_budget is not None else policy.max_usdc_per_run
-    if planned > Decimal(per_run):
-        return "RUN_BUDGET_CAP"
-    daily = profile.rolling_budget.get("max_usdc_per_day") if profile and profile.rolling_budget else None
-    daily = Decimal(str(daily)) if daily is not None else Decimal(policy.max_usdc_per_day)
-    if spent + reserved + planned > daily:
-        return "DAILY_BUDGET_CAP"
+    if not (profile and profile.unlimited_budget):
+        per_run = profile.per_action_budget if profile and profile.per_action_budget is not None else policy.max_usdc_per_run
+        if planned > Decimal(per_run):
+            return "RUN_BUDGET_CAP"
+        daily = profile.rolling_budget.get("max_usdc_per_day") if profile and profile.rolling_budget else None
+        daily = Decimal(str(daily)) if daily is not None else Decimal(policy.max_usdc_per_day)
+        if spent + reserved + planned > daily:
+            return "DAILY_BUDGET_CAP"
     return None
 
 
@@ -181,7 +186,7 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
         return existing
     if policy.next_run_at and instant < policy.next_run_at:
         return None
-    planned = _planned_cost(policy)
+    planned = _planned_cost(policy, profile)
     reason = _budget_reason(session, policy, instant, planned)
     run = AutonomyRun(policy_id=policy.policy_id, agent_identity_id=identity.agent_id if identity else None, scheduled_for=slot, idempotency_key=key, state="SKIPPED" if reason else "SCHEDULED", planned_cost_usdc=planned, actual_cost_usdc=Decimal("0.000000"), skip_reason=reason)
     try:
@@ -190,7 +195,7 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
         session.rollback()
         return session.query(AutonomyRun).filter_by(idempotency_key=key).one()
     policy.last_run_at = instant
-    policy.next_run_at = slot + timedelta(seconds=policy.cadence_seconds)
+    policy.next_run_at = slot + timedelta(seconds=_effective_cadence(policy, profile))
     _event(session, run, "AUTONOMY_RUN_SKIPPED" if reason else "AUTONOMY_RUN_SCHEDULED")
     return run
 
@@ -231,7 +236,7 @@ def execute_claimed(session, run: AutonomyRun) -> str:
         except ValueError as error:
             run.state = "FAILED"; run.failure_code = str(error)[:100]; run.finished_at = now(); _event(session, run, "AUTONOMY_RUN_FAILED")
             return run.state
-        if authority_profile.economic_budget is None or not authority_profile.external_execution_allowed or not authority_profile.telegraph_allowed:
+        if (not authority_profile.unlimited_budget and authority_profile.economic_budget is None) or not authority_profile.external_execution_allowed or not authority_profile.telegraph_allowed:
             run.state = "FAILED"; run.failure_code = "AUTHORITY_ACTION_NOT_ALLOWED"; run.finished_at = now(); _event(session, run, "AUTONOMY_RUN_FAILED")
             return run.state
         run.agent_identity_id = identity.agent_id
@@ -250,7 +255,8 @@ def execute_claimed(session, run: AutonomyRun) -> str:
                 session,
                 mandate.mandate_id,
                 Decimal(run.planned_cost_usdc),
-                maximum=Decimal(authority_profile.economic_budget),
+                maximum=Decimal(authority_profile.economic_budget) if authority_profile.economic_budget is not None else None,
+                unlimited=authority_profile.unlimited_budget,
             )
         except Exception as error:
             code = getattr(error, "detail", str(error))

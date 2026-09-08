@@ -8,16 +8,18 @@ export type PaymentInfo = { network: string; amount_usdc: string };
 
 export class GatewayError extends Error { constructor(readonly code: string, message: string) { super(message); } }
 export function signerAddress(key?: string): string | null { return key ? privateKeyToAccount(key as `0x${string}`).address : null; }
-export function validatePayment(requirement: { network: string; asset: string; amount?: string; maxAmountRequired?: string }, limit: string): PaymentInfo {
+export function validatePayment(requirement: { network: string; asset: string; amount?: string; maxAmountRequired?: string }, limit: string | null): PaymentInfo {
   if (requirement.network !== BASE_SEPOLIA) throw new GatewayError("PAYMENT_NETWORK_UNSUPPORTED", "payment network is unsupported");
   if (requirement.asset.toLowerCase() !== BASE_SEPOLIA_USDC) throw new GatewayError("PAYMENT_ASSET_MISMATCH", "payment asset is unsupported");
   const amount = requirement.amount ?? requirement.maxAmountRequired;
   if (!amount || !/^\d+$/.test(amount)) throw new GatewayError("PAYMENT_FAILED", "payment amount is invalid");
-  const atomicLimit = BigInt(Math.round(Number(limit) * 1_000_000));
-  if (BigInt(amount) > atomicLimit) throw new GatewayError("PAYMENT_BUDGET_EXCEEDED", "payment exceeds configured budget");
+  if (limit !== null) {
+    const atomicLimit = BigInt(Math.round(Number(limit) * 1_000_000));
+    if (BigInt(amount) > atomicLimit) throw new GatewayError("PAYMENT_BUDGET_EXCEEDED", "payment exceeds configured budget");
+  }
   return { network: requirement.network, amount_usdc: (Number(BigInt(amount)) / 1_000_000).toFixed(6) };
 }
-export function paidFetch(key: string, limit: string): { fetcher: typeof fetch; payment: () => PaymentInfo | null } {
+export function paidFetch(key: string, limit: string | null): { fetcher: typeof fetch; payment: () => PaymentInfo | null } {
   const account = privateKeyToAccount(key as `0x${string}`);
   let payment: PaymentInfo | null = null;
   const client = new x402Client().register(BASE_SEPOLIA, new ExactEvmScheme(toClientEvmSigner(account)));

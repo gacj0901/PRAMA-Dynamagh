@@ -55,6 +55,10 @@ def test_authorized_g12_limits_are_bounded(monkeypatch):
     with pytest.raises(HTTPException, match="PUBLIC_MANDATE_BUDGET_EXCEEDED"):
         reserve_autonomous_spend(session, "authority-test", authorized_dynamic_maximum + Decimal("0.000001"),
                                  maximum=authorized_dynamic_maximum)
+    reserve_autonomous_spend(
+        session, "unlimited-authority-test", Decimal("0"), unlimited=True,
+    )
+    assert session.reservation.reserved_usdc == 0
 
     monkeypatch.setenv("PUBLIC_MAX_MANDATE_USDC", "1.00")
     monkeypatch.setenv("M2M_MAX_WORKFLOW_USDC", "1.00")

@@ -32,6 +32,14 @@ from app.policy_gate.substrate import PolicyEvaluationCore, persist_policy_evalu
 
 logger = logging.getLogger(__name__)
 RUNTIME_CHECKPOINT_VERSION = "pre-next-action-authority-check-v0.1"
+G13_ENFORCEMENT_WINDOW_SIZE = 64
+G13_PRE_ACTION_EXPECTED_MISSING = (
+    "EVIDENCE_NOT_PRESENT",
+    "EVALUATION_NOT_PRESENT",
+    "LOCAL_DECISION_NOT_PRESENT",
+    "TELEGRAPH_LATENCY_NOT_AVAILABLE",
+    "TICKET_NOT_PRESENT",
+)
 
 
 @dataclass(frozen=True)
@@ -111,15 +119,21 @@ def run_pre_next_action_authority_check(
         epistemic_id = None
         epistemic_hash = None
 
-    # G13 is longitudinal: evaluate the complete persisted O_AGENT history
-    # for this identity, including prior runs and the current run.  Passing a
-    # run scope here would silently turn the authority decision back into a
-    # per-run observation.
-    observations = build_o_agent_stream(session, agent_id)
+    # G13 remains longitudinal while allowing documented recovery. Skipped
+    # scheduler ticks contain no execution trajectory, so they cannot become
+    # permanent negative evidence. A bounded recent window prevents failures
+    # from becoming an irreversible lifetime ban; original sequence numbers
+    # and hashes remain in the policy input for replay.
+    observations = [
+        item for item in build_o_agent_stream(session, agent_id)
+        if item.facts.autonomy_run_state != "SKIPPED"
+    ][-G13_ENFORCEMENT_WINDOW_SIZE:]
     longitudinal_input = G13PolicyInput.from_observations(
         agent_id,
         observations,
         trajectory_lineage_id=f"o-agent-v0:{agent_id}",
+        allow_sparse_window=True,
+        expected_current_missing_codes=G13_PRE_ACTION_EXPECTED_MISSING,
     )
     longitudinal_core = evaluate_g13_policy(longitudinal_input)
     persist_policy_evaluation(session, longitudinal_core)

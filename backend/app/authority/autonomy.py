@@ -107,6 +107,8 @@ class G13PolicyInput:
         observations: Iterable[OAgentObservation],
         *,
         trajectory_lineage_id: str | None = None,
+        allow_sparse_window: bool = False,
+        expected_current_missing_codes: Iterable[str] = (),
     ) -> "G13PolicyInput":
         ordered = sorted(list(observations), key=lambda item: (item.sequence, item.observation_id))
         seen: dict[str, str] = {}
@@ -124,7 +126,7 @@ class G13PolicyInput:
             deduped.append(item)
             if item.schema_version != O_AGENT_SCHEMA_VERSION:
                 integrity.add("UNSUPPORTED_O_AGENT_VERSION")
-        if any(item.sequence != index for index, item in enumerate(deduped, start=1)):
+        if not allow_sparse_window and any(item.sequence != index for index, item in enumerate(deduped, start=1)):
             integrity.add("TRAJECTORY_SEQUENCE_NOT_CONTIGUOUS")
         if trajectory_lineage_id is None:
             trajectory_lineage_id = f"{O_AGENT_SCHEMA_VERSION}:{agent_id}"
@@ -137,10 +139,11 @@ class G13PolicyInput:
             observation_refs=refs,
             ordered_observations=payloads,
             window_definition={
-                "kind": "ordered_o_agent_stream",
-                "start_sequence": 1 if deduped else None,
-                "end_sequence": len(deduped) if deduped else None,
+                "kind": "ordered_o_agent_sparse_window" if allow_sparse_window else "ordered_o_agent_stream",
+                "start_sequence": deduped[0].sequence if deduped else None,
+                "end_sequence": deduped[-1].sequence if deduped else None,
                 "source": "caller_supplied_observation_window",
+                "expected_current_missing_codes": sorted(set(expected_current_missing_codes)),
             },
             o_agent_contract_version=O_AGENT_SCHEMA_VERSION,
             missing_data=missing,
@@ -189,7 +192,9 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
     # The latest explicitly supplied observation is the only source for a
     # current missing-data judgment; historical missing markers remain in the
     # input for audit and do not become a hidden score.
-    if source_observations and (source_observations[-1].get("missing_data") or ()):
+    expected_missing = set(policy_input.window_definition.get("expected_current_missing_codes") or ())
+    current_missing = set(source_observations[-1].get("missing_data") or ()) if source_observations else set()
+    if current_missing - expected_missing:
         trigger("G13_CURRENT_CRITICAL_OBSERVATION_MISSING", "REVIEW")
 
     block_count = sum(1 for item in facts if item.get("local_decision_state") == "BLOCK")

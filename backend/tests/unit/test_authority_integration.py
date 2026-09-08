@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 import uuid
 
 import pytest
@@ -13,6 +14,7 @@ from app.authority.autonomy import (
     pre_next_action_gate,
     replay_g13_policy,
 )
+from app.authority.delegated import g12_check
 from app.authority.epistemic import (
     EPISTEMIC_DECISION_POLICY_V0_1,
     EPISTEMIC_DECISION_POLICY_VERSION,
@@ -187,6 +189,30 @@ def test_g13_version_mismatch_is_not_silently_accepted():
     value = G13PolicyInput.from_observations("agent-1", [_observation("agent-1", 1)])
     with pytest.raises(ValueError, match="G13_POLICY_VERSION_UNSUPPORTED"):
         evaluate_g13_policy(value.__class__(**{**value.__dict__, "policy_version": "g13-d-structural-autonomy-v0.2"}))
+
+
+def test_g13_explicit_sparse_recovery_window_preserves_original_sequences():
+    observations = [_observation("agent-1", 2), _observation("agent-1", 9)]
+    strict = G13PolicyInput.from_observations("agent-1", observations)
+    assert evaluate_g13_policy(strict).result == "HALT"
+    recovery = G13PolicyInput.from_observations(
+        "agent-1", observations, allow_sparse_window=True,
+        expected_current_missing_codes=("EXPECTED_AT_PRE_ACTION",),
+    )
+    assert evaluate_g13_policy(recovery).result == "CONTINUE"
+    assert recovery.window_definition["start_sequence"] == 2
+    assert recovery.window_definition["end_sequence"] == 9
+    assert recovery.ordered_observations[-1]["sequence"] == 9
+
+
+def test_g12_explicit_unlimited_budget_requires_no_fake_numeric_cap():
+    class Profile:
+        unlimited_budget = True
+        economic_budget = None
+        per_action_budget = None
+
+    assert g12_check(Profile(), Decimal("0")) == (True, "PERMIT")
+    assert g12_check(Profile(), Decimal("999999999999")) == (True, "PERMIT")
 
 
 @pytest.mark.parametrize(

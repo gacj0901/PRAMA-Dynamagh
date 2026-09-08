@@ -144,12 +144,16 @@ app.get("/miners", (_req, res) => void proxy("/api/miners", res));
 app.get("/intents", (_req, res) => void proxy("/engine/v1/intents", res));
 app.get("/signals/:signalHash", (req, res) => void proxy(`/engine/v1/signal/${encodeURIComponent(req.params.signalHash)}`, res));
 app.post("/ask", async (req, res) => {
-  const { query, context = {}, causal_request_id, budget_usdc } = req.body ?? {};
+  const { query, context = {}, causal_request_id, budget_usdc, unlimited_budget = false } = req.body ?? {};
   if (!query || !causal_request_id) return res.status(400).json({ code: "TELEGRAPH_INVALID_RESPONSE" });
   if (!privateKey) return res.status(402).json({ code: "PAYMENT_REQUIRED" });
+  if (unlimited_budget === true) {
+    const expected = process.env.PRAMA_GATEWAY_INTERNAL_TOKEN;
+    if (!expected || req.header("x-prama-internal-token") !== expected) return res.status(403).json({ code: "CHAIN_WRITE_UNAUTHORIZED" });
+  }
   const requested = budget_usdc === undefined ? maxPayment : Number(budget_usdc);
-  if (!Number.isFinite(requested) || requested <= 0 || maxPayment <= 0) return res.status(400).json({ code: "PAYMENT_BUDGET_INVALID" });
-  try { const cap = Math.min(maxPayment, requested).toFixed(6); const paymentClient = paidFetch(privateKey, cap); const upstream = await paymentClient.fetcher(`${baseUrl}/engine/v1/ask`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query, context }) }); if (!upstream.ok) return res.status(upstream.status).json({ code: upstream.status === 402 ? "PAYMENT_REQUIRED" : "TELEGRAPH_REQUEST_FAILED" }); const raw = await upstream.json() as Record<string, unknown>; const normalized = normalize(raw, causal_request_id, paymentClient.payment()); if (!normalized.signal_hash) return res.status(502).json({ code: "TELEGRAPH_INVALID_RESPONSE" }); const signal = await fetch(`${baseUrl}/engine/v1/signal/${normalized.signal_hash}`); if (!signal.ok) return res.status(502).json({ code: "SIGNAL_VERIFICATION_FAILED" }); return res.json(normalized); } catch (error) { const known = error instanceof GatewayError ? error.code : "PAYMENT_FAILED"; return res.status(400).json({ code: known }); }
+  if (unlimited_budget !== true && (!Number.isFinite(requested) || requested <= 0 || maxPayment <= 0)) return res.status(400).json({ code: "PAYMENT_BUDGET_INVALID" });
+  try { const cap = unlimited_budget === true ? null : Math.min(maxPayment, requested).toFixed(6); const paymentClient = paidFetch(privateKey, cap); const upstream = await paymentClient.fetcher(`${baseUrl}/engine/v1/ask`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query, context }) }); if (!upstream.ok) return res.status(upstream.status).json({ code: upstream.status === 402 ? "PAYMENT_REQUIRED" : "TELEGRAPH_REQUEST_FAILED" }); const raw = await upstream.json() as Record<string, unknown>; const normalized = normalize(raw, causal_request_id, paymentClient.payment()); if (!normalized.signal_hash) return res.status(502).json({ code: "TELEGRAPH_INVALID_RESPONSE" }); const signal = await fetch(`${baseUrl}/engine/v1/signal/${normalized.signal_hash}`); if (!signal.ok) return res.status(502).json({ code: "SIGNAL_VERIFICATION_FAILED" }); return res.json(normalized); } catch (error) { const known = error instanceof GatewayError ? error.code : "PAYMENT_FAILED"; return res.status(400).json({ code: known }); }
 });
 
 app.listen(port, () => {

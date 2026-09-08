@@ -24,8 +24,13 @@ def maximum(mandate, session=None):
     if mandate.origin == "USER": return min(MAX_SINGLE_ACQUISITION_USDC, public_max_mandate_usdc())
     if mandate.origin == "M2M": return m2m_max_workflow_usdc()
     if mandate.origin == "AUTONOMOUS":
-        profile = session.query(AgentAuthorityProfile).filter_by(agent_identity_id=mandate.agent_identity_id, status="ACTIVE").order_by(AgentAuthorityProfile.created_at.desc()).first() if session is not None else None
+        if session is not None:
+            from app.authority.delegated import resolve_profile
+            profile = resolve_profile(session, mandate.agent_identity_id)
+        else:
+            profile = None
         if profile is not None:
+            if profile.unlimited_budget: return None
             if profile.economic_budget is not None: return Decimal(profile.economic_budget)
         return M2M_MAX_WORKFLOW_USDC
     return public_max_mandate_usdc()
@@ -62,16 +67,20 @@ def execute_one(mandate_id, acquisition_id):
         claimed = True
         session.commit()
         cap = maximum(mandate, session)
-        if Decimal(mandate.max_budget_usdc) > cap: raise RuntimeError("WORKFLOW_BUDGET_EXCEEDED")
-        reservation = verify_spend_reservation(session, mandate_id, cap, mandate.origin)
-        available = reservation.reserved_usdc - uncertain_hold(session, mandate_id)
+        unlimited_budget = mandate.origin == "AUTONOMOUS" and cap is None
+        if cap is not None and Decimal(mandate.max_budget_usdc) > cap: raise RuntimeError("WORKFLOW_BUDGET_EXCEEDED")
+        reservation = verify_spend_reservation(
+            session, mandate_id, cap or Decimal("0"), mandate.origin,
+            unlimited=unlimited_budget,
+        )
+        available = Decimal("0") if unlimited_budget else reservation.reserved_usdc - uncertain_hold(session, mandate_id)
         if mandate.origin == "AUTONOMOUS":
             profile = session.query(AgentAuthorityProfile).filter_by(agent_identity_id=mandate.agent_identity_id, status="ACTIVE").order_by(AgentAuthorityProfile.created_at.desc()).first()
             per_action_cap = Decimal(profile.per_action_budget) if profile and profile.per_action_budget is not None else cap
         else:
             per_action_cap = MAX_SINGLE_ACQUISITION_USDC
-        budget = min(available, per_action_cap)
-        if budget <= 0: raise RuntimeError("BUDGET_EXHAUSTED")
+        budget = Decimal("0") if unlimited_budget else min(available, per_action_cap)
+        if not unlimited_budget and budget <= 0: raise RuntimeError("BUDGET_EXHAUSTED")
         user_credit.verify_reserved(session, mandate, budget)
         if not task.query.strip(): raise RuntimeError("ACQUISITION_QUERY_INVALID")
         call = TelegraphCall(mandate_id=mandate_id, acquisition_id=acquisition_id, causal_request_id=mandate_id, raw_response={}, status="REQUESTED", cost_usd=None)
@@ -89,8 +98,12 @@ def execute_one(mandate_id, acquisition_id):
             if run is None: raise RuntimeError("AUTONOMY_RUN_MISSING")
             profile = resolve_profile(session, mandate.agent_identity_id)
             configured_throttle = (profile.human_review_thresholds or {}).get("throttle_max_usdc")
-            throttle_limit = Decimal(str(configured_throttle)) if configured_throttle is not None else Decimal(profile.per_action_budget or profile.economic_budget) / Decimal("2")
-            throttle_ok = budget <= throttle_limit
+            if unlimited_budget:
+                throttle_limit = None
+                throttle_ok = False
+            else:
+                throttle_limit = Decimal(str(configured_throttle)) if configured_throttle is not None else Decimal(profile.per_action_budget or profile.economic_budget) / Decimal("2")
+                throttle_ok = budget <= throttle_limit
             checkpoint = run_pre_next_action_authority_check(
                 session,
                 mandate=mandate,
@@ -114,13 +127,25 @@ def execute_one(mandate_id, acquisition_id):
                 action_kind="TELEGRAPH_HTTP_ACQUISITION",
                 amount=budget,
                 g13_result=checkpoint.longitudinal.result,
-                constraints={"throttle_satisfied": throttle_ok, "throttle_limit_usdc": str(throttle_limit)},
+                constraints={
+                    "throttle_satisfied": throttle_ok,
+                    "throttle_limit_usdc": str(throttle_limit) if throttle_limit is not None else None,
+                    "unlimited_budget": unlimited_budget,
+                },
             )
             session.commit()
             consume_execution_permit(session, permit.permit_id)
             session.commit()
-        payload = {"query":task.query,"context":({"requested_intent":task.requested_intent} if task.requested_intent else {}),"causal_request_id":mandate_id,"budget_usdc":str(budget)}
-        request = Request(os.environ["GATEWAY_URL"] + "/ask",data=json.dumps(payload).encode(),headers={"content-type":"application/json"},method="POST")
+        payload = {"query":task.query,"context":({"requested_intent":task.requested_intent} if task.requested_intent else {}),"causal_request_id":mandate_id}
+        if unlimited_budget:
+            payload["unlimited_budget"] = True
+        else:
+            payload["budget_usdc"] = str(budget)
+        headers = {"content-type":"application/json"}
+        gateway_token = os.environ.get("PRAMA_GATEWAY_INTERNAL_TOKEN")
+        if gateway_token:
+            headers["x-prama-internal-token"] = gateway_token
+        request = Request(os.environ["GATEWAY_URL"] + "/ask",data=json.dumps(payload).encode(),headers=headers,method="POST")
         network_attempted = True
         with urlopen(request,timeout=45) as response: raw = json.loads(response.read())
         call.raw_response = raw if isinstance(raw,dict) else {"gateway_response":raw}
@@ -131,13 +156,16 @@ def execute_one(mandate_id, acquisition_id):
         cost_value = (raw.get("payment") or {}).get("amount_usdc",raw.get("cost_usd"))
         if cost_value is None: raise RuntimeError("PAYMENT_COST_UNAVAILABLE")
         actual = Decimal(str(cost_value))
-        if not actual.is_finite() or actual < 0 or actual > budget or actual.as_tuple().exponent < -6:
+        if not actual.is_finite() or actual < 0 or (not unlimited_budget and actual > budget) or actual.as_tuple().exponent < -6:
             raise RuntimeError("SINGLE_ACQUISITION_BUDGET_EXCEEDED")
         mandate = session.query(Mandate).filter_by(mandate_id=mandate_id).with_for_update().one()
         queued = session.query(AcquisitionTask).filter(AcquisitionTask.mandate_id==mandate_id,AcquisitionTask.status.in_(["QUEUED","PENDING"])).count()
         finalize = not queued and uncertain_hold(session,mandate_id)==0
         user_credit.settle(session,mandate,acquisition_id,actual,finalize=finalize)
-        settle_spend(session,mandate_id,actual,cap,mandate.origin,finalize=finalize)
+        settle_spend(
+            session, mandate_id, actual, cap or Decimal("0"), mandate.origin,
+            finalize=finalize, unlimited=unlimited_budget,
+        )
         for name in ["miner_id","miner_name","intent","signal_hash","duration_ms","reasoning"]:
             setattr(call,name,raw.get(name))
         call.miner_id = str(raw["miner_id"])
@@ -155,7 +183,7 @@ def execute_one(mandate_id, acquisition_id):
         if not claimed: raise
         mandate = session.query(Mandate).filter_by(mandate_id=mandate_id).with_for_update().one()
         task = session.get(AcquisitionTask,acquisition_id)
-        known = {"WORKFLOW_BUDGET_EXCEEDED","BUDGET_EXHAUSTED","ACQUISITION_QUERY_INVALID","TELEGRAPH_INVALID_RESPONSE","PAYMENT_COST_UNAVAILABLE","SINGLE_ACQUISITION_BUDGET_EXCEEDED","PUBLIC_SPEND_AUTHORIZATION_INVALID","PUBLIC_SPEND_AUTHORIZATION_UNAVAILABLE","PUBLIC_SPEND_SETTLEMENT_INVALID","AUTONOMY_RUN_MISSING","AUTHORITY_COMPOSITION_RESTRICTED","G13_HALT","G13_REVIEW","G13_THROTTLE_CONSTRAINTS_REQUIRED","AUTHORITY_PROFILE_MISSING","AUTHORITY_PROFILE_AMBIGUOUS","FULL_AUTONOMY_DISABLED","AMBIGUOUS_AGENT_AUTHORITY","AGENT_AUTONOMY_HALTED","AGENT_AUTONOMY_REVIEW_REQUIRED","EXECUTION_PERMIT_INVALID","EXECUTION_PERMIT_EXPIRED","EXECUTION_PERMIT_CONSUMED"}
+        known = {"WORKFLOW_BUDGET_EXCEEDED","BUDGET_EXHAUSTED","ACQUISITION_QUERY_INVALID","TELEGRAPH_INVALID_RESPONSE","PAYMENT_COST_UNAVAILABLE","SINGLE_ACQUISITION_BUDGET_EXCEEDED","PUBLIC_SPEND_AUTHORIZATION_INVALID","PUBLIC_SPEND_AUTHORIZATION_UNAVAILABLE","PUBLIC_SPEND_SETTLEMENT_INVALID","AUTONOMY_RUN_MISSING","AUTHORITY_COMPOSITION_RESTRICTED","G13_HALT","G13_REVIEW","G13_THROTTLE_CONSTRAINTS_REQUIRED","AUTHORITY_PROFILE_MISSING","AUTHORITY_PROFILE_AMBIGUOUS","AUTHORITY_HASH_UNVERIFIED","FULL_AUTONOMY_DISABLED","AMBIGUOUS_AGENT_AUTHORITY","AGENT_AUTONOMY_HALTED","AGENT_AUTONOMY_REVIEW_REQUIRED","EXECUTION_PERMIT_INVALID","EXECUTION_PERMIT_EXPIRED","EXECUTION_PERMIT_CONSUMED"}
         message = getattr(error,"detail",str(error))
         code = next((item for item in known if message == item or message.startswith(item + ":")), "GATEWAY_UNAVAILABLE")
         task.status = "FAILED"

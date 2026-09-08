@@ -54,6 +54,8 @@ class AuthorityProfileSpec(BaseModel):
     max_executions_per_window: int | None = Field(default=None, gt=0, le=2147483647, strict=True)
     execution_window_seconds: int | None = Field(default=None, gt=0, le=2147483647, strict=True)
     review_required_above_usdc: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=6)
+    unlimited_budget: bool = False
+    unlimited_execution_rate: bool = False
     policy_version: str = Field(default="agent-authority-v0", min_length=1, max_length=64)
 
     @field_validator("allowed_intents", "allowed_action_kinds")
@@ -77,6 +79,16 @@ class AuthorityProfileSpec(BaseModel):
     def valid_interval(self):
         if self.valid_until is not None and self.valid_until <= self.valid_from:
             raise ValueError("AUTHORITY_VALIDITY_INVALID")
+        if self.unlimited_budget and any(value is not None for value in (
+            self.total_budget_usdc, self.per_action_budget_usdc,
+            self.rolling_budget_usdc, self.review_required_above_usdc,
+        )):
+            raise ValueError("AUTHORITY_UNLIMITED_BUDGET_CONFLICT")
+        if self.unlimited_execution_rate and any(value is not None for value in (
+            self.cadence_seconds, self.max_executions_per_window,
+            self.execution_window_seconds,
+        )):
+            raise ValueError("AUTHORITY_UNLIMITED_RATE_CONFLICT")
         return self
 
 
@@ -103,6 +115,11 @@ def canonical_authority_payload(profile: AgentAuthorityProfile) -> dict:
     values = {key: getattr(profile, key) for key in AuthorityProfileSpec.model_fields}
     for key in ("allowed_intents", "allowed_action_kinds"):
         values[key] = _terms(values[key])
+    for key in (
+        "telegraph_allowed", "external_execution_allowed", "anchoring_allowed",
+        "erc8183_allowed", "unlimited_budget", "unlimited_execution_rate",
+    ):
+        values[key] = bool(values[key])
     values.update(
         hash_version=AUTHORITY_HASH_VERSION,
         agent_identity_id=profile.agent_identity_id,

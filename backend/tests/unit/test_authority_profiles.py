@@ -38,6 +38,7 @@ def test_hash_replays_decimal_time_and_set_representations():
     ("erc8183_allowed", True), ("concurrency_limit", 2), ("cadence_seconds", 0),
     ("max_executions_per_window", 2), ("execution_window_seconds", 60),
     ("review_required_above_usdc", Decimal("1")), ("policy_version", "other"),
+    ("unlimited_budget", True), ("unlimited_execution_rate", True),
     ("agent_identity_id", "another-unit-test-agent"),
 ])
 def test_every_authority_mutation_changes_hash(field, value):
@@ -56,6 +57,10 @@ def test_every_authority_mutation_changes_hash(field, value):
     {"allowed_intents": [" "]}, {"allowed_action_kinds": [""]},
     {"status": "UNKNOWN"}, {"policy_version": " "},
     {"valid_until": datetime(2026, 1, 1, tzinfo=timezone.utc)},
+    {"unlimited_budget": True, "total_budget_usdc": "1"},
+    {"unlimited_budget": True, "per_action_budget_usdc": "1"},
+    {"unlimited_execution_rate": True, "cadence_seconds": 0},
+    {"unlimited_execution_rate": True, "max_executions_per_window": 1},
     {"valid_from": datetime(2026, 1, 1)}, {"principal_id": "self-asserted"},
 ])
 def test_invalid_spec_rejected_before_persistence(changes):
@@ -68,6 +73,20 @@ def test_normalization_preserves_case_sensitive_keys_and_zero_budget():
                                 cadence_seconds=0, allowed_intents=[" X ", "X", "x"])
     assert spec.allowed_intents == ["X", "x"]
     assert spec.total_budget_usdc == 0
+
+
+def test_explicit_unlimited_authority_has_no_numeric_limit_fields():
+    spec = AuthorityProfileSpec(
+        valid_from=datetime.now(timezone.utc),
+        unlimited_budget=True,
+        unlimited_execution_rate=True,
+        external_execution_allowed=True,
+        telegraph_allowed=True,
+    )
+    assert spec.unlimited_budget is True
+    assert spec.unlimited_execution_rate is True
+    assert spec.total_budget_usdc is None
+    assert spec.cadence_seconds is None
 
 
 def test_m2m_has_no_authority_write_route(monkeypatch):

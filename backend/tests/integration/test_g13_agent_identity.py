@@ -50,7 +50,9 @@ def _policy(name: str, policy_id: str | None = None) -> AutonomyPolicy:
 
 
 def _authority_profile(agent_id: str) -> AgentAuthorityProfile:
-    return AgentAuthorityProfile(
+    from app.authority.profiles import compute_authority_hash
+    profile = AgentAuthorityProfile(
+        version=1, created_by="pytest",
         principal_id="g13-identity-test-principal", agent_identity_id=agent_id,
         status="ACTIVE", valid_from=datetime.now(timezone.utc) - timedelta(seconds=1),
         allowed_intents=[], allowed_action_kinds=[], economic_budget=Decimal("0.010000"),
@@ -59,6 +61,8 @@ def _authority_profile(agent_id: str) -> AgentAuthorityProfile:
         anchoring_allowed=False, erc8183_allowed=False, human_review_thresholds={},
         policy_version="agent-authority-v0",
     )
+    profile.authority_hash = compute_authority_hash(profile)
+    return profile
 
 
 def test_m2m_identity_is_stable_and_origin_bound(session):

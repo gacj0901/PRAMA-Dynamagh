@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.domain.mandates import AgentAuthorityProfile, AgentIdentity, ExecutionPermit, Mandate, UsageEvent
 from app.pramagraph.evaluation import digest
+from app.authority.profiles import AuthorityResolutionError, get_effective_authority_profile
 
 FULL_AUTONOMY_FLAG = "FULL_AUTONOMY_ENABLED"
 AUTONOMY_STATES = {"ACTIVE", "THROTTLED", "REVIEW_REQUIRED", "HALTED"}
@@ -39,16 +40,14 @@ def resolve_unambiguous_identity(session, context_id: str) -> AgentIdentity:
 
 
 def resolve_profile(session, identity_id: str, at: datetime | None = None) -> AgentAuthorityProfile:
-    at = at or now()
-    profiles = session.query(AgentAuthorityProfile).filter(
-        AgentAuthorityProfile.agent_identity_id == identity_id,
-        AgentAuthorityProfile.status == "ACTIVE",
-        AgentAuthorityProfile.valid_from <= at,
-    ).all()
-    profiles = [p for p in profiles if p.valid_until is None or p.valid_until > at]
-    if len(profiles) != 1:
-        raise ValueError("AUTHORITY_PROFILE_AMBIGUOUS" if len(profiles) > 1 else "AUTHORITY_PROFILE_MISSING")
-    return profiles[0]
+    try:
+        return get_effective_authority_profile(session, identity_id, at or now())
+    except AuthorityResolutionError as error:
+        mapping = {
+            "NO_AUTHORITY_PROFILE": "AUTHORITY_PROFILE_MISSING",
+            "AMBIGUOUS_AUTHORITY_PROFILE": "AUTHORITY_PROFILE_AMBIGUOUS",
+        }
+        raise ValueError(mapping.get(error.code, error.code)) from error
 
 
 def _allowed(profile, action_kind, intent=None):
@@ -62,6 +61,8 @@ def _allowed(profile, action_kind, intent=None):
 
 
 def g12_check(profile, amount: Decimal) -> tuple[bool, str]:
+    if profile.unlimited_budget:
+        return True, "PERMIT"
     if profile.economic_budget is None or Decimal(profile.economic_budget) <= 0:
         return False, "G12_NO_DELEGATED_ECONOMIC_AUTHORITY"
     if profile.per_action_budget is not None and amount > Decimal(profile.per_action_budget):
