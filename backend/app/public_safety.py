@@ -128,41 +128,9 @@ def reserve_autonomous_spend(
     mandate_id: str,
     amount: Decimal,
     maximum: Decimal | None = None,
-    *,
-    unlimited: bool = False,
 ) -> None:
-    """Record autonomous economic authorization on the shared ledger.
-
-    An explicitly unlimited authority profile records a zero reservation. The
-    actual payment is still settled into the ledger after the gateway response.
-    No arbitrary numeric value is used as a substitute for infinity.
-    """
-    if unlimited:
-        _reserve_unlimited_autonomous_spend(session, mandate_id, amount)
-        return
+    """Reserve autonomous spend under the effective G12 workflow ceiling."""
     _reserve_spend(session, mandate_id, amount, maximum or M2M_MAX_WORKFLOW_USDC, "AUTONOMOUS")
-
-
-def _reserve_unlimited_autonomous_spend(session: Session, mandate_id: str, amount: Decimal) -> None:
-    if amount.quantize(_MICRO) != 0:
-        raise HTTPException(status_code=422, detail="AUTONOMOUS_UNLIMITED_RESERVATION_INVALID")
-    spend_date = datetime.now(timezone.utc).date()
-    try:
-        session.execute(text("""
-            INSERT INTO public_manual_spend_ledgers
-              (spend_date, reserved_usdc, spent_usdc, created_at, updated_at)
-            VALUES (:spend_date, 0, 0, NOW(), NOW())
-            ON CONFLICT (spend_date) DO NOTHING
-        """), {"spend_date": spend_date})
-        session.add(PublicManualSpendReservation(
-            mandate_id=mandate_id,
-            spend_date=spend_date,
-            reserved_usdc=Decimal("0.000000"),
-            status="RESERVED",
-            origin="AUTONOMOUS",
-        ))
-    except Exception as error:
-        raise HTTPException(status_code=503, detail="PUBLIC_SPEND_AUTHORIZATION_UNAVAILABLE") from error
 
 
 def _reserve_spend(session: Session, mandate_id: str, amount: Decimal, maximum: Decimal, origin: str) -> None:
@@ -210,7 +178,7 @@ def verify_public_manual_reservation(session: Session, mandate_id: str, maximum:
     return verify_spend_reservation(session, mandate_id, maximum, "MANUAL")
 
 
-def verify_spend_reservation(session: Session, mandate_id: str, maximum: Decimal, origin: str, *, unlimited: bool = False) -> PublicManualSpendReservation:
+def verify_spend_reservation(session: Session, mandate_id: str, maximum: Decimal, origin: str) -> PublicManualSpendReservation:
     """Return a locked valid reservation, or stop before Gateway is contacted."""
     try:
         reservation = (
@@ -221,8 +189,7 @@ def verify_spend_reservation(session: Session, mandate_id: str, maximum: Decimal
         )
         if reservation is None or reservation.status != "RESERVED" or reservation.origin != origin:
             raise RuntimeError("PUBLIC_SPEND_AUTHORIZATION_INVALID")
-        valid_unlimited = unlimited and origin == "AUTONOMOUS" and reservation.reserved_usdc == 0
-        if not valid_unlimited and (reservation.reserved_usdc <= 0 or reservation.reserved_usdc > maximum):
+        if reservation.reserved_usdc <= 0 or reservation.reserved_usdc > maximum:
             raise RuntimeError("PUBLIC_SPEND_AUTHORIZATION_INVALID")
         return reservation
     except Exception as error:
@@ -246,29 +213,26 @@ def settle_autonomous_spend(session: Session, mandate_id: str, actual_spend: Dec
     settle_spend(session, mandate_id, actual_spend, maximum or M2M_MAX_WORKFLOW_USDC, "AUTONOMOUS", finalize=finalize)
 
 
-def settle_spend(session: Session, mandate_id: str, actual_spend: Decimal, maximum: Decimal, origin: str, *, finalize: bool = True, unlimited: bool = False) -> None:
+def settle_spend(session: Session, mandate_id: str, actual_spend: Decimal, maximum: Decimal, origin: str, *, finalize: bool = True) -> None:
     """Atomically settle one call while preserving a multi-call reservation.
 
     A final settlement closes the reservation as before.  A non-final
     settlement moves only the actual amount from reserved to spent and keeps
     the remaining workflow reservation open for the next sequential task.
     """
-    reservation = verify_spend_reservation(session, mandate_id, maximum, origin, unlimited=unlimited)
+    reservation = verify_spend_reservation(session, mandate_id, maximum, origin)
     actual = actual_spend.quantize(_MICRO)
-    if actual < 0 or (not unlimited and actual > reservation.reserved_usdc):
+    if actual < 0 or actual > reservation.reserved_usdc:
         raise RuntimeError("PUBLIC_SPEND_SETTLEMENT_INVALID")
     ledger = session.get(PublicManualSpendLedger, reservation.spend_date, with_for_update=True)
-    if ledger is None or (not unlimited and ledger.reserved_usdc < reservation.reserved_usdc):
+    if ledger is None or ledger.reserved_usdc < reservation.reserved_usdc:
         raise RuntimeError("PUBLIC_SPEND_AUTHORIZATION_INVALID")
-    if not unlimited:
-        ledger.reserved_usdc -= actual
+    ledger.reserved_usdc -= actual
     ledger.spent_usdc += actual
     reservation.actual_spend_usdc = (reservation.actual_spend_usdc or Decimal("0")) + actual
-    if not unlimited:
-        reservation.reserved_usdc -= actual
+    reservation.reserved_usdc -= actual
     if finalize:
-        if not unlimited:
-            ledger.reserved_usdc -= reservation.reserved_usdc
+        ledger.reserved_usdc -= reservation.reserved_usdc
         reservation.reserved_usdc = Decimal("0")
         reservation.status = "SETTLED"
 

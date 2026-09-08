@@ -54,8 +54,14 @@ class AuthorityProfileSpec(BaseModel):
     max_executions_per_window: int | None = Field(default=None, gt=0, le=2147483647, strict=True)
     execution_window_seconds: int | None = Field(default=None, gt=0, le=2147483647, strict=True)
     review_required_above_usdc: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=6)
-    unlimited_budget: bool = False
-    unlimited_execution_rate: bool = False
+    unlimited_budget: bool = Field(
+        default=False,
+        description="No profile-level economic cap; the effective G12 limits remain binding.",
+    )
+    unlimited_execution_rate: bool = Field(
+        default=False,
+        description="No profile-level rate cap; the active autonomy policy cadence remains binding.",
+    )
     policy_version: str = Field(default="agent-authority-v0", min_length=1, max_length=64)
 
     @field_validator("allowed_intents", "allowed_action_kinds")
@@ -186,10 +192,18 @@ def get_effective_authority_profile(session, agent_identity_id, at_time=None):
     return profile
 
 
-def create_authority_profile(session, agent_identity_id, spec: AuthorityProfileSpec, *, created_by):
+def create_authority_profile(
+    session,
+    agent_identity_id,
+    spec: AuthorityProfileSpec,
+    *,
+    created_by,
+    principal_id: str | None = None,
+):
     """Trusted caller only. Lock the real agent to allocate the next version."""
     spec = AuthorityProfileSpec.model_validate(spec.model_dump())
     actor = _actor(created_by)
+    principal = _actor(principal_id) if principal_id is not None else None
     identity = session.scalar(select(AgentIdentity).where(
         AgentIdentity.agent_id == agent_identity_id,
     ).with_for_update())
@@ -199,7 +213,7 @@ def create_authority_profile(session, agent_identity_id, spec: AuthorityProfileS
         AgentAuthorityProfile.agent_identity_id == agent_identity_id,
     )) or 0)
     profile = AgentAuthorityProfile(
-        agent_identity_id=identity.agent_id, version=version, principal_id=None,
+        agent_identity_id=identity.agent_id, version=version, principal_id=principal,
         created_by=actor, rolling_budget=None, cadence_policy=None,
         human_review_thresholds={}, **spec.model_dump(),
     )
@@ -254,6 +268,12 @@ def version_authority_profile(session, agent_identity_id, previous_profile_id, s
         ).with_for_update())
         if identity is None:
             raise ValueError("AGENT_IDENTITY_MISSING")
+        previous = session.scalar(select(AgentAuthorityProfile).where(
+            AgentAuthorityProfile.agent_identity_id == agent_identity_id,
+            AgentAuthorityProfile.authority_profile_id == previous_profile_id,
+        ))
+        if previous is None:
+            raise ValueError("NO_AUTHORITY_PROFILE")
         spec = AuthorityProfileSpec.model_validate(spec.model_dump())
         now = utc_now()
         if spec.valid_from < now:
@@ -262,4 +282,10 @@ def version_authority_profile(session, agent_identity_id, previous_profile_id, s
             session, agent_identity_id, previous_profile_id, "REVOKED",
             created_by=created_by, reason=reason, effective_at=spec.valid_from,
         )
-        return create_authority_profile(session, agent_identity_id, spec, created_by=created_by)
+        return create_authority_profile(
+            session,
+            agent_identity_id,
+            spec,
+            created_by=created_by,
+            principal_id=previous.principal_id,
+        )

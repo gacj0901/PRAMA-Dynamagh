@@ -167,12 +167,12 @@ def test_caps_and_restart_recovery_are_persistent(session):
     assert claimed.state == "SCHEDULED" and waiting.state == "WAITING_EXTERNAL"
 
 
-def test_explicit_unlimited_profile_bypasses_usage_caps_but_keeps_concurrency(session, monkeypatch):
+def test_profile_without_own_limits_inherits_policy_cadence_and_g12(session, monkeypatch):
     value = policy(
         mandate_template={"title": "Unlimited authority", "instruction": "Run authorized acquisition"},
-        max_runs_per_day=1,
+        max_runs_per_day=2,
         max_usdc_per_run=Decimal("0.010000"),
-        max_usdc_per_day=Decimal("0.010000"),
+        max_usdc_per_day=Decimal("0.020000"),
     )
     session.add(value); session.flush()
     identity = AgentIdentity(
@@ -194,23 +194,23 @@ def test_explicit_unlimited_profile_bypasses_usage_caps_but_keeps_concurrency(se
         scheduled_for=datetime(2026, 9, 2, 19, tzinfo=timezone.utc),
         idempotency_key="unlimited-prior-" + str(uuid.uuid4()),
         state="COMPLETED",
-        planned_cost_usdc=Decimal("25.000000"),
-        actual_cost_usdc=Decimal("25.000000"),
+        planned_cost_usdc=Decimal("0.010000"),
+        actual_cost_usdc=Decimal("0.010000"),
     )
     session.add(prior); session.flush()
     monkeypatch.setenv("FULL_AUTONOMY_ENABLED", "true")
     instant = datetime(2026, 9, 2, 20, 0, tzinfo=timezone.utc)
     run = schedule_due(session, value, instant, global_switch=True)
     assert run.state == "SCHEDULED" and run.skip_reason is None
-    assert run.planned_cost_usdc == 0
-    assert value.next_run_at == instant + timedelta(seconds=1)
+    assert run.planned_cost_usdc == Decimal("0.010000")
+    assert value.next_run_at == instant + timedelta(seconds=value.cadence_seconds)
     assert claim_run(session, run.run_id) is run
     import app.autonomy.service as autonomy
     monkeypatch.setattr(autonomy, "global_enabled", lambda: True)
     assert execute_claimed(session, run) == "ACQUISITION_QUEUED"
     reservation = session.get(PublicManualSpendReservation, run.mandate_id)
     assert reservation.origin == "AUTONOMOUS"
-    assert reservation.reserved_usdc == 0
+    assert reservation.reserved_usdc == Decimal("0.010000")
 
 
 def test_replay_only_scheduler_is_db_only_and_manual_records_coexist(session, monkeypatch):

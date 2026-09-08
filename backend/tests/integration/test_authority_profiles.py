@@ -58,6 +58,21 @@ def test_valid_profile_binding_and_resolution(session, agent):
     assert row.authority_hash == compute_authority_hash(row)
 
 
+def test_principal_is_trusted_input_and_part_of_canonical_hash(session, agent):
+    row = create_authority_profile(
+        session,
+        agent.agent_id,
+        spec(total_budget_usdc=Decimal("0")),
+        created_by="pytest",
+        principal_id="autonomy-controller",
+    )
+    assert row.principal_id == "autonomy-controller"
+    assert canonical_authority_payload(row)["principal_id"] == "autonomy-controller"
+    original_hash = row.authority_hash
+    row.principal_id = "another-principal"
+    assert compute_authority_hash(row) != original_hash
+
+
 def test_versioning_preserves_grant_and_historical_resolution(session, agent):
     first = create(session, agent, total_budget_usdc=1)
     original, original_hash = canonical_authority_payload(first), first.authority_hash

@@ -60,8 +60,11 @@ def _allowed(profile, action_kind, intent=None):
     return True
 
 
-def g12_check(profile, amount: Decimal) -> tuple[bool, str]:
+def g12_check(profile, amount: Decimal, *, reservation_verified: bool = False) -> tuple[bool, str]:
+    if not reservation_verified:
+        return False, "G12_RESERVATION_REQUIRED"
     if profile.unlimited_budget:
+        # The profile adds no economic cap; the numeric G12 reservation binds.
         return True, "PERMIT"
     if profile.economic_budget is None or Decimal(profile.economic_budget) <= 0:
         return False, "G12_NO_DELEGATED_ECONOMIC_AUTHORITY"
@@ -89,7 +92,11 @@ def issue_execution_permit(session, *, mandate: Mandate, action_id: str, action_
         raise ValueError("G13_REVIEW")
     if profile.status != "ACTIVE" or not _allowed(profile, action_kind, intent):
         raise ValueError("AUTHORITY_ACTION_NOT_ALLOWED")
-    allowed, g12_result = g12_check(profile, Decimal(amount))
+    allowed, g12_result = g12_check(
+        profile,
+        Decimal(amount),
+        reservation_verified=bool((constraints or {}).get("g12_reservation_verified")),
+    )
     if not allowed:
         raise ValueError(g12_result)
     if g13_result == "HALT": raise ValueError("G13_HALT")

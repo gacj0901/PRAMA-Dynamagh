@@ -205,14 +205,14 @@ def test_g13_explicit_sparse_recovery_window_preserves_original_sequences():
     assert recovery.ordered_observations[-1]["sequence"] == 9
 
 
-def test_g12_explicit_unlimited_budget_requires_no_fake_numeric_cap():
+def test_profile_without_own_budget_still_requires_g12_reservation():
     class Profile:
         unlimited_budget = True
         economic_budget = None
         per_action_budget = None
 
-    assert g12_check(Profile(), Decimal("0")) == (True, "PERMIT")
-    assert g12_check(Profile(), Decimal("999999999999")) == (True, "PERMIT")
+    assert g12_check(Profile(), Decimal("0.01")) == (False, "G12_RESERVATION_REQUIRED")
+    assert g12_check(Profile(), Decimal("0.01"), reservation_verified=True) == (True, "PERMIT")
 
 
 @pytest.mark.parametrize(

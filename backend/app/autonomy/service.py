@@ -28,7 +28,7 @@ from app.domain.mandates import (
 )
 from app.agents.identity import get_policy_identity, mandate_attribution, policy_identity_required
 from app.erc8183.evidence import replay_persisted
-from app.public_safety import M2M_MAX_WORKFLOW_USDC, reserve_autonomous_spend
+from app.public_safety import m2m_max_workflow_usdc, reserve_autonomous_spend
 from app.domain.mandates import AgentAuthorityProfile
 from app.authority.delegated import full_autonomy_enabled, resolve_profile
 
@@ -101,7 +101,8 @@ def _authority_profile(session, policy: AutonomyPolicy) -> AgentAuthorityProfile
 
 def _effective_cadence(policy: AutonomyPolicy, profile: AgentAuthorityProfile | None) -> int:
     if profile and profile.unlimited_execution_rate:
-        return 1
+        # No profile-level rate cap: the autonomy policy remains authoritative.
+        return policy.cadence_seconds
     if profile and profile.cadence_policy:
         value = profile.cadence_policy.get("cadence_seconds")
         if value is not None and int(value) >= 1:
@@ -135,7 +136,7 @@ def _day_bounds(instant: datetime) -> tuple[datetime, datetime]:
 
 
 def _planned_cost(policy: AutonomyPolicy, profile: AgentAuthorityProfile | None = None) -> Decimal:
-    if policy.acquisition_mode == "REPLAY_ONLY" or profile and profile.unlimited_budget:
+    if policy.acquisition_mode == "REPLAY_ONLY":
         return Decimal("0.000000")
     return Decimal(policy.max_usdc_per_run)
 
@@ -147,7 +148,7 @@ def _budget_reason(session, policy: AutonomyPolicy, instant: datetime, planned: 
     max_runs = policy.max_runs_per_day
     if profile and profile.rolling_budget and profile.rolling_budget.get("max_runs_per_day") is not None:
         max_runs = int(profile.rolling_budget["max_runs_per_day"])
-    if not (profile and profile.unlimited_execution_rate) and max_runs > 0 and len(day_runs) >= max_runs:
+    if max_runs > 0 and len(day_runs) >= max_runs:
         return "DAILY_RUN_CAP"
     active = [run for run in day_runs if run.state in ACTIVE_RUN_STATES]
     concurrency = profile.concurrency_limit if profile and profile.concurrency_limit is not None else policy.max_concurrent_runs
@@ -155,14 +156,19 @@ def _budget_reason(session, policy: AutonomyPolicy, instant: datetime, planned: 
         return "CONCURRENCY_CAP"
     spent = sum((Decimal(run.actual_cost_usdc) for run in day_runs if run.state == "COMPLETED"), Decimal("0"))
     reserved = sum((Decimal(run.planned_cost_usdc) for run in active), Decimal("0"))
-    if not (profile and profile.unlimited_budget):
-        per_run = profile.per_action_budget if profile and profile.per_action_budget is not None else policy.max_usdc_per_run
-        if planned > Decimal(per_run):
-            return "RUN_BUDGET_CAP"
-        daily = profile.rolling_budget.get("max_usdc_per_day") if profile and profile.rolling_budget else None
-        daily = Decimal(str(daily)) if daily is not None else Decimal(policy.max_usdc_per_day)
-        if spent + reserved + planned > daily:
-            return "DAILY_BUDGET_CAP"
+    per_run = (
+        profile.per_action_budget
+        if profile and not profile.unlimited_budget and profile.per_action_budget is not None
+        else policy.max_usdc_per_run
+    )
+    if planned > Decimal(per_run):
+        return "RUN_BUDGET_CAP"
+    daily = None
+    if profile and not profile.unlimited_budget and profile.rolling_budget:
+        daily = profile.rolling_budget.get("max_usdc_per_day")
+    daily = Decimal(str(daily)) if daily is not None else Decimal(policy.max_usdc_per_day)
+    if spent + reserved + planned > daily:
+        return "DAILY_BUDGET_CAP"
     return None
 
 
@@ -248,15 +254,19 @@ def execute_claimed(session, run: AutonomyRun) -> str:
             origin="AUTONOMOUS", autonomy_policy_id=policy.policy_id, autonomy_run_id=run.run_id,
         )
         session.add(mandate); session.flush()
-        # Every autonomous run is reserved against the delegated profile. The
-        # legacy M2M cap remains only as a fallback for non-profile rails.
+        # A profile with no independent cap still inherits the effective G12
+        # workflow ceiling; every paid run therefore has a numeric reservation.
         try:
+            g12_maximum = (
+                m2m_max_workflow_usdc()
+                if authority_profile.unlimited_budget
+                else Decimal(authority_profile.economic_budget)
+            )
             reserve_autonomous_spend(
                 session,
                 mandate.mandate_id,
                 Decimal(run.planned_cost_usdc),
-                maximum=Decimal(authority_profile.economic_budget) if authority_profile.economic_budget is not None else None,
-                unlimited=authority_profile.unlimited_budget,
+                maximum=g12_maximum,
             )
         except Exception as error:
             code = getattr(error, "detail", str(error))
