@@ -186,3 +186,27 @@ def test_not_executed_recovery_observation_does_not_retrigger_missing_review():
 
     assert result.result == "THROTTLE"
     assert result.triggered_rule_ids == ("G13_OPERATOR_RECOVERY_CANARY",)
+
+
+def test_requested_recovery_observation_does_not_retrigger_missing_review():
+    recovery = _recovery()
+    requested = _observation(
+        1,
+        "requested-recovery-canary",
+        RECOVERY_AT + timedelta(seconds=10),
+        failed=False,
+        missing_data=("UNEXPECTED_MISSING_RESULT",),
+        telegraph_status="REQUESTED",
+    )
+    value = G13PolicyInput.from_observations(
+        "autonomy-controller",
+        [requested],
+        policy_version=G13_OPERATOR_RECOVERY_POLICY_VERSION,
+        operator_recovery=recovery,
+        expected_current_missing_codes=(),
+    )
+
+    result = evaluate_g13_policy(value)
+
+    assert result.result == "THROTTLE"
+    assert result.triggered_rule_ids == ("G13_OPERATOR_RECOVERY_CANARY",)
