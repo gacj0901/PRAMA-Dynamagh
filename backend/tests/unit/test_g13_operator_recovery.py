@@ -46,7 +46,15 @@ def _recovery() -> dict:
     }
 
 
-def _observation(sequence: int, run_id: str, when: datetime, *, failed: bool) -> OAgentObservation:
+def _observation(
+    sequence: int,
+    run_id: str,
+    when: datetime,
+    *,
+    failed: bool,
+    missing_data: tuple[str, ...] = (),
+    telegraph_status: str | None = None,
+) -> OAgentObservation:
     lineage = OAgentSourceLineage(agent_identity_id="autonomy-controller", autonomy_run_ids=(run_id,))
     facts = OAgentFacts(
         action_status="FAILED" if failed else "COMPLETED",
@@ -54,7 +62,7 @@ def _observation(sequence: int, run_id: str, when: datetime, *, failed: bool) ->
         local_decision_scope="LOCAL_DECISION_ONLY",
         failure_code="GATEWAY_UNAVAILABLE" if failed else None,
         failure_event_types=("ACQUISITION_FAILED",) if failed else (),
-        telegraph_statuses=("PAYMENT_UNCERTAIN",) if failed else ("SUCCEEDED",),
+        telegraph_statuses=(telegraph_status,) if telegraph_status else ("PAYMENT_UNCERTAIN",) if failed else ("SUCCEEDED",),
     )
     value = {
         "schema_version": "o-agent-v0",
@@ -69,7 +77,7 @@ def _observation(sequence: int, run_id: str, when: datetime, *, failed: bool) ->
         "source_id": run_id,
         "source_lineage": lineage.model_dump(mode="json"),
         "facts": facts.model_dump(mode="json"),
-        "missing_data": [],
+        "missing_data": list(missing_data),
     }
     return OAgentObservation(**value, content_hash=digest(value))
 
@@ -154,3 +162,27 @@ def test_runtime_uses_only_post_recovery_trajectory(monkeypatch):
     assert result.policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION
     assert result.result == "THROTTLE"
     assert result.result_core["distinct_failure_count"] == 0
+
+
+def test_not_executed_recovery_observation_does_not_retrigger_missing_review():
+    recovery = _recovery()
+    denied = _observation(
+        1,
+        "denied-recovery-canary",
+        RECOVERY_AT + timedelta(seconds=10),
+        failed=False,
+        missing_data=("UNEXPECTED_MISSING_RESULT",),
+        telegraph_status="NOT_EXECUTED",
+    )
+    value = G13PolicyInput.from_observations(
+        "autonomy-controller",
+        [denied],
+        policy_version=G13_OPERATOR_RECOVERY_POLICY_VERSION,
+        operator_recovery=recovery,
+        expected_current_missing_codes=(),
+    )
+
+    result = evaluate_g13_policy(value)
+
+    assert result.result == "THROTTLE"
+    assert result.triggered_rule_ids == ("G13_OPERATOR_RECOVERY_CANARY",)

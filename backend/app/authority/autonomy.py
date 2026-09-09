@@ -277,7 +277,22 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
     # current missing-data judgment; historical missing markers remain in the
     # input for audit and do not become a hidden score.
     expected_missing = set(policy_input.window_definition.get("expected_current_missing_codes") or ())
-    current_missing = set(source_observations[-1].get("missing_data") or ()) if source_observations else set()
+    latest = source_observations[-1] if source_observations else None
+    latest_facts = dict(latest.get("facts") or {}) if latest else {}
+    latest_statuses = set(latest_facts.get("telegraph_statuses") or ())
+    latest_is_not_executed = (
+        "NOT_EXECUTED" in latest_statuses
+        and not latest_statuses - {"NOT_EXECUTED", "REQUESTED"}
+    )
+    # A denied or pre-action call has no external result by definition. Its
+    # missing evidence is an audit fact, not a new trajectory failure. Keep
+    # current-missing enforcement for real executions so incomplete external
+    # outcomes still require review.
+    current_missing = (
+        set(latest.get("missing_data") or ())
+        if latest and not latest_is_not_executed
+        else set()
+    )
     if current_missing - expected_missing:
         trigger("G13_CURRENT_CRITICAL_OBSERVATION_MISSING", "REVIEW")
 
