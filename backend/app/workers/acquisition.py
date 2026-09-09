@@ -90,6 +90,12 @@ def execute_one(mandate_id, acquisition_id):
             throttle_limit = Decimal(str(configured_throttle)) if configured_throttle is not None else economic_ceiling / Decimal("2")
             preliminary_g13 = evaluate_current_g13(session, mandate.agent_identity_id)
             if preliminary_g13.result == "THROTTLE":
+                if preliminary_g13.result_core.get("operator_recovery_canary"):
+                    recovery = preliminary_g13.input_core.get("operator_recovery") or {}
+                    throttle_limit = min(
+                        economic_ceiling,
+                        Decimal(str(recovery.get("canary_budget_usdc", "0"))),
+                    )
                 budget = min(budget, throttle_limit)
                 if budget <= 0:
                     raise RuntimeError("G13_THROTTLE_CONSTRAINTS_REQUIRED")

@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
 from app.agents.observation import OAgentObservation, O_AGENT_SCHEMA_VERSION
+from app.authority.recovery import (
+    G13_OPERATOR_RECOVERY_POLICY_ID,
+    G13_OPERATOR_RECOVERY_POLICY_VERSION,
+    validate_recovery_payload,
+)
 from app.policy_gate.substrate import PolicyEvaluationCore, PolicyInputTypeError, replay_policy
 
 
@@ -16,11 +21,22 @@ G13_STRUCTURAL_AUTONOMY_POLICY_VERSION = "g13-d-structural-autonomy-v0.2"
 G13_SUPPORTED_POLICY_VERSIONS = frozenset({
     G13_LEGACY_POLICY_VERSION,
     G13_STRUCTURAL_AUTONOMY_POLICY_VERSION,
+    G13_OPERATOR_RECOVERY_POLICY_VERSION,
 })
 G13_POLICY_TYPE = "STRUCTURAL_AUTONOMY"
 G13_OUTPUTS = frozenset({"CONTINUE", "THROTTLE", "REVIEW", "HALT"})
 G13_PRECEDENCE = {"CONTINUE": 0, "THROTTLE": 1, "REVIEW": 2, "HALT": 3}
 G13_RULES = {
+    "G13_OPERATOR_RECOVERY_CANARY": {
+        "phenomenon": "an operator-reviewed infrastructure recovery has no post-recovery execution yet",
+        "input_fields": ["operator_recovery", "ordered_observations"],
+        "history": "the post-recovery trajectory window",
+        "predicate": "a valid recovery exists and no post-recovery external execution exists",
+        "authority_consequence": "exactly one bounded recovery canary may proceed",
+        "output": "THROTTLE",
+        "recovery": "the first complete post-recovery execution",
+        "falsification": "an invalid recovery or a completed post-recovery execution must not trigger this rule",
+    },
     "G13_REQUIRED_TRAJECTORY_MISSING": {
         "phenomenon": "required ordered trajectory is unavailable",
         "input_fields": ["ordered_observations", "window_definition"],
@@ -105,6 +121,7 @@ class G13PolicyInput:
     policy_version: str = G13_STRUCTURAL_AUTONOMY_POLICY_VERSION
     missing_data: tuple[str, ...] = ()
     integrity_violations: tuple[str, ...] = ()
+    operator_recovery: Mapping[str, Any] | None = None
 
     @classmethod
     def from_observations(
@@ -116,6 +133,7 @@ class G13PolicyInput:
         allow_sparse_window: bool = False,
         expected_current_missing_codes: Iterable[str] = (),
         policy_version: str = G13_STRUCTURAL_AUTONOMY_POLICY_VERSION,
+        operator_recovery: Mapping[str, Any] | None = None,
     ) -> "G13PolicyInput":
         ordered = sorted(list(observations), key=lambda item: (item.sequence, item.observation_id))
         seen: dict[str, str] = {}
@@ -140,30 +158,41 @@ class G13PolicyInput:
         payloads = tuple({**item.canonical_payload(), "content_hash": item.content_hash} for item in deduped)
         refs = tuple(item.observation_id for item in deduped)
         missing = tuple(sorted({code for item in deduped for code in item.missing_data}))
+        window_definition = {
+            "kind": "ordered_o_agent_sparse_window" if allow_sparse_window else "ordered_o_agent_stream",
+            "start_sequence": deduped[0].sequence if deduped else None,
+            "end_sequence": deduped[-1].sequence if deduped else None,
+            "source": "caller_supplied_observation_window",
+            "expected_current_missing_codes": sorted(set(expected_current_missing_codes)),
+        }
+        if policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION and operator_recovery:
+            window_definition.update({
+                "recovery_event_id": operator_recovery.get("recovery_event_id"),
+                "recovery_effective_at": operator_recovery.get("created_at"),
+            })
         return cls(
             agent_id=agent_id,
             trajectory_lineage_id=trajectory_lineage_id,
             observation_refs=refs,
             ordered_observations=payloads,
-            window_definition={
-                "kind": "ordered_o_agent_sparse_window" if allow_sparse_window else "ordered_o_agent_stream",
-                "start_sequence": deduped[0].sequence if deduped else None,
-                "end_sequence": deduped[-1].sequence if deduped else None,
-                "source": "caller_supplied_observation_window",
-                "expected_current_missing_codes": sorted(set(expected_current_missing_codes)),
-            },
+            window_definition=window_definition,
             o_agent_contract_version=O_AGENT_SCHEMA_VERSION,
             policy_version=policy_version,
             missing_data=missing,
             integrity_violations=tuple(sorted(integrity)),
+            operator_recovery=dict(operator_recovery) if operator_recovery else None,
         )
 
     def canonical_core(self) -> dict[str, Any]:
-        return {
+        core = {
             "input_contract": (
                 "g13-d-policy-input-v0.1"
                 if self.policy_version == G13_LEGACY_POLICY_VERSION
-                else "g13-d-policy-input-v0.2"
+                else (
+                    "g13-d-policy-input-v0.3"
+                    if self.policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION
+                    else "g13-d-policy-input-v0.2"
+                )
             ),
             "agent_id": self.agent_id,
             "trajectory_lineage_id": self.trajectory_lineage_id,
@@ -175,13 +204,16 @@ class G13PolicyInput:
             "missing_data": list(self.missing_data),
             "integrity_violations": list(self.integrity_violations),
         }
+        if self.policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION:
+            core["operator_recovery"] = dict(self.operator_recovery or {})
+        return core
 
 
 def _facts(input_value: G13PolicyInput) -> list[Mapping[str, Any]]:
     return [dict(item.get("facts") or {}) for item in input_value.ordered_observations]
 
 
-def _distinct_execution_counts(policy_input: G13PolicyInput) -> tuple[int, int]:
+def _distinct_execution_stats(policy_input: G13PolicyInput) -> tuple[int, int, int]:
     """Count causal executions, not every projection derived from one run.
 
     A G13-denied action persists a NOT_EXECUTED call for audit. It is excluded
@@ -205,7 +237,13 @@ def _distinct_execution_counts(policy_input: G13PolicyInput) -> tuple[int, int]:
     return (
         sum(1 for unit in eligible if unit["block"]),
         sum(1 for unit in eligible if unit["failure"]),
+        sum(1 for unit in eligible if unit["executed"]),
     )
+
+
+def _distinct_execution_counts(policy_input: G13PolicyInput) -> tuple[int, int]:
+    block_count, failure_count, _ = _distinct_execution_stats(policy_input)
+    return block_count, failure_count
 
 
 def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
@@ -223,7 +261,14 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
         if G13_PRECEDENCE[result] > G13_PRECEDENCE[outcome]:
             outcome = result
 
-    if not source_observations:
+    valid_recovery = (
+        policy_input.policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION
+        and policy_input.operator_recovery is not None
+        and validate_recovery_payload(policy_input.operator_recovery)
+    )
+    if policy_input.policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION and not valid_recovery:
+        trigger("G13_IDENTITY_OR_TRAJECTORY_INTEGRITY", "HALT")
+    if not source_observations and not valid_recovery:
         trigger("G13_REQUIRED_TRAJECTORY_MISSING", "REVIEW")
     if policy_input.integrity_violations:
         trigger("G13_IDENTITY_OR_TRAJECTORY_INTEGRITY", "HALT")
@@ -236,13 +281,20 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
     if current_missing - expected_missing:
         trigger("G13_CURRENT_CRITICAL_OBSERVATION_MISSING", "REVIEW")
 
+    executed_count = 0
     if policy_input.policy_version == G13_LEGACY_POLICY_VERSION:
         block_count = sum(1 for item in facts if item.get("local_decision_state") == "BLOCK")
         failure_count = sum(1 for item in facts if item.get("failure_code") or item.get("failure_event_types"))
         policy_id = G13_STRUCTURAL_AUTONOMY_POLICY_V0_1
     else:
-        block_count, failure_count = _distinct_execution_counts(policy_input)
-        policy_id = G13_STRUCTURAL_AUTONOMY_POLICY_V0_2
+        block_count, failure_count, executed_count = _distinct_execution_stats(policy_input)
+        policy_id = (
+            G13_OPERATOR_RECOVERY_POLICY_ID
+            if policy_input.policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION
+            else G13_STRUCTURAL_AUTONOMY_POLICY_V0_2
+        )
+    if valid_recovery and executed_count == 0:
+        trigger("G13_OPERATOR_RECOVERY_CANARY", "THROTTLE")
     if block_count >= 2:
         trigger("G13_REPEATED_LOCAL_BLOCK", "REVIEW")
     elif block_count == 1:
@@ -261,6 +313,13 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
         result_core.update({
             "distinct_block_count": block_count,
             "distinct_failure_count": failure_count,
+        })
+    if policy_input.policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION:
+        result_core.update({
+            "post_recovery_execution_count": executed_count,
+            "operator_recovery_canary": bool(valid_recovery and executed_count == 0),
+            "recovery_event_id": (policy_input.operator_recovery or {}).get("recovery_event_id"),
+            "recovery_canonical_hash": (policy_input.operator_recovery or {}).get("canonical_hash"),
         })
 
     return PolicyEvaluationCore(

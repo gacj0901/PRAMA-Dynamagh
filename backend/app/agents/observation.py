@@ -522,6 +522,29 @@ def build_o_agent_stream(
     identity_facts = OAgentFacts(action_status=identity.status)
     artifacts.append(_artifact(identity_id=agent_identity_id, source_kind="AGENT_IDENTITY", source_id=identity.agent_id, observed_at=identity_observed_at, timestamp_source="created_at", surface=_surface(identity), agent_origin=identity.origin, lineage=identity_lineage, facts=identity_facts, missing_data=identity_missing))
 
+    # Recovery transitions are global, agent-attributed UsageEvents. Include
+    # them in O_AGENT without attaching them to a synthetic mandate or run.
+    for event in events:
+        if event.mandate_id is not None or event.event_type != "G13_RECOVERY_EVENT":
+            continue
+        event_lineage = _lineage(
+            agent_identity_id,
+            policies=[], runs=[], mandates=[], tasks=[], calls=[], evidence=[], evaluations=[], decisions=[], tickets=[],
+            events=[event], reservations=[],
+        )
+        artifacts.append(_artifact(
+            identity_id=agent_identity_id,
+            source_kind="USAGE_EVENT",
+            source_id=event.event_id,
+            observed_at=event.created_at,
+            timestamp_source="created_at",
+            surface=_surface(identity),
+            agent_origin=identity.origin,
+            lineage=event_lineage,
+            facts=OAgentFacts(action_status=event.event_type, recovery_event_types=(event.event_type,)),
+            missing_data=identity_missing,
+        ))
+
     for run in runs:
         context = context_for(run.mandate_id, run)
         mandate = context["mandate"]

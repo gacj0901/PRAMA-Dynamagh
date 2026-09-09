@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import text
@@ -12,6 +13,10 @@ from app.persistence.database import SessionLocal
 
 from app.agents.observation import build_o_agent_stream
 from app.authority.autonomy import G13PolicyInput, evaluate_g13_policy
+from app.authority.recovery import (
+    G13_OPERATOR_RECOVERY_POLICY_VERSION,
+    latest_operator_recovery,
+)
 from app.authority.composition import (
     AuthorityCompositionInput,
     evaluate_authority_composition,
@@ -55,6 +60,21 @@ def evaluate_current_g13(session: Session, agent_id: str) -> PolicyEvaluationCor
         item for item in build_o_agent_stream(session, agent_id)
         if item.facts.autonomy_run_state != "SKIPPED"
     ]
+    recovery_event = latest_operator_recovery(session, agent_id)
+    recovery_payload = None
+    policy_version = None
+    if recovery_event is not None:
+        recovery_payload = {**recovery_event.metadata_, "recovery_event_id": recovery_event.event_id}
+        cutoff = recovery_event.created_at
+        if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+            cutoff = cutoff.replace(tzinfo=timezone.utc)
+        observations = [
+            item for item in observations
+            if item.observed_at is not None
+            and datetime.fromisoformat(item.observed_at.replace("Z", "+00:00")) > cutoff
+            and item.source_id != recovery_event.event_id
+        ]
+        policy_version = G13_OPERATOR_RECOVERY_POLICY_VERSION
     grouped: dict[str, list[Any]] = {}
     for item in observations:
         run_ids = tuple(item.source_lineage.autonomy_run_ids)
@@ -75,12 +95,19 @@ def evaluate_current_g13(session: Session, agent_id: str) -> PolicyEvaluationCor
         item for item in observations
         if (tuple(item.source_lineage.autonomy_run_ids)[0] if item.source_lineage.autonomy_run_ids else item.observation_id) in selected
     ]
+    input_kwargs = {}
+    if policy_version is not None:
+        input_kwargs = {
+            "policy_version": policy_version,
+            "operator_recovery": recovery_payload,
+        }
     longitudinal_input = G13PolicyInput.from_observations(
         agent_id,
         observations,
         trajectory_lineage_id=f"o-agent-v0:{agent_id}",
         allow_sparse_window=True,
         expected_current_missing_codes=G13_PRE_ACTION_EXPECTED_MISSING,
+        **input_kwargs,
     )
     return evaluate_g13_policy(longitudinal_input)
 

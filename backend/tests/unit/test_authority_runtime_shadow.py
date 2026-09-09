@@ -134,6 +134,7 @@ def test_g13_runtime_window_counts_significant_causal_executions(monkeypatch):
     values = [observation(1, "external-failure", "PAYMENT_UNCERTAIN", True)]
     values.extend(observation(i, f"denied-{i}", "NOT_EXECUTED", True) for i in range(2, 30))
     monkeypatch.setattr(runtime, "build_o_agent_stream", lambda *args: values)
+    monkeypatch.setattr(runtime, "latest_operator_recovery", lambda *args: None)
 
     result = runtime.evaluate_current_g13(object(), "agent-runtime")
 
