@@ -5,6 +5,13 @@ import { privateKeyToAccount } from "viem/accounts";
 export const BASE_SEPOLIA = "eip155:84532";
 export const BASE_SEPOLIA_USDC = "0x036cbd53842c5426634e7929541ec2318f3dcf7e";
 export type PaymentInfo = { network: string; amount_usdc: string };
+export type PaymentTrace = {
+  phase: "VERIFY" | "SETTLE" | "TRANSPORT";
+  success: boolean;
+  error_reason?: string;
+  error_message?: string;
+  transaction?: string;
+};
 
 export class GatewayError extends Error { constructor(readonly code: string, message: string) { super(message); } }
 export function signerAddress(key?: string): string | null { return key ? privateKeyToAccount(key as `0x${string}`).address : null; }
@@ -17,9 +24,10 @@ export function validatePayment(requirement: { network: string; asset: string; a
   if (BigInt(amount) > atomicLimit) throw new GatewayError("PAYMENT_BUDGET_EXCEEDED", "payment exceeds configured budget");
   return { network: requirement.network, amount_usdc: (Number(BigInt(amount)) / 1_000_000).toFixed(6) };
 }
-export function paidFetch(key: string, limit: string): { fetcher: typeof fetch; payment: () => PaymentInfo | null } {
+export function paidFetch(key: string, limit: string): { fetcher: typeof fetch; payment: () => PaymentInfo | null; trace: () => PaymentTrace | null } {
   const account = privateKeyToAccount(key as `0x${string}`);
   let payment: PaymentInfo | null = null;
+  let trace: PaymentTrace | null = null;
   const client = new x402Client().register(BASE_SEPOLIA, new ExactEvmScheme(toClientEvmSigner(account)));
   client.registerPolicy((_version, requirements) => {
     const accepted = requirements.filter((r) => {
@@ -28,7 +36,22 @@ export function paidFetch(key: string, limit: string): { fetcher: typeof fetch; 
     if (!accepted.length) validatePayment(requirements[0] as never, limit);
     return accepted;
   });
-  return { fetcher: wrapFetchWithPayment(fetch, client), payment: () => payment };
+  client.onPaymentResponse(async (context) => {
+    if (context.settleResponse) {
+      trace = {
+        phase: "SETTLE",
+        success: context.settleResponse.success,
+        error_reason: context.settleResponse.errorReason,
+        error_message: context.settleResponse.errorMessage,
+        transaction: context.settleResponse.transaction || undefined,
+      };
+    } else if (context.paymentRequired) {
+      trace = { phase: "VERIFY", success: false, error_reason: context.paymentRequired.error };
+    } else if (context.error) {
+      trace = { phase: "TRANSPORT", success: false, error_message: context.error.message };
+    }
+  });
+  return { fetcher: wrapFetchWithPayment(fetch, client), payment: () => payment, trace: () => trace };
 }
 export function normalize(raw: Record<string, unknown>, causal_request_id: string, payment: PaymentInfo | null) {
   const miner = (raw.miner ?? raw.provider ?? {}) as Record<string, unknown>;

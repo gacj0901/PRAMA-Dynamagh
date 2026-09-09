@@ -163,6 +163,7 @@ app.post("/ask", async (req, res) => {
         event: "TELEGRAPH_UPSTREAM_FAILURE",
         status: upstream.status,
         body: upstreamText.slice(0, 2048),
+        payment: paymentClient.trace(),
       }));
       return res.status(upstream.status).json({
         code: upstream.status === 402 ? "PAYMENT_REQUIRED" : "TELEGRAPH_REQUEST_FAILED",
