@@ -149,7 +149,42 @@ app.post("/ask", async (req, res) => {
   if (!privateKey) return res.status(402).json({ code: "PAYMENT_REQUIRED" });
   const requested = budget_usdc === undefined ? maxPayment : Number(budget_usdc);
   if (!Number.isFinite(requested) || requested <= 0 || maxPayment <= 0) return res.status(400).json({ code: "PAYMENT_BUDGET_INVALID" });
-  try { const cap = Math.min(maxPayment, requested).toFixed(6); const paymentClient = paidFetch(privateKey, cap); const upstream = await paymentClient.fetcher(`${baseUrl}/engine/v1/ask`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query, context }) }); if (!upstream.ok) return res.status(upstream.status).json({ code: upstream.status === 402 ? "PAYMENT_REQUIRED" : "TELEGRAPH_REQUEST_FAILED" }); const raw = await upstream.json() as Record<string, unknown>; const normalized = normalize(raw, causal_request_id, paymentClient.payment()); if (!normalized.signal_hash) return res.status(502).json({ code: "TELEGRAPH_INVALID_RESPONSE" }); const signal = await fetch(`${baseUrl}/engine/v1/signal/${normalized.signal_hash}`); if (!signal.ok) return res.status(502).json({ code: "SIGNAL_VERIFICATION_FAILED" }); return res.json(normalized); } catch (error) { const known = error instanceof GatewayError ? error.code : "PAYMENT_FAILED"; return res.status(400).json({ code: known }); }
+  try {
+    const cap = Math.min(maxPayment, requested).toFixed(6);
+    const paymentClient = paidFetch(privateKey, cap);
+    const upstream = await paymentClient.fetcher(`${baseUrl}/engine/v1/ask`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query, context }),
+    });
+    const upstreamText = await upstream.text();
+    if (!upstream.ok) {
+      console.error(JSON.stringify({
+        event: "TELEGRAPH_UPSTREAM_FAILURE",
+        status: upstream.status,
+        body: upstreamText.slice(0, 2048),
+      }));
+      return res.status(upstream.status).json({
+        code: upstream.status === 402 ? "PAYMENT_REQUIRED" : "TELEGRAPH_REQUEST_FAILED",
+        upstream_status: upstream.status,
+        upstream_body: upstreamText.slice(0, 2048),
+      });
+    }
+    const raw = JSON.parse(upstreamText) as Record<string, unknown>;
+    const normalized = normalize(raw, causal_request_id, paymentClient.payment());
+    if (!normalized.signal_hash) return res.status(502).json({ code: "TELEGRAPH_INVALID_RESPONSE" });
+    const signal = await fetch(`${baseUrl}/engine/v1/signal/${normalized.signal_hash}`);
+    if (!signal.ok) return res.status(502).json({ code: "SIGNAL_VERIFICATION_FAILED" });
+    return res.json(normalized);
+  } catch (error) {
+    const known = error instanceof GatewayError ? error.code : "PAYMENT_FAILED";
+    console.error(JSON.stringify({
+      event: "TELEGRAPH_PAYMENT_FAILURE",
+      code: known,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+    return res.status(400).json({ code: known });
+  }
 });
 
 app.listen(port, () => {
