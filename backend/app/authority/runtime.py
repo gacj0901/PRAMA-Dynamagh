@@ -271,7 +271,15 @@ def checkpoint(mandate_id, family, phase, action_id, result, details, refs=()):
     )
 
 
-def _observe(session, mandate_id, family, phase, acquisition_id):
+def _observe(
+    session,
+    mandate_id,
+    family,
+    phase,
+    acquisition_id,
+    *,
+    throttled_constraints_satisfied=False,
+):
     mandate = session.get(Mandate,mandate_id)
     if mandate is None: raise ValueError("MANDATE_MISSING")
     refs = []
@@ -287,6 +295,7 @@ def _observe(session, mandate_id, family, phase, acquisition_id):
         composed = run_pre_next_action_authority_check(
             session, mandate=mandate, acquisition=acquisition, run=run,
             g12_authorized=True, g12_reservation=reservation,
+            throttled_constraints_satisfied=throttled_constraints_satisfied,
         )
         return composed.composition.policy_evaluation_id
     elif family == "CD":
@@ -334,7 +343,14 @@ def _observe(session, mandate_id, family, phase, acquisition_id):
     return core.policy_evaluation_id
 
 
-def observe_authority_shadow(mandate_id, *, phase, acquisition_id=None, g12_verified=False):
+def observe_authority_shadow(
+    mandate_id,
+    *,
+    phase,
+    acquisition_id=None,
+    g12_verified=False,
+    throttled_constraints_satisfied=False,
+):
     """Own transactions; neither policy results nor exceptions affect payment.
 
     An unavailable checkpoint is retried as a diagnostic PolicyEvaluation.
@@ -352,7 +368,14 @@ def observe_authority_shadow(mandate_id, *, phase, acquisition_id=None, g12_veri
         try:
             session=SessionLocal()
             session.execute(text("SET LOCAL statement_timeout = '2000ms'"))
-            identity = _observe(session,mandate_id,family,phase,acquisition_id)
+            identity = _observe(
+                session,
+                mandate_id,
+                family,
+                phase,
+                acquisition_id,
+                throttled_constraints_satisfied=throttled_constraints_satisfied,
+            )
             if identity is not None:
                 identities.append(identity)
             session.commit()

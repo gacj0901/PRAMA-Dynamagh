@@ -140,3 +140,44 @@ def test_g13_runtime_window_counts_significant_causal_executions(monkeypatch):
 
     assert result.result == "THROTTLE"
     assert result.result_core["distinct_failure_count"] == 1
+
+
+def test_shadow_observer_forwards_verified_throttle_constraint(monkeypatch):
+    seen = []
+
+    class FakeSession:
+        def execute(self, *args, **kwargs):
+            return None
+
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(runtime, "SessionLocal", FakeSession)
+    monkeypatch.setattr(
+        runtime,
+        "_observe",
+        lambda *args, **kwargs: seen.append(
+            (args[2], kwargs["throttled_constraints_satisfied"])
+        ),
+    )
+
+    runtime.observe_authority_shadow(
+        "mandate-recovery-canary",
+        phase="PRE_ACQUISITION",
+        acquisition_id="action-recovery-canary",
+        g12_verified=True,
+        throttled_constraints_satisfied=True,
+    )
+
+    assert seen == [
+        ("CD", True),
+        ("G12", True),
+        ("CDG", True),
+        ("COMPOSITION", True),
+    ]

@@ -104,10 +104,25 @@ def execute_one(mandate_id, acquisition_id):
         if not task.query.strip(): raise RuntimeError("ACQUISITION_QUERY_INVALID")
         call = TelegraphCall(mandate_id=mandate_id, acquisition_id=acquisition_id, causal_request_id=mandate_id, raw_response={}, status="REQUESTED", cost_usd=None)
         session.add(call)
-        session.add(UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id, event_type="TELEGRAPH_REQUEST", metadata_={"budget_usdc":str(budget),"origin":mandate.origin}))
+        request_metadata = {"budget_usdc": str(budget), "origin": mandate.origin}
+        if mandate.origin == "AUTONOMOUS":
+            request_metadata.update({
+                "g13_policy_evaluation_id": preliminary_g13.policy_evaluation_id,
+                "g13_policy_version": preliminary_g13.policy_version,
+                "g13_result": preliminary_g13.result,
+                "throttle_limit_usdc": str(throttle_limit) if throttle_limit is not None else None,
+                "throttled_constraints_satisfied": throttle_ok,
+            })
+        session.add(UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id, event_type="TELEGRAPH_REQUEST", metadata_=request_metadata))
         session.commit()  # Durable RUNNING claim before any outbound request.
         from app.authority.runtime import observe_authority_shadow
-        observe_authority_shadow(mandate_id, phase="PRE_ACQUISITION", acquisition_id=acquisition_id, g12_verified=True)
+        observe_authority_shadow(
+            mandate_id,
+            phase="PRE_ACQUISITION",
+            acquisition_id=acquisition_id,
+            g12_verified=True,
+            throttled_constraints_satisfied=throttle_ok,
+        )
         permit = None
         if mandate.origin == "AUTONOMOUS":
             from app.authority.delegated import issue_execution_permit, consume_execution_permit
