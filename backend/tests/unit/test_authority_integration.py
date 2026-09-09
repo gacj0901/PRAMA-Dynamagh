@@ -8,6 +8,7 @@ import pytest
 
 from app.agents.observation import OAgentFacts, OAgentObservation, OAgentSourceLineage
 from app.authority.autonomy import (
+    G13_LEGACY_POLICY_VERSION,
     G13_STRUCTURAL_AUTONOMY_POLICY_VERSION,
     G13PolicyInput,
     evaluate_g13_policy,
@@ -66,13 +67,21 @@ def _e1(structural_state: str = "COMPLETE", *, gamma: dict | None = None) -> Epi
     )
 
 
-def _observation(agent_id: str, sequence: int, *, decision: str | None = "PERMIT", failure: str | None = None, missing: tuple[str, ...] = ()) -> OAgentObservation:
-    lineage = OAgentSourceLineage(agent_identity_id=agent_id, mandate_ids=(f"m-{sequence}",))
+def _observation(agent_id: str, sequence: int, *, decision: str | None = "PERMIT", failure: str | None = None,
+                 failure_events: tuple[str, ...] = (), telegraph_statuses: tuple[str, ...] = (),
+                 run_id: str | None = None, missing: tuple[str, ...] = ()) -> OAgentObservation:
+    lineage = OAgentSourceLineage(
+        agent_identity_id=agent_id,
+        mandate_ids=(f"m-{sequence}",),
+        autonomy_run_ids=(run_id,) if run_id else (),
+    )
     facts = OAgentFacts(
         action_status="TICKETED",
         local_decision_state=decision,
         local_decision_scope="LOCAL_DECISION_ONLY" if decision else None,
         failure_code=failure,
+        failure_event_types=failure_events,
+        telegraph_statuses=telegraph_statuses,
     )
     value = {
         "schema_version": "o-agent-v0",
@@ -176,6 +185,38 @@ def test_g13_benign_repeated_degradation_and_replay():
     assert replay.result_hash == evaluate_g13_policy(repeated).result_hash
 
 
+def test_g13_counts_distinct_executions_and_ignores_its_own_denials():
+    first_attempt = [
+        _observation("agent-1", 1, run_id="run-1", decision="BLOCK", failure="TIMEOUT", telegraph_statuses=("PAYMENT_UNCERTAIN",)),
+        _observation("agent-1", 2, run_id="run-1", decision="BLOCK", failure_events=("ACQUISITION_FAILED",), telegraph_statuses=("PAYMENT_UNCERTAIN",)),
+    ]
+    denied_retry = _observation(
+        "agent-1", 3, run_id="run-2", decision="BLOCK",
+        failure_events=("ACQUISITION_FAILED",), telegraph_statuses=("NOT_EXECUTED",),
+    )
+    result = evaluate_g13_policy(G13PolicyInput.from_observations("agent-1", [*first_attempt, denied_retry]))
+    assert result.result == "THROTTLE"
+    assert result.result_core["distinct_failure_count"] == 1
+    assert result.result_core["distinct_block_count"] == 1
+
+    second_attempt = _observation(
+        "agent-1", 4, run_id="run-3", decision="BLOCK",
+        failure="TIMEOUT", telegraph_statuses=("PAYMENT_UNCERTAIN",),
+    )
+    assert evaluate_g13_policy(
+        G13PolicyInput.from_observations("agent-1", [*first_attempt, denied_retry, second_attempt])
+    ).result == "REVIEW"
+
+    legacy = G13PolicyInput.from_observations(
+        "agent-1", first_attempt, policy_version=G13_LEGACY_POLICY_VERSION,
+    )
+    legacy_result = evaluate_g13_policy(legacy)
+    assert legacy_result.result == "REVIEW"
+    assert legacy_result.policy_version == G13_LEGACY_POLICY_VERSION
+    assert "distinct_failure_count" not in legacy_result.result_core
+    assert legacy_result.result_hash == evaluate_g13_policy(legacy).result_hash
+
+
 def test_g13_missing_identity_version_and_duplicate_conflict_fail_closed():
     assert evaluate_g13_policy(G13PolicyInput.from_observations("agent-1", [])).result == "REVIEW"
     other = _observation("agent-2", 1)
@@ -188,7 +229,7 @@ def test_g13_missing_identity_version_and_duplicate_conflict_fail_closed():
 def test_g13_version_mismatch_is_not_silently_accepted():
     value = G13PolicyInput.from_observations("agent-1", [_observation("agent-1", 1)])
     with pytest.raises(ValueError, match="G13_POLICY_VERSION_UNSUPPORTED"):
-        evaluate_g13_policy(value.__class__(**{**value.__dict__, "policy_version": "g13-d-structural-autonomy-v0.2"}))
+        evaluate_g13_policy(value.__class__(**{**value.__dict__, "policy_version": "g13-d-structural-autonomy-v9"}))
 
 
 def test_g13_explicit_sparse_recovery_window_preserves_original_sequences():
@@ -238,4 +279,4 @@ def test_pre_next_action_gate_composes_independent_authorities(local, economic, 
 
 
 def test_g13_contract_version_is_frozen():
-    assert G13_STRUCTURAL_AUTONOMY_POLICY_VERSION == "g13-d-structural-autonomy-v0.1"
+    assert G13_STRUCTURAL_AUTONOMY_POLICY_VERSION == "g13-d-structural-autonomy-v0.2"

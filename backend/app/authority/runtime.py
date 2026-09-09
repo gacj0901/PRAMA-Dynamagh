@@ -49,6 +49,22 @@ class AuthorityShadowCheckpoint:
     composition: PolicyEvaluationCore
 
 
+def evaluate_current_g13(session: Session, agent_id: str) -> PolicyEvaluationCore:
+    """Evaluate the binding recent trajectory without persisting or mutating it."""
+    observations = [
+        item for item in build_o_agent_stream(session, agent_id)
+        if item.facts.autonomy_run_state != "SKIPPED"
+    ][-G13_ENFORCEMENT_WINDOW_SIZE:]
+    longitudinal_input = G13PolicyInput.from_observations(
+        agent_id,
+        observations,
+        trajectory_lineage_id=f"o-agent-v0:{agent_id}",
+        allow_sparse_window=True,
+        expected_current_missing_codes=G13_PRE_ACTION_EXPECTED_MISSING,
+    )
+    return evaluate_g13_policy(longitudinal_input)
+
+
 def _latest_epistemic_evaluation(session: Session, mandate_id: str) -> EpistemicEvaluation | None:
     return (
         session.query(EpistemicEvaluation)
@@ -124,18 +140,7 @@ def run_pre_next_action_authority_check(
     # permanent negative evidence. A bounded recent window prevents failures
     # from becoming an irreversible lifetime ban; original sequence numbers
     # and hashes remain in the policy input for replay.
-    observations = [
-        item for item in build_o_agent_stream(session, agent_id)
-        if item.facts.autonomy_run_state != "SKIPPED"
-    ][-G13_ENFORCEMENT_WINDOW_SIZE:]
-    longitudinal_input = G13PolicyInput.from_observations(
-        agent_id,
-        observations,
-        trajectory_lineage_id=f"o-agent-v0:{agent_id}",
-        allow_sparse_window=True,
-        expected_current_missing_codes=G13_PRE_ACTION_EXPECTED_MISSING,
-    )
-    longitudinal_core = evaluate_g13_policy(longitudinal_input)
+    longitudinal_core = evaluate_current_g13(session, agent_id)
     persist_policy_evaluation(session, longitudinal_core)
     if enforce:
         identity = session.get(AgentIdentity, agent_id)
@@ -193,6 +198,7 @@ def run_pre_next_action_authority_check(
 __all__ = [
     "AuthorityShadowCheckpoint",
     "RUNTIME_CHECKPOINT_VERSION",
+    "evaluate_current_g13",
     "run_pre_next_action_authority_check",
 ]
 

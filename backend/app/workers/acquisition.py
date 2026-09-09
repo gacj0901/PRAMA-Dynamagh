@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from urllib.request import Request, urlopen
 
-from app.domain.mandates import AcquisitionTask, TelegraphCall, Mandate, MandateStatus, PublicManualSpendReservation, UsageEvent, AgentAuthorityProfile, AutonomyRun
+from app.domain.mandates import AcquisitionTask, TelegraphCall, Mandate, MandateStatus, PublicManualSpendReservation, UsageEvent, AutonomyRun
 from app.domain.state_machine import transition_mandate
 from app.persistence.database import SessionLocal
 from app.users import credit as user_credit
@@ -70,13 +70,30 @@ def execute_one(mandate_id, acquisition_id):
         if Decimal(mandate.max_budget_usdc) > cap: raise RuntimeError("WORKFLOW_BUDGET_EXCEEDED")
         reservation = verify_spend_reservation(session, mandate_id, cap, mandate.origin)
         available = reservation.reserved_usdc - uncertain_hold(session, mandate_id)
+        run = profile = None
+        throttle_limit = None
+        throttle_ok = False
         if mandate.origin == "AUTONOMOUS":
-            profile = session.query(AgentAuthorityProfile).filter_by(agent_identity_id=mandate.agent_identity_id, status="ACTIVE").order_by(AgentAuthorityProfile.created_at.desc()).first()
-            per_action_cap = Decimal(profile.per_action_budget) if profile and profile.per_action_budget is not None else cap
+            from app.authority.delegated import resolve_profile
+            from app.authority.runtime import evaluate_current_g13
+            run = session.query(AutonomyRun).filter_by(mandate_id=mandate_id).one_or_none()
+            if run is None: raise RuntimeError("AUTONOMY_RUN_MISSING")
+            profile = resolve_profile(session, mandate.agent_identity_id)
+            per_action_cap = Decimal(profile.per_action_budget) if profile.per_action_budget is not None else cap
         else:
             per_action_cap = MAX_SINGLE_ACQUISITION_USDC
         budget = min(available, per_action_cap)
         if budget <= 0: raise RuntimeError("BUDGET_EXHAUSTED")
+        if mandate.origin == "AUTONOMOUS":
+            configured_throttle = (profile.human_review_thresholds or {}).get("throttle_max_usdc")
+            economic_ceiling = cap if profile.unlimited_budget else Decimal(profile.per_action_budget or profile.economic_budget)
+            throttle_limit = Decimal(str(configured_throttle)) if configured_throttle is not None else economic_ceiling / Decimal("2")
+            preliminary_g13 = evaluate_current_g13(session, mandate.agent_identity_id)
+            if preliminary_g13.result == "THROTTLE":
+                budget = min(budget, throttle_limit)
+                if budget <= 0:
+                    raise RuntimeError("G13_THROTTLE_CONSTRAINTS_REQUIRED")
+            throttle_ok = budget <= throttle_limit
         user_credit.verify_reserved(session, mandate, budget)
         if not task.query.strip(): raise RuntimeError("ACQUISITION_QUERY_INVALID")
         call = TelegraphCall(mandate_id=mandate_id, acquisition_id=acquisition_id, causal_request_id=mandate_id, raw_response={}, status="REQUESTED", cost_usd=None)
@@ -88,15 +105,7 @@ def execute_one(mandate_id, acquisition_id):
         permit = None
         if mandate.origin == "AUTONOMOUS":
             from app.authority.delegated import issue_execution_permit, consume_execution_permit
-            from app.authority.delegated import resolve_profile
             from app.authority.runtime import run_pre_next_action_authority_check
-            run = session.query(AutonomyRun).filter_by(mandate_id=mandate_id).one_or_none()
-            if run is None: raise RuntimeError("AUTONOMY_RUN_MISSING")
-            profile = resolve_profile(session, mandate.agent_identity_id)
-            configured_throttle = (profile.human_review_thresholds or {}).get("throttle_max_usdc")
-            economic_ceiling = cap if profile.unlimited_budget else Decimal(profile.per_action_budget or profile.economic_budget)
-            throttle_limit = Decimal(str(configured_throttle)) if configured_throttle is not None else economic_ceiling / Decimal("2")
-            throttle_ok = budget <= throttle_limit
             checkpoint = run_pre_next_action_authority_check(
                 session,
                 mandate=mandate,

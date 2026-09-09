@@ -10,7 +10,13 @@ from app.policy_gate.substrate import PolicyEvaluationCore, PolicyInputTypeError
 
 
 G13_STRUCTURAL_AUTONOMY_POLICY_V0_1 = "G13_STRUCTURAL_AUTONOMY_POLICY_V0_1"
-G13_STRUCTURAL_AUTONOMY_POLICY_VERSION = "g13-d-structural-autonomy-v0.1"
+G13_STRUCTURAL_AUTONOMY_POLICY_V0_2 = "G13_STRUCTURAL_AUTONOMY_POLICY_V0_2"
+G13_LEGACY_POLICY_VERSION = "g13-d-structural-autonomy-v0.1"
+G13_STRUCTURAL_AUTONOMY_POLICY_VERSION = "g13-d-structural-autonomy-v0.2"
+G13_SUPPORTED_POLICY_VERSIONS = frozenset({
+    G13_LEGACY_POLICY_VERSION,
+    G13_STRUCTURAL_AUTONOMY_POLICY_VERSION,
+})
 G13_POLICY_TYPE = "STRUCTURAL_AUTONOMY"
 G13_OUTPUTS = frozenset({"CONTINUE", "THROTTLE", "REVIEW", "HALT"})
 G13_PRECEDENCE = {"CONTINUE": 0, "THROTTLE": 1, "REVIEW": 2, "HALT": 3}
@@ -109,6 +115,7 @@ class G13PolicyInput:
         trajectory_lineage_id: str | None = None,
         allow_sparse_window: bool = False,
         expected_current_missing_codes: Iterable[str] = (),
+        policy_version: str = G13_STRUCTURAL_AUTONOMY_POLICY_VERSION,
     ) -> "G13PolicyInput":
         ordered = sorted(list(observations), key=lambda item: (item.sequence, item.observation_id))
         seen: dict[str, str] = {}
@@ -146,13 +153,18 @@ class G13PolicyInput:
                 "expected_current_missing_codes": sorted(set(expected_current_missing_codes)),
             },
             o_agent_contract_version=O_AGENT_SCHEMA_VERSION,
+            policy_version=policy_version,
             missing_data=missing,
             integrity_violations=tuple(sorted(integrity)),
         )
 
     def canonical_core(self) -> dict[str, Any]:
         return {
-            "input_contract": "g13-d-policy-input-v0.1",
+            "input_contract": (
+                "g13-d-policy-input-v0.1"
+                if self.policy_version == G13_LEGACY_POLICY_VERSION
+                else "g13-d-policy-input-v0.2"
+            ),
             "agent_id": self.agent_id,
             "trajectory_lineage_id": self.trajectory_lineage_id,
             "observation_refs": list(self.observation_refs),
@@ -169,8 +181,35 @@ def _facts(input_value: G13PolicyInput) -> list[Mapping[str, Any]]:
     return [dict(item.get("facts") or {}) for item in input_value.ordered_observations]
 
 
+def _distinct_execution_counts(policy_input: G13PolicyInput) -> tuple[int, int]:
+    """Count causal executions, not every projection derived from one run.
+
+    A G13-denied action persists a NOT_EXECUTED call for audit. It is excluded
+    from degradation counts because treating the denial as a fresh execution
+    failure would make recovery impossible. Legacy v0.1 replay keeps its exact
+    observation-counting behavior.
+    """
+    units: dict[str, dict[str, bool]] = {}
+    for item in policy_input.ordered_observations:
+        facts = dict(item.get("facts") or {})
+        lineage = dict(item.get("source_lineage") or {})
+        run_ids = tuple(lineage.get("autonomy_run_ids") or ())
+        unit_id = run_ids[0] if run_ids else str(item.get("observation_id"))
+        statuses = set(facts.get("telegraph_statuses") or ())
+        unit = units.setdefault(unit_id, {"block": False, "failure": False, "not_executed": False, "executed": False})
+        unit["block"] = unit["block"] or facts.get("local_decision_state") == "BLOCK"
+        unit["failure"] = unit["failure"] or bool(facts.get("failure_code") or facts.get("failure_event_types"))
+        unit["not_executed"] = unit["not_executed"] or "NOT_EXECUTED" in statuses
+        unit["executed"] = unit["executed"] or bool(statuses - {"NOT_EXECUTED", "REQUESTED"})
+    eligible = [unit for unit in units.values() if unit["executed"] or not unit["not_executed"]]
+    return (
+        sum(1 for unit in eligible if unit["block"]),
+        sum(1 for unit in eligible if unit["failure"]),
+    )
+
+
 def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
-    if policy_input.policy_version != G13_STRUCTURAL_AUTONOMY_POLICY_VERSION:
+    if policy_input.policy_version not in G13_SUPPORTED_POLICY_VERSIONS:
         raise ValueError("G13_POLICY_VERSION_UNSUPPORTED")
 
     facts = _facts(policy_input)
@@ -197,8 +236,13 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
     if current_missing - expected_missing:
         trigger("G13_CURRENT_CRITICAL_OBSERVATION_MISSING", "REVIEW")
 
-    block_count = sum(1 for item in facts if item.get("local_decision_state") == "BLOCK")
-    failure_count = sum(1 for item in facts if item.get("failure_code") or item.get("failure_event_types"))
+    if policy_input.policy_version == G13_LEGACY_POLICY_VERSION:
+        block_count = sum(1 for item in facts if item.get("local_decision_state") == "BLOCK")
+        failure_count = sum(1 for item in facts if item.get("failure_code") or item.get("failure_event_types"))
+        policy_id = G13_STRUCTURAL_AUTONOMY_POLICY_V0_1
+    else:
+        block_count, failure_count = _distinct_execution_counts(policy_input)
+        policy_id = G13_STRUCTURAL_AUTONOMY_POLICY_V0_2
     if block_count >= 2:
         trigger("G13_REPEATED_LOCAL_BLOCK", "REVIEW")
     elif block_count == 1:
@@ -208,9 +252,20 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
     elif failure_count == 1:
         trigger("G13_EXECUTION_FAILURE_DEGRADATION", "THROTTLE")
 
+    result_core: dict[str, Any] = {
+        "autonomy_state": outcome,
+        "rule_precedence": ["HALT", "REVIEW", "THROTTLE", "CONTINUE"],
+        "recovery": "re-evaluate a later valid ordered window; no historical row is mutated",
+    }
+    if policy_input.policy_version != G13_LEGACY_POLICY_VERSION:
+        result_core.update({
+            "distinct_block_count": block_count,
+            "distinct_failure_count": failure_count,
+        })
+
     return PolicyEvaluationCore(
-        policy_id=G13_STRUCTURAL_AUTONOMY_POLICY_V0_1,
-        policy_version=G13_STRUCTURAL_AUTONOMY_POLICY_VERSION,
+        policy_id=policy_id,
+        policy_version=policy_input.policy_version,
         policy_type=G13_POLICY_TYPE,
         policy_subject_type="AGENT_IDENTITY",
         policy_subject_id=policy_input.agent_id,
@@ -219,11 +274,7 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
         input_core=policy_input.canonical_core(),
         triggered_rule_ids=tuple(triggered),
         result=outcome,
-        result_core={
-            "autonomy_state": outcome,
-            "rule_precedence": ["HALT", "REVIEW", "THROTTLE", "CONTINUE"],
-            "recovery": "re-evaluate a later valid ordered window; no historical row is mutated",
-        },
+        result_core=result_core,
     )
 
 
