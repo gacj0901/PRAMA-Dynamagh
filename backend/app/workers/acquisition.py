@@ -18,6 +18,7 @@ from app.public_safety import MAX_SINGLE_ACQUISITION_USDC, m2m_max_workflow_usdc
 
 logger = logging.getLogger(__name__)
 now = lambda: datetime.now(timezone.utc)
+GATEWAY_REQUEST_TIMEOUT_SECONDS = 120
 
 
 def maximum(mandate, session=None):
@@ -38,7 +39,17 @@ def maximum(mandate, session=None):
 
 def uncertain_hold(session, mandate_id):
     events = session.query(UsageEvent).filter_by(mandate_id=mandate_id, event_type="ACQUISITION_PAYMENT_UNCERTAIN").all()
-    return sum((Decimal(e.metadata_["held_budget_usdc"]) for e in events), Decimal("0"))
+    reconciled = {
+        event.acquisition_id
+        for event in session.query(UsageEvent).filter_by(
+            mandate_id=mandate_id,
+            event_type="ACQUISITION_PAYMENT_RECONCILED",
+        ).all()
+    }
+    return sum(
+        (Decimal(event.metadata_["held_budget_usdc"]) for event in events if event.acquisition_id not in reconciled),
+        Decimal("0"),
+    )
 
 
 def execute_one(mandate_id, acquisition_id):
@@ -169,7 +180,7 @@ def execute_one(mandate_id, acquisition_id):
             headers["x-prama-internal-token"] = gateway_token
         request = Request(os.environ["GATEWAY_URL"] + "/ask",data=json.dumps(payload).encode(),headers=headers,method="POST")
         network_attempted = True
-        with urlopen(request,timeout=45) as response: raw = json.loads(response.read())
+        with urlopen(request, timeout=GATEWAY_REQUEST_TIMEOUT_SECONDS) as response: raw = json.loads(response.read())
         call.raw_response = raw if isinstance(raw,dict) else {"gateway_response":raw}
         call.status = "RECEIVED"
         session.commit()  # Preserve Gateway response before Evidence normalization.

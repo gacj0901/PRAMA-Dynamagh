@@ -15,7 +15,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from app.api import mandates as api
-from app.domain.mandates import AcquisitionTask, TelegraphCall, Evidence, Decision, Ticket, PolicyEvaluation, PublicManualSpendReservation, PublicManualSpendLedger
+from app.domain.mandates import AcquisitionTask, TelegraphCall, Evidence, Decision, Ticket, PolicyEvaluation, PublicManualSpendReservation, PublicManualSpendLedger, UsageEvent
 from app.persistence.database import SessionLocal
 from app.workers import tasks, acquisition
 from app.authority import runtime
@@ -79,6 +79,7 @@ def pipeline(monkeypatch,track3_database):
     queue=[];payments=[]
     monkeypatch.setattr(tasks.execute_acquisition,'delay',lambda mid,aid:queue.append((mid,aid)))
     def gateway(request,**kwargs):
+        assert kwargs['timeout'] == acquisition.GATEWAY_REQUEST_TIMEOUT_SECONDS
         body=json.loads(request.data);payments.append(body)
         assert Decimal(body['budget_usdc'])<=Decimal('0.01')
         if body['query']=='timeout':raise TimeoutError('synthetic uncertain outcome')
@@ -177,6 +178,15 @@ def test_uncertain_payment_is_never_retried_or_imputed_zero(pipeline):
     before=len(pipeline.payments)
     tasks.execute_acquisition(mid,bad_id)
     assert len(pipeline.payments)==before
+    with SessionLocal() as s:
+        s.add(UsageEvent(
+            mandate_id=mid,
+            acquisition_id=bad_id,
+            event_type='ACQUISITION_PAYMENT_RECONCILED',
+            metadata_={'settled':False,'actual_cost_usdc':'0.000000'},
+        ))
+        s.commit()
+        assert acquisition.uncertain_hold(s,mid)==0
 
 
 def test_durable_claim_blocks_concurrent_payment_without_redis(pipeline,monkeypatch):

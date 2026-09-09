@@ -26,6 +26,7 @@ G13_SUPPORTED_POLICY_VERSIONS = frozenset({
 G13_POLICY_TYPE = "STRUCTURAL_AUTONOMY"
 G13_OUTPUTS = frozenset({"CONTINUE", "THROTTLE", "REVIEW", "HALT"})
 G13_PRECEDENCE = {"CONTINUE": 0, "THROTTLE": 1, "REVIEW": 2, "HALT": 3}
+G13_NON_EXECUTION_STATUSES = frozenset({"NOT_EXECUTED", "REQUESTED", "RECONCILED_NO_PAYMENT"})
 G13_RULES = {
     "G13_OPERATOR_RECOVERY_CANARY": {
         "phenomenon": "an operator-reviewed infrastructure recovery has no post-recovery execution yet",
@@ -231,8 +232,8 @@ def _distinct_execution_stats(policy_input: G13PolicyInput) -> tuple[int, int, i
         unit = units.setdefault(unit_id, {"block": False, "failure": False, "not_executed": False, "executed": False})
         unit["block"] = unit["block"] or facts.get("local_decision_state") == "BLOCK"
         unit["failure"] = unit["failure"] or bool(facts.get("failure_code") or facts.get("failure_event_types"))
-        unit["not_executed"] = unit["not_executed"] or "NOT_EXECUTED" in statuses
-        unit["executed"] = unit["executed"] or bool(statuses - {"NOT_EXECUTED", "REQUESTED"})
+        unit["not_executed"] = unit["not_executed"] or bool(statuses & {"NOT_EXECUTED", "RECONCILED_NO_PAYMENT"})
+        unit["executed"] = unit["executed"] or bool(statuses - G13_NON_EXECUTION_STATUSES)
     eligible = [unit for unit in units.values() if unit["executed"] or not unit["not_executed"]]
     return (
         sum(1 for unit in eligible if unit["block"]),
@@ -280,7 +281,7 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
     latest = source_observations[-1] if source_observations else None
     latest_facts = dict(latest.get("facts") or {}) if latest else {}
     latest_statuses = set(latest_facts.get("telegraph_statuses") or ())
-    latest_is_pre_action = bool(policy_input.operator_recovery) and not latest_statuses - {"NOT_EXECUTED", "REQUESTED"}
+    latest_is_pre_action = bool(policy_input.operator_recovery) and not latest_statuses - G13_NON_EXECUTION_STATUSES
     # A denied or pre-action call has no external result by definition. Its
     # missing evidence is an audit fact, not a new trajectory failure. Keep
     # current-missing enforcement for real executions so incomplete external

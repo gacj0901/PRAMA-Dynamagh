@@ -187,6 +187,7 @@ def test_not_executed_recovery_observation_does_not_retrigger_missing_review():
     assert result.result == "THROTTLE"
     assert result.triggered_rule_ids == ("G13_OPERATOR_RECOVERY_CANARY",)
 
+
 def test_requested_recovery_observation_does_not_retrigger_missing_review():
     recovery = _recovery()
     requested = _observation(
@@ -208,4 +209,30 @@ def test_requested_recovery_observation_does_not_retrigger_missing_review():
     result = evaluate_g13_policy(value)
 
     assert result.result == "THROTTLE"
+    assert result.triggered_rule_ids == ("G13_OPERATOR_RECOVERY_CANARY",)
+
+
+def test_reconciled_no_payment_keeps_recovery_canary_eligible():
+    recovery = _recovery()
+    reconciled = _observation(
+        1,
+        "reconciled-no-payment",
+        RECOVERY_AT + timedelta(seconds=10),
+        failed=True,
+        missing_data=("EVIDENCE_NOT_PRESENT",),
+        telegraph_status="RECONCILED_NO_PAYMENT",
+    )
+    value = G13PolicyInput.from_observations(
+        "autonomy-controller",
+        [reconciled],
+        policy_version=G13_OPERATOR_RECOVERY_POLICY_VERSION,
+        operator_recovery=recovery,
+        expected_current_missing_codes=(),
+    )
+
+    result = evaluate_g13_policy(value)
+
+    assert result.result == "THROTTLE"
+    assert result.result_core["post_recovery_execution_count"] == 0
+    assert result.result_core["distinct_failure_count"] == 0
     assert result.triggered_rule_ids == ("G13_OPERATOR_RECOVERY_CANARY",)
