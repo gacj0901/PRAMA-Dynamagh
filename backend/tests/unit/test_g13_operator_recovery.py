@@ -12,6 +12,9 @@ from app.authority.autonomy import (
 from app.authority.recovery import (
     G13_OPERATOR_RECOVERY_POLICY_VERSION,
     G13_RECOVERY_EVENT_SCHEMA_VERSION,
+    G13_REVIEW_RECOVERY_POLICY_VERSION,
+    G13_REVIEW_RECOVERY_REASON,
+    G13_REVIEW_RECOVERY_SCHEMA_VERSION,
     validate_recovery_payload,
 )
 from app.epistemic.contracts import canonical_hash
@@ -46,6 +49,28 @@ def _recovery() -> dict:
     }
 
 
+def _review_recovery() -> dict:
+    material = {
+        "schema_version": G13_REVIEW_RECOVERY_SCHEMA_VERSION,
+        "agent_identity_id": "autonomy-controller",
+        "operator_reviewed": True,
+        "recovery_reason": G13_REVIEW_RECOVERY_REASON,
+        "previous_policy_version": G13_OPERATOR_RECOVERY_POLICY_VERSION,
+        "policy_version": G13_REVIEW_RECOVERY_POLICY_VERSION,
+        "source_policy_evaluation_id": "review-evaluation-1",
+        "source_event_ids": ["reconciliation-event-1"],
+        "canary_budget_usdc": "0.010000",
+        "canary_execution_limit": 1,
+        "concurrency_limit": 1,
+        "created_at": RECOVERY_AT.isoformat().replace("+00:00", "Z"),
+    }
+    return {
+        **material,
+        "canonical_hash": canonical_hash(material),
+        "recovery_event_id": "review-recovery-event-1",
+    }
+
+
 def _observation(
     sequence: int,
     run_id: str,
@@ -54,6 +79,7 @@ def _observation(
     failed: bool,
     missing_data: tuple[str, ...] = (),
     telegraph_status: str | None = None,
+    recovery_event_types: tuple[str, ...] = (),
 ) -> OAgentObservation:
     lineage = OAgentSourceLineage(agent_identity_id="autonomy-controller", autonomy_run_ids=(run_id,))
     facts = OAgentFacts(
@@ -62,6 +88,7 @@ def _observation(
         local_decision_scope="LOCAL_DECISION_ONLY",
         failure_code="GATEWAY_UNAVAILABLE" if failed else None,
         failure_event_types=("ACQUISITION_FAILED",) if failed else (),
+        recovery_event_types=recovery_event_types,
         telegraph_statuses=(telegraph_status,) if telegraph_status else ("PAYMENT_UNCERTAIN",) if failed else ("SUCCEEDED",),
     )
     value = {
@@ -236,3 +263,46 @@ def test_reconciled_no_payment_keeps_recovery_canary_eligible():
     assert result.result_core["post_recovery_execution_count"] == 0
     assert result.result_core["distinct_failure_count"] == 0
     assert result.triggered_rule_ids == ("G13_OPERATOR_RECOVERY_CANARY",)
+
+
+def test_review_recovery_authorizes_exactly_one_bounded_probe():
+    recovery = _review_recovery()
+    assert validate_recovery_payload(recovery) is True
+
+    before = G13PolicyInput.from_observations(
+        "autonomy-controller",
+        [],
+        policy_version=G13_REVIEW_RECOVERY_POLICY_VERSION,
+        operator_recovery=recovery,
+    )
+    authorized = evaluate_g13_policy(before)
+
+    assert authorized.result == "THROTTLE"
+    assert authorized.triggered_rule_ids == ("G13_OPERATOR_RECOVERY_CANARY",)
+    assert authorized.result_core["recovery_probe_authorized"] is True
+    assert authorized.result_core["recovery_probe_attempt_count"] == 0
+
+    attempted = _observation(
+        1,
+        "review-recovery-probe",
+        RECOVERY_AT + timedelta(seconds=10),
+        failed=True,
+        missing_data=("EVIDENCE_NOT_PRESENT",),
+        telegraph_status="RECONCILED_NO_PAYMENT",
+        recovery_event_types=("G13_RECOVERY_PROBE_STARTED",),
+    )
+    after = G13PolicyInput.from_observations(
+        "autonomy-controller",
+        [attempted],
+        policy_version=G13_REVIEW_RECOVERY_POLICY_VERSION,
+        operator_recovery=recovery,
+        expected_current_missing_codes=(),
+    )
+    exhausted = evaluate_g13_policy(after)
+
+    assert exhausted.result == "CONTINUE"
+    assert exhausted.triggered_rule_ids == ()
+    assert exhausted.result_core["post_recovery_execution_count"] == 0
+    assert exhausted.result_core["recovery_probe_attempt_count"] == 1
+    assert exhausted.result_core["recovery_probe_authorized"] is False
+    assert replay_g13_policy(after).result_hash == exhausted.result_hash

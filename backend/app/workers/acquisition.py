@@ -137,6 +137,7 @@ def execute_one(mandate_id, acquisition_id):
         permit = None
         if mandate.origin == "AUTONOMOUS":
             from app.authority.delegated import issue_execution_permit, consume_execution_permit
+            from app.authority.recovery import G13_REVIEW_RECOVERY_POLICY_VERSION
             from app.authority.runtime import run_pre_next_action_authority_check
             checkpoint = run_pre_next_action_authority_check(
                 session,
@@ -172,6 +173,30 @@ def execute_one(mandate_id, acquisition_id):
             session.commit()
             consume_execution_permit(session, permit.permit_id)
             session.commit()
+            if (
+                preliminary_g13.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
+                and preliminary_g13.result_core.get("recovery_probe_authorized") is True
+            ):
+                existing_probe = session.query(UsageEvent).filter_by(
+                    mandate_id=mandate_id,
+                    acquisition_id=acquisition_id,
+                    event_type="G13_RECOVERY_PROBE_STARTED",
+                ).one_or_none()
+                if existing_probe is None:
+                    session.add(UsageEvent(
+                        mandate_id=mandate_id,
+                        acquisition_id=acquisition_id,
+                        event_type="G13_RECOVERY_PROBE_STARTED",
+                        metadata_={
+                            "autonomy_run_id": run.run_id,
+                            "recovery_event_id": preliminary_g13.result_core.get("recovery_event_id"),
+                            "g13_policy_evaluation_id": preliminary_g13.policy_evaluation_id,
+                            "g13_policy_version": preliminary_g13.policy_version,
+                            "max_usdc": str(budget),
+                            "concurrency_limit": profile.concurrency_limit,
+                        },
+                    ))
+                    session.commit()
         payload = {"query":task.query,"context":({"requested_intent":task.requested_intent} if task.requested_intent else {}),"causal_request_id":mandate_id}
         payload["budget_usdc"] = str(budget)
         headers = {"content-type":"application/json"}

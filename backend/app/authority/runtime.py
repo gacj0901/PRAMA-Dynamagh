@@ -13,10 +13,7 @@ from app.persistence.database import SessionLocal
 
 from app.agents.observation import build_o_agent_stream
 from app.authority.autonomy import G13PolicyInput, evaluate_g13_policy
-from app.authority.recovery import (
-    G13_OPERATOR_RECOVERY_POLICY_VERSION,
-    latest_operator_recovery,
-)
+from app.authority.recovery import latest_operator_recovery
 from app.authority.composition import (
     AuthorityCompositionInput,
     evaluate_authority_composition,
@@ -74,7 +71,7 @@ def evaluate_current_g13(session: Session, agent_id: str) -> PolicyEvaluationCor
             and datetime.fromisoformat(item.observed_at.replace("Z", "+00:00")) > cutoff
             and item.source_id != recovery_event.event_id
         ]
-        policy_version = G13_OPERATOR_RECOVERY_POLICY_VERSION
+        policy_version = str(recovery_payload["policy_version"])
     grouped: dict[str, list[Any]] = {}
     for item in observations:
         run_ids = tuple(item.source_lineage.autonomy_run_ids)

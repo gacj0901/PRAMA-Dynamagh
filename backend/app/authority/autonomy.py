@@ -9,6 +9,8 @@ from app.agents.observation import OAgentObservation, O_AGENT_SCHEMA_VERSION
 from app.authority.recovery import (
     G13_OPERATOR_RECOVERY_POLICY_ID,
     G13_OPERATOR_RECOVERY_POLICY_VERSION,
+    G13_REVIEW_RECOVERY_POLICY_ID,
+    G13_REVIEW_RECOVERY_POLICY_VERSION,
     validate_recovery_payload,
 )
 from app.policy_gate.substrate import PolicyEvaluationCore, PolicyInputTypeError, replay_policy
@@ -22,6 +24,11 @@ G13_SUPPORTED_POLICY_VERSIONS = frozenset({
     G13_LEGACY_POLICY_VERSION,
     G13_STRUCTURAL_AUTONOMY_POLICY_VERSION,
     G13_OPERATOR_RECOVERY_POLICY_VERSION,
+    G13_REVIEW_RECOVERY_POLICY_VERSION,
+})
+G13_RECOVERY_POLICY_VERSIONS = frozenset({
+    G13_OPERATOR_RECOVERY_POLICY_VERSION,
+    G13_REVIEW_RECOVERY_POLICY_VERSION,
 })
 G13_POLICY_TYPE = "STRUCTURAL_AUTONOMY"
 G13_OUTPUTS = frozenset({"CONTINUE", "THROTTLE", "REVIEW", "HALT"})
@@ -166,7 +173,7 @@ class G13PolicyInput:
             "source": "caller_supplied_observation_window",
             "expected_current_missing_codes": sorted(set(expected_current_missing_codes)),
         }
-        if policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION and operator_recovery:
+        if policy_version in G13_RECOVERY_POLICY_VERSIONS and operator_recovery:
             window_definition.update({
                 "recovery_event_id": operator_recovery.get("recovery_event_id"),
                 "recovery_effective_at": operator_recovery.get("created_at"),
@@ -190,7 +197,9 @@ class G13PolicyInput:
                 "g13-d-policy-input-v0.1"
                 if self.policy_version == G13_LEGACY_POLICY_VERSION
                 else (
-                    "g13-d-policy-input-v0.3"
+                    "g13-d-policy-input-v0.4"
+                    if self.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
+                    else "g13-d-policy-input-v0.3"
                     if self.policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION
                     else "g13-d-policy-input-v0.2"
                 )
@@ -205,7 +214,7 @@ class G13PolicyInput:
             "missing_data": list(self.missing_data),
             "integrity_violations": list(self.integrity_violations),
         }
-        if self.policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION:
+        if self.policy_version in G13_RECOVERY_POLICY_VERSIONS:
             core["operator_recovery"] = dict(self.operator_recovery or {})
         return core
 
@@ -247,6 +256,18 @@ def _distinct_execution_counts(policy_input: G13PolicyInput) -> tuple[int, int]:
     return block_count, failure_count
 
 
+def _distinct_recovery_probe_count(policy_input: G13PolicyInput) -> int:
+    units: set[str] = set()
+    for item in policy_input.ordered_observations:
+        facts = dict(item.get("facts") or {})
+        if "G13_RECOVERY_PROBE_STARTED" not in set(facts.get("recovery_event_types") or ()):
+            continue
+        lineage = dict(item.get("source_lineage") or {})
+        run_ids = tuple(lineage.get("autonomy_run_ids") or ())
+        units.add(run_ids[0] if run_ids else str(item.get("observation_id")))
+    return len(units)
+
+
 def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
     if policy_input.policy_version not in G13_SUPPORTED_POLICY_VERSIONS:
         raise ValueError("G13_POLICY_VERSION_UNSUPPORTED")
@@ -263,11 +284,11 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
             outcome = result
 
     valid_recovery = (
-        policy_input.policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION
+        policy_input.policy_version in G13_RECOVERY_POLICY_VERSIONS
         and policy_input.operator_recovery is not None
         and validate_recovery_payload(policy_input.operator_recovery)
     )
-    if policy_input.policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION and not valid_recovery:
+    if policy_input.policy_version in G13_RECOVERY_POLICY_VERSIONS and not valid_recovery:
         trigger("G13_IDENTITY_OR_TRAJECTORY_INTEGRITY", "HALT")
     if not source_observations and not valid_recovery:
         trigger("G13_REQUIRED_TRAJECTORY_MISSING", "REVIEW")
@@ -302,11 +323,25 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
     else:
         block_count, failure_count, executed_count = _distinct_execution_stats(policy_input)
         policy_id = (
-            G13_OPERATOR_RECOVERY_POLICY_ID
-            if policy_input.policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION
-            else G13_STRUCTURAL_AUTONOMY_POLICY_V0_2
+            G13_REVIEW_RECOVERY_POLICY_ID
+            if policy_input.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
+            else (
+                G13_OPERATOR_RECOVERY_POLICY_ID
+                if policy_input.policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION
+                else G13_STRUCTURAL_AUTONOMY_POLICY_V0_2
+            )
         )
-    if valid_recovery and executed_count == 0:
+    recovery_probe_attempt_count = (
+        _distinct_recovery_probe_count(policy_input)
+        if policy_input.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
+        else 0
+    )
+    recovery_probe_limit = int((policy_input.operator_recovery or {}).get("canary_execution_limit", 0))
+    recovery_probe_authorized = valid_recovery and executed_count == 0 and (
+        policy_input.policy_version != G13_REVIEW_RECOVERY_POLICY_VERSION
+        or recovery_probe_attempt_count < recovery_probe_limit
+    )
+    if recovery_probe_authorized:
         trigger("G13_OPERATOR_RECOVERY_CANARY", "THROTTLE")
     if block_count >= 2:
         trigger("G13_REPEATED_LOCAL_BLOCK", "REVIEW")
@@ -327,12 +362,18 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
             "distinct_block_count": block_count,
             "distinct_failure_count": failure_count,
         })
-    if policy_input.policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION:
+    if policy_input.policy_version in G13_RECOVERY_POLICY_VERSIONS:
         result_core.update({
             "post_recovery_execution_count": executed_count,
-            "operator_recovery_canary": bool(valid_recovery and executed_count == 0),
+            "operator_recovery_canary": recovery_probe_authorized,
             "recovery_event_id": (policy_input.operator_recovery or {}).get("recovery_event_id"),
             "recovery_canonical_hash": (policy_input.operator_recovery or {}).get("canonical_hash"),
+        })
+    if policy_input.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION:
+        result_core.update({
+            "recovery_probe_attempt_count": recovery_probe_attempt_count,
+            "recovery_probe_execution_limit": recovery_probe_limit,
+            "recovery_probe_authorized": recovery_probe_authorized,
         })
 
     return PolicyEvaluationCore(
