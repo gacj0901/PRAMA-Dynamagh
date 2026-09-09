@@ -187,7 +187,6 @@ def test_not_executed_recovery_observation_does_not_retrigger_missing_review():
     assert result.result == "THROTTLE"
     assert result.triggered_rule_ids == ("G13_OPERATOR_RECOVERY_CANARY",)
 
-
 def test_requested_recovery_observation_does_not_retrigger_missing_review():
     recovery = _recovery()
     requested = _observation(

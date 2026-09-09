@@ -280,7 +280,7 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
     latest = source_observations[-1] if source_observations else None
     latest_facts = dict(latest.get("facts") or {}) if latest else {}
     latest_statuses = set(latest_facts.get("telegraph_statuses") or ())
-    latest_is_pre_action = bool(latest_statuses) and not latest_statuses - {"NOT_EXECUTED", "REQUESTED"}
+    latest_is_pre_action = bool(policy_input.operator_recovery) and not latest_statuses - {"NOT_EXECUTED", "REQUESTED"}
     # A denied or pre-action call has no external result by definition. Its
     # missing evidence is an audit fact, not a new trajectory failure. Keep
     # current-missing enforcement for real executions so incomplete external
