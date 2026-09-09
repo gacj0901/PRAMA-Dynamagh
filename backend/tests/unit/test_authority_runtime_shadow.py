@@ -10,6 +10,9 @@ from app.authority.composition import (
     evaluate_authority_composition,
     replay_authority_composition,
 )
+from app.authority import runtime
+from app.agents.observation import OAgentFacts, OAgentObservation, OAgentSourceLineage
+from app.pramagraph.evaluation import digest
 
 
 def _input(
@@ -100,3 +103,39 @@ def test_gamma_changes_are_not_composition_inputs():
 
     assert changed_gamma.result == first.result
     assert changed_gamma.input_hash == first.input_hash
+
+
+def test_g13_runtime_window_counts_significant_causal_executions(monkeypatch):
+    def observation(sequence: int, run_id: str, status: str, failure: bool) -> OAgentObservation:
+        lineage = OAgentSourceLineage(agent_identity_id="agent-runtime", autonomy_run_ids=(run_id,))
+        facts = OAgentFacts(
+            local_decision_state="BLOCK" if failure else "PERMIT",
+            local_decision_scope="LOCAL_DECISION_ONLY",
+            failure_code="TIMEOUT" if failure else None,
+            telegraph_statuses=(status,),
+        )
+        value = {
+            "schema_version": "o-agent-v0",
+            "observation_id": f"observation-{sequence}",
+            "sequence": sequence,
+            "observed_at": f"2026-09-08T00:{sequence:02d}:00Z",
+            "timestamp_source": "created_at",
+            "agent_identity_id": "agent-runtime",
+            "agent_origin": "INTERNAL_AUTONOMY",
+            "origin_surface": "AUTONOMOUS",
+            "source_kind": "AUTONOMY_RUN",
+            "source_id": run_id,
+            "source_lineage": lineage.model_dump(mode="json"),
+            "facts": facts.model_dump(mode="json"),
+            "missing_data": [],
+        }
+        return OAgentObservation(**value, content_hash=digest(value))
+
+    values = [observation(1, "external-failure", "PAYMENT_UNCERTAIN", True)]
+    values.extend(observation(i, f"denied-{i}", "NOT_EXECUTED", True) for i in range(2, 30))
+    monkeypatch.setattr(runtime, "build_o_agent_stream", lambda *args: values)
+
+    result = runtime.evaluate_current_g13(object(), "agent-runtime")
+
+    assert result.result == "THROTTLE"
+    assert result.result_core["distinct_failure_count"] == 1

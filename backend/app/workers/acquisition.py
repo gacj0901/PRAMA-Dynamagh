@@ -116,6 +116,7 @@ def execute_one(mandate_id, acquisition_id):
                 current_runtime_action="CONTINUE_TO_GATEWAY",
                 throttled_constraints_satisfied=throttle_ok,
                 enforce=True,
+                longitudinal_core=preliminary_g13,
             )
             if checkpoint.composition.result != "ALLOW":
                 raise RuntimeError(

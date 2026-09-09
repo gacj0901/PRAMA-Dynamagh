@@ -54,7 +54,27 @@ def evaluate_current_g13(session: Session, agent_id: str) -> PolicyEvaluationCor
     observations = [
         item for item in build_o_agent_stream(session, agent_id)
         if item.facts.autonomy_run_state != "SKIPPED"
-    ][-G13_ENFORCEMENT_WINDOW_SIZE:]
+    ]
+    grouped: dict[str, list[Any]] = {}
+    for item in observations:
+        run_ids = tuple(item.source_lineage.autonomy_run_ids)
+        unit_id = run_ids[0] if run_ids else item.observation_id
+        grouped.setdefault(unit_id, []).append(item)
+    significant_units: list[str] = []
+    for unit_id, items in grouped.items():
+        statuses = {
+            status
+            for item in items
+            for status in item.facts.telegraph_statuses
+        }
+        if "NOT_EXECUTED" in statuses and not statuses - {"NOT_EXECUTED", "REQUESTED"}:
+            continue
+        significant_units.append(unit_id)
+    selected = set(significant_units[-G13_ENFORCEMENT_WINDOW_SIZE:])
+    observations = [
+        item for item in observations
+        if (tuple(item.source_lineage.autonomy_run_ids)[0] if item.source_lineage.autonomy_run_ids else item.observation_id) in selected
+    ]
     longitudinal_input = G13PolicyInput.from_observations(
         agent_id,
         observations,
@@ -103,6 +123,7 @@ def run_pre_next_action_authority_check(
     current_runtime_action: str = "CONTINUE_TO_GATEWAY",
     throttled_constraints_satisfied: bool = False,
     enforce: bool = False,
+    longitudinal_core: PolicyEvaluationCore | None = None,
 ) -> AuthorityShadowCheckpoint:
     """Evaluate and persist CD/G12/G13 composition at the action boundary.
 
@@ -140,7 +161,7 @@ def run_pre_next_action_authority_check(
     # permanent negative evidence. A bounded recent window prevents failures
     # from becoming an irreversible lifetime ban; original sequence numbers
     # and hashes remain in the policy input for replay.
-    longitudinal_core = evaluate_current_g13(session, agent_id)
+    longitudinal_core = longitudinal_core or evaluate_current_g13(session, agent_id)
     persist_policy_evaluation(session, longitudinal_core)
     if enforce:
         identity = session.get(AgentIdentity, agent_id)
