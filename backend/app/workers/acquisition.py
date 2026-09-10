@@ -79,9 +79,8 @@ def execute_one(mandate_id, acquisition_id):
         session.commit()
         cap = maximum(mandate, session)
         if Decimal(mandate.max_budget_usdc) > cap: raise RuntimeError("WORKFLOW_BUDGET_EXCEEDED")
-        reservation = verify_spend_reservation(session, mandate_id, cap, mandate.origin)
-        available = reservation.reserved_usdc - uncertain_hold(session, mandate_id)
         run = profile = None
+        preliminary_g13 = None
         throttle_limit = None
         throttle_ok = False
         if mandate.origin == "AUTONOMOUS":
@@ -91,22 +90,26 @@ def execute_one(mandate_id, acquisition_id):
             if run is None: raise RuntimeError("AUTONOMY_RUN_MISSING")
             profile = resolve_profile(session, mandate.agent_identity_id)
             per_action_cap = Decimal(profile.per_action_budget) if profile.per_action_budget is not None else cap
-        else:
-            per_action_cap = MAX_SINGLE_ACQUISITION_USDC
-        budget = min(available, per_action_cap)
-        if budget <= 0: raise RuntimeError("BUDGET_EXHAUSTED")
-        if mandate.origin == "AUTONOMOUS":
             configured_throttle = (profile.human_review_thresholds or {}).get("throttle_max_usdc")
             economic_ceiling = cap if profile.unlimited_budget else Decimal(profile.per_action_budget or profile.economic_budget)
             throttle_limit = Decimal(str(configured_throttle)) if configured_throttle is not None else economic_ceiling / Decimal("2")
             preliminary_g13 = evaluate_current_g13(session, mandate.agent_identity_id)
+            if preliminary_g13.result in {"HALT", "REVIEW"}:
+                raise RuntimeError("G13_" + preliminary_g13.result)
+            if preliminary_g13.result == "THROTTLE" and preliminary_g13.result_core.get("operator_recovery_canary"):
+                recovery = preliminary_g13.input_core.get("operator_recovery") or {}
+                throttle_limit = min(
+                    economic_ceiling,
+                    Decimal(str(recovery.get("canary_budget_usdc", "0"))),
+                )
+        else:
+            per_action_cap = MAX_SINGLE_ACQUISITION_USDC
+        reservation = verify_spend_reservation(session, mandate_id, cap, mandate.origin)
+        available = reservation.reserved_usdc - uncertain_hold(session, mandate_id)
+        budget = min(available, per_action_cap)
+        if budget <= 0: raise RuntimeError("BUDGET_EXHAUSTED")
+        if mandate.origin == "AUTONOMOUS":
             if preliminary_g13.result == "THROTTLE":
-                if preliminary_g13.result_core.get("operator_recovery_canary"):
-                    recovery = preliminary_g13.input_core.get("operator_recovery") or {}
-                    throttle_limit = min(
-                        economic_ceiling,
-                        Decimal(str(recovery.get("canary_budget_usdc", "0"))),
-                    )
                 budget = min(budget, throttle_limit)
                 if budget <= 0:
                     raise RuntimeError("G13_THROTTLE_CONSTRAINTS_REQUIRED")
