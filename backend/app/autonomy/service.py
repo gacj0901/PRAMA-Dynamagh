@@ -185,6 +185,12 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
         return None
     if profile and not full_autonomy_enabled(identity.agent_id if identity else None):
         return None
+    if identity is not None:
+        from app.authority.runtime import evaluate_current_g13
+
+        longitudinal = evaluate_current_g13(session, identity.agent_id)
+        if longitudinal.result in {"REVIEW", "HALT"}:
+            return None
     slot = execution_slot(policy, instant, _effective_cadence(policy, profile))
     key = idempotency_key(policy, slot)
     existing = session.query(AutonomyRun).filter_by(idempotency_key=key).one_or_none()

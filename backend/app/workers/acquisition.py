@@ -281,6 +281,17 @@ def advance(mandate_id):
             from app.workers.tasks import execute_acquisition
             execute_acquisition.delay(mandate_id,next_id)
             return "ACQUISITION_CONTINUED"
+        blocked = next((t for t in tasks if t.status == "FAILED" and t.failure_code in {"G13_REVIEW", "G13_HALT"}), None)
+        if blocked is not None:
+            reservation = session.get(PublicManualSpendReservation, mandate_id)
+            if reservation and reservation.status == "RESERVED" and uncertain_hold(session, mandate_id) == 0:
+                user_credit.release(session, mandate)
+                release_spend_reservation(session, mandate_id, mandate.origin)
+            if mandate.status != MandateStatus.FAILED.value:
+                transition_mandate(session, mandate, MandateStatus.FAILED, blocked.failure_code)
+            finalize_http_run(session, mandate_id, failure_code=blocked.failure_code)
+            session.commit()
+            return blocked.failure_code
         if mandate.status == "ACQUIRING":
             reservation = session.get(PublicManualSpendReservation,mandate_id)
             if reservation and reservation.status=="RESERVED" and uncertain_hold(session,mandate_id)==0:
