@@ -242,9 +242,12 @@ def _distinct_execution_stats(policy_input: G13PolicyInput) -> tuple[int, int, i
         unit["block"] = unit["block"] or facts.get("local_decision_state") == "BLOCK"
         # External failures reconciled without payment are recoverable
         # observations and must not escalate the longitudinal trajectory.
+        external_codes = {"GATEWAY_UNAVAILABLE", "TELEGRAPH_UNAVAILABLE", "X402_FACILITATOR_TIMEOUT"}
+        failure_code = facts.get("failure_code")
         unit["failure"] = unit["failure"] or (
             not bool(facts.get("recovered"))
-            and bool(facts.get("failure_code") or facts.get("failure_event_types"))
+            and failure_code not in external_codes
+            and bool(failure_code or facts.get("failure_event_types"))
         )
         unit["not_executed"] = unit["not_executed"] or bool(statuses & {"NOT_EXECUTED", "RECONCILED_NO_PAYMENT"})
         unit["executed"] = unit["executed"] or bool(statuses - G13_NON_EXECUTION_STATUSES)
