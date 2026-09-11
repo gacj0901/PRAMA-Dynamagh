@@ -179,17 +179,25 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
         return None
     profile = _authority_profile(session, policy)
     identity = get_policy_identity(session, policy)
-    if identity is not None and identity.autonomy_state in {"HALTED", "REVIEW_REQUIRED"}:
+    recovery_probe_authorized = False
+    longitudinal = None
+    if identity is not None:
+        from app.authority.runtime import evaluate_current_g13
+        longitudinal = evaluate_current_g13(session, identity.agent_id)
+        recovery_probe_authorized = (
+            longitudinal.policy_version == "g13-d-structural-autonomy-v0.4"
+            and longitudinal.result_core.get("recovery_probe_authorized") is True
+        )
+    if identity is not None and identity.autonomy_state == "HALTED":
+        return None
+    if identity is not None and identity.autonomy_state == "REVIEW_REQUIRED" and not recovery_probe_authorized:
         return None
     if identity is not None and full_autonomy_enabled(identity.agent_id) and profile is None:
         return None
     if profile and not full_autonomy_enabled(identity.agent_id if identity else None):
         return None
-    if identity is not None:
-        from app.authority.runtime import evaluate_current_g13
-
-        longitudinal = evaluate_current_g13(session, identity.agent_id)
-        if longitudinal.result in {"REVIEW", "HALT"}:
+    if longitudinal is not None:
+        if longitudinal.result == "HALT" or (longitudinal.result == "REVIEW" and not recovery_probe_authorized):
             return None
     slot = execution_slot(policy, instant, _effective_cadence(policy, profile))
     key = idempotency_key(policy, slot)

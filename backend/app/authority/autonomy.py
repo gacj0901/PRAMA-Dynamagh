@@ -402,6 +402,7 @@ def pre_next_action_gate(
     economic_authorized: bool,
     longitudinal_result: str,
     throttled_constraints_satisfied: bool = False,
+    recovery_probe_authorized: bool = False,
 ) -> tuple[bool, str]:
     """Compose independent authorities without allowing an override."""
 
@@ -411,7 +412,7 @@ def pre_next_action_gate(
         return False, "G12_ECONOMIC_DENIAL"
     if longitudinal_result == "HALT":
         return False, "G13_HALT"
-    if longitudinal_result == "REVIEW":
+    if longitudinal_result == "REVIEW" and not recovery_probe_authorized:
         return False, "G13_REVIEW"
     if longitudinal_result == "THROTTLE" and not throttled_constraints_satisfied:
         return False, "G13_THROTTLE_CONSTRAINTS_REQUIRED"

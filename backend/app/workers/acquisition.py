@@ -15,6 +15,7 @@ from app.domain.state_machine import transition_mandate
 from app.persistence.database import SessionLocal
 from app.users import credit as user_credit
 from app.public_safety import MAX_SINGLE_ACQUISITION_USDC, m2m_max_workflow_usdc, public_max_mandate_usdc, verify_spend_reservation, settle_spend, release_spend_reservation
+from app.authority.recovery import G13_REVIEW_RECOVERY_POLICY_VERSION
 
 logger = logging.getLogger(__name__)
 now = lambda: datetime.now(timezone.utc)
@@ -94,7 +95,11 @@ def execute_one(mandate_id, acquisition_id):
             economic_ceiling = cap if profile.unlimited_budget else Decimal(profile.per_action_budget or profile.economic_budget)
             throttle_limit = Decimal(str(configured_throttle)) if configured_throttle is not None else economic_ceiling / Decimal("2")
             preliminary_g13 = evaluate_current_g13(session, mandate.agent_identity_id)
-            if preliminary_g13.result in {"HALT", "REVIEW"}:
+            recovery_probe_authorized = (
+                preliminary_g13.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
+                and preliminary_g13.result_core.get("recovery_probe_authorized") is True
+            )
+            if preliminary_g13.result == "HALT" or (preliminary_g13.result == "REVIEW" and not recovery_probe_authorized):
                 raise RuntimeError("G13_" + preliminary_g13.result)
             if preliminary_g13.result == "THROTTLE" and preliminary_g13.result_core.get("operator_recovery_canary"):
                 recovery = preliminary_g13.input_core.get("operator_recovery") or {}
@@ -126,6 +131,7 @@ def execute_one(mandate_id, acquisition_id):
                 "g13_result": preliminary_g13.result,
                 "throttle_limit_usdc": str(throttle_limit) if throttle_limit is not None else None,
                 "throttled_constraints_satisfied": throttle_ok,
+                "recovery_probe_authorized": recovery_probe_authorized,
             })
         session.add(UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id, event_type="TELEGRAPH_REQUEST", metadata_=request_metadata))
         session.commit()  # Durable RUNNING claim before any outbound request.
@@ -140,7 +146,6 @@ def execute_one(mandate_id, acquisition_id):
         permit = None
         if mandate.origin == "AUTONOMOUS":
             from app.authority.delegated import issue_execution_permit, consume_execution_permit
-            from app.authority.recovery import G13_REVIEW_RECOVERY_POLICY_VERSION
             from app.authority.runtime import run_pre_next_action_authority_check
             checkpoint = run_pre_next_action_authority_check(
                 session,
@@ -151,6 +156,10 @@ def execute_one(mandate_id, acquisition_id):
                 g12_reservation=reservation,
                 current_runtime_action="CONTINUE_TO_GATEWAY",
                 throttled_constraints_satisfied=throttle_ok,
+                recovery_probe_authorized=(
+                    preliminary_g13.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
+                    and preliminary_g13.result_core.get("recovery_probe_authorized") is True
+                ),
                 enforce=True,
                 longitudinal_core=preliminary_g13,
             )
@@ -168,6 +177,10 @@ def execute_one(mandate_id, acquisition_id):
                 g13_result=checkpoint.longitudinal.result,
                 constraints={
                     "throttle_satisfied": throttle_ok,
+                    "recovery_probe_authorized": (
+                        preliminary_g13.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
+                        and preliminary_g13.result_core.get("recovery_probe_authorized") is True
+                    ),
                     "throttle_limit_usdc": str(throttle_limit) if throttle_limit is not None else None,
                     "g12_reservation_verified": True,
                     "g12_reserved_usdc": str(reservation.reserved_usdc),

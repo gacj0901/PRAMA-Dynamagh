@@ -216,6 +216,10 @@ def run_pre_next_action_authority_check(
         longitudinal_evaluation_id=longitudinal_core.policy_evaluation_id,
         longitudinal_result_hash=longitudinal_core.result_hash,
         throttled_constraints_satisfied=throttled_constraints_satisfied,
+        recovery_probe_authorized=(
+            longitudinal_core.policy_version == "g13-d-structural-autonomy-v0.4"
+            and longitudinal_core.result_core.get("recovery_probe_authorized") is True
+        ),
         current_runtime_action=current_runtime_action,
         shadow_mode=not enforce,
     )
