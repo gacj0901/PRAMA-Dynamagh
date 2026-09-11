@@ -167,6 +167,7 @@ def run_pre_next_action_authority_check(
     g12_reservation: Any | None = None,
     current_runtime_action: str = "CONTINUE_TO_GATEWAY",
     throttled_constraints_satisfied: bool = False,
+    recovery_probe_authorized: bool = False,
     enforce: bool = False,
     longitudinal_core: PolicyEvaluationCore | None = None,
 ) -> AuthorityShadowCheckpoint:
