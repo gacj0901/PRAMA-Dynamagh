@@ -200,6 +200,20 @@ export interface MandateDetails {
   timeline: Timeline | null;
 }
 
+export interface ActivityAggregate {
+  real_users: number;
+  workflows_started: number;
+  workflows_completed: number;
+  telegraph_calls: number;
+  telegraph_successful_calls: number;
+  real_miners_used: string[];
+  intents_used: string[];
+  evidence_created: number;
+  decisions_emitted: number;
+  tickets_emitted: number;
+  public_spend_usdc: string;
+}
+
 export interface PublicActivity {
   budget_profile: {
     configured_max_usdc_per_workflow: string;
@@ -235,6 +249,7 @@ export interface PublicActivity {
   average_evidence_per_workflow: number;
   average_latency_ms: number | null;
   public_spend_usdc: string | number;
+  autonomous?: ActivityAggregate;
 }
 
 export interface PublicTicketSummary {

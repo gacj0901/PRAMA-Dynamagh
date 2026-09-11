@@ -52,18 +52,58 @@ def _public_mandates(session: Session) -> list[Mandate]:
     return [item for item in rows if item.origin in PUBLIC_ORIGINS]
 
 
+def _activity_aggregate(session: Session, mandates: list[Mandate]) -> dict[str, Any]:
+    if not mandates:
+        return {
+            "real_users": 0, "workflows_started": 0, "workflows_completed": 0,
+            "telegraph_calls": 0, "telegraph_successful_calls": 0,
+            "real_miners_used": [], "intents_used": [],
+            "evidence_created": 0, "decisions_emitted": 0, "tickets_emitted": 0,
+            "public_spend_usdc": "0.000000",
+        }
+    mandate_ids = [item.mandate_id for item in mandates]
+    tasks = session.query(AcquisitionTask).filter(AcquisitionTask.mandate_id.in_(mandate_ids)).all()
+    calls = session.query(TelegraphCall).filter(TelegraphCall.mandate_id.in_(mandate_ids)).all()
+    evidence = session.query(Evidence).filter(Evidence.mandate_id.in_(mandate_ids)).all()
+    decisions = session.query(Decision).filter(Decision.mandate_id.in_(mandate_ids)).all()
+    tickets = session.query(Ticket).filter(Ticket.mandate_id.in_(mandate_ids)).all()
+    actor_counts = Counter(item.actor_id for item in mandates)
+    successful_calls = [item for item in calls if item.status == "SUCCEEDED"]
+    spend = sum((Decimal(item.cost_usd or 0) for item in successful_calls), Decimal("0"))
+    return {
+        "real_users": len(actor_counts),
+        "workflows_started": len(mandates),
+        "workflows_completed": sum(item.status == "TICKETED" for item in mandates),
+        "telegraph_calls": len(calls),
+        "telegraph_successful_calls": len(successful_calls),
+        "real_miners_used": sorted({str(item.miner_id) for item in successful_calls if item.miner_id}),
+        "intents_used": sorted({str(item.intent) for item in successful_calls if item.intent}),
+        "evidence_created": len(evidence),
+        "decisions_emitted": len(decisions),
+        "tickets_emitted": len(tickets),
+        "public_spend_usdc": _money(spend),
+    }
+
+
 def public_activity(session: Session) -> dict[str, Any]:
     """Build bounded activity aggregates from public-origin records only.
 
     The database does not persist an independent TEST/SHADOW/INTERNAL
     environment label for every historical row.  The response therefore
     states the exact origin-based scope instead of guessing those categories.
+
+    Autonomous-origin aggregates are reported separately, so manual and M2M
+    counts stay clean while the live agent still becomes visible when it is
+    actually executing and settling Telegraph calls.
     """
 
     mandates = _public_mandates(session)
+    autonomous = session.query(Mandate).filter(Mandate.origin == "AUTONOMOUS").all()
+    autonomous_summary = _activity_aggregate(session, autonomous)
+
     mandate_ids = [item.mandate_id for item in mandates]
     if not mandate_ids:
-        return {
+        base = {
             "budget_profile": competition_budget_profile(),
             "scope": {
                 "included_origins": list(PUBLIC_ORIGINS),
@@ -89,6 +129,8 @@ def public_activity(session: Session) -> dict[str, Any]:
             "average_latency_ms": None,
             "public_spend_usdc": "0.000000",
         }
+        base["autonomous"] = autonomous_summary
+        return base
 
     tasks = session.query(AcquisitionTask).filter(AcquisitionTask.mandate_id.in_(mandate_ids)).all()
     calls = session.query(TelegraphCall).filter(TelegraphCall.mandate_id.in_(mandate_ids)).all()
@@ -131,6 +173,7 @@ def public_activity(session: Session) -> dict[str, Any]:
         "average_evidence_per_workflow": round(len(evidence) / len(mandates), 6),
         "average_latency_ms": round(sum(durations) / len(durations), 3) if durations else None,
         "public_spend_usdc": _money(public_spend),
+        "autonomous": autonomous_summary,
     }
 
 
