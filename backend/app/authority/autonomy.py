@@ -240,7 +240,12 @@ def _distinct_execution_stats(policy_input: G13PolicyInput) -> tuple[int, int, i
         statuses = set(facts.get("telegraph_statuses") or ())
         unit = units.setdefault(unit_id, {"block": False, "failure": False, "not_executed": False, "executed": False})
         unit["block"] = unit["block"] or facts.get("local_decision_state") == "BLOCK"
-        unit["failure"] = unit["failure"] or bool(facts.get("failure_code") or facts.get("failure_event_types"))
+        # External failures reconciled without payment are recoverable
+        # observations and must not escalate the longitudinal trajectory.
+        unit["failure"] = unit["failure"] or (
+            not bool(facts.get("recovered"))
+            and bool(facts.get("failure_code") or facts.get("failure_event_types"))
+        )
         unit["not_executed"] = unit["not_executed"] or bool(statuses & {"NOT_EXECUTED", "RECONCILED_NO_PAYMENT"})
         unit["executed"] = unit["executed"] or bool(statuses - G13_NON_EXECUTION_STATUSES)
     eligible = [unit for unit in units.values() if unit["executed"] or not unit["not_executed"]]
