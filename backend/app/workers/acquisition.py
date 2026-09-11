@@ -83,6 +83,7 @@ def uncertain_hold(session, mandate_id):
 def execute_one(mandate_id, acquisition_id):
     session = SessionLocal()
     network_attempted = False
+    failure_stage = "PRE_NETWORK"
     budget = Decimal("0")
     claimed = False
     try:
@@ -248,6 +249,7 @@ def execute_one(mandate_id, acquisition_id):
             headers["x-prama-internal-token"] = gateway_token
         request = Request(os.environ["GATEWAY_URL"] + "/ask",data=json.dumps(payload).encode(),headers=headers,method="POST")
         network_attempted = True
+        failure_stage = "NETWORK"
         try:
             with urlopen(request, timeout=GATEWAY_REQUEST_TIMEOUT_SECONDS) as response: raw = json.loads(response.read())
         except HTTPError as error:
@@ -265,6 +267,7 @@ def execute_one(mandate_id, acquisition_id):
         call.raw_response = raw if isinstance(raw,dict) else {"gateway_response":raw}
         call.status = "RECEIVED"
         session.commit()  # Preserve Gateway response before Evidence normalization.
+        failure_stage = "POST_RESPONSE"
         if not isinstance(raw,dict) or not all(raw.get(k) for k in ("miner_id","intent","signal_hash")):
             raise RuntimeError("TELEGRAPH_INVALID_RESPONSE")
         cost_value = (raw.get("payment") or {}).get("amount_usdc",raw.get("cost_usd"))
@@ -292,10 +295,27 @@ def execute_one(mandate_id, acquisition_id):
     except Exception as error:
         session.rollback()
         if not claimed: raise
+        exception_type = type(error).__name__
+        exception_message = str(error)[:500]
+        effective_gateway_url = os.environ.get("GATEWAY_URL", "<UNSET>")
+        run_id_for_log = getattr(locals().get("run"), "run_id", None)
+        logger.error(
+            "ACQUISITION_EXCEPTION acquisition_id=%s run_id=%s mandate_id=%s exception_type=%s exception_message=%r network_attempted=%s failure_stage=%s gateway_url=%r",
+            acquisition_id,
+            run_id_for_log,
+            mandate_id,
+            exception_type,
+            exception_message,
+            network_attempted,
+            failure_stage,
+            effective_gateway_url,
+        )
         mandate = session.query(Mandate).filter_by(mandate_id=mandate_id).with_for_update().one()
         task = session.get(AcquisitionTask,acquisition_id)
         message = getattr(error, "detail", str(error))
         code = next((item for item in KNOWN_FAILURE_CODES if message == item or message.startswith(item + ":")), "GATEWAY_UNAVAILABLE")
+        if not network_attempted and code == "GATEWAY_UNAVAILABLE":
+            code = "WORKER_INTERNAL_PRE_NETWORK"
         task.status = "FAILED"
         task.failure_code = code
         task.started_at = task.started_at or now()
@@ -308,7 +328,15 @@ def execute_one(mandate_id, acquisition_id):
         if call:
             call.status = "PAYMENT_UNCERTAIN" if network_attempted else "NOT_EXECUTED"
             call.completed_at = now()
-        session.add(UsageEvent(mandate_id=mandate_id,acquisition_id=acquisition_id,event_type="ACQUISITION_FAILED",metadata_={"failure_code":code,"network_attempted":network_attempted}))
+        failure_metadata={
+            "failure_code": code,
+            "network_attempted": network_attempted,
+            "failure_stage": failure_stage,
+            "exception_type": exception_type,
+            "exception_message": exception_message,
+            "gateway_url": effective_gateway_url,
+        }
+        session.add(UsageEvent(mandate_id=mandate_id,acquisition_id=acquisition_id,event_type="ACQUISITION_FAILED",metadata_=failure_metadata))
         if network_attempted:
             session.add(UsageEvent(mandate_id=mandate_id,acquisition_id=acquisition_id,event_type="ACQUISITION_PAYMENT_UNCERTAIN",metadata_={"held_budget_usdc":str(budget),"failure_code":code}))
         session.commit()
