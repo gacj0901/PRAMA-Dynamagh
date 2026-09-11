@@ -260,7 +260,8 @@ def _distinct_recovery_probe_count(policy_input: G13PolicyInput) -> int:
     units: set[str] = set()
     for item in policy_input.ordered_observations:
         facts = dict(item.get("facts") or {})
-        if "G13_RECOVERY_PROBE_STARTED" not in set(facts.get("recovery_event_types") or ()):
+        recovery_types = set(facts.get("recovery_event_types") or ())
+        if not ({"G13_RECOVERY_PROBE_STARTED", "TELEGRAPH_REQUEST"} & recovery_types):
             continue
         lineage = dict(item.get("source_lineage") or {})
         run_ids = tuple(lineage.get("autonomy_run_ids") or ())
