@@ -8,6 +8,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from decimal import Decimal
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from app.domain.mandates import AcquisitionTask, TelegraphCall, Mandate, MandateStatus, PublicManualSpendReservation, UsageEvent, AutonomyRun
@@ -36,6 +37,32 @@ def maximum(mandate, session=None):
             if profile.economic_budget is not None: return Decimal(profile.economic_budget)
         return m2m_max_workflow_usdc()
     return public_max_mandate_usdc()
+
+
+# Complete taxonomy of codes the Gateway can return in an /ask error body
+# (gateway/src/server.ts + telegraph.ts) plus this worker's own failure codes.
+# Anything outside this set that the Gateway emits is preserved verbatim as
+# failure_code ("GATEWAY_UNCLASSIFIED_RESPONSE" fallback keeps the raw body).
+GATEWAY_FAILURE_CODES = {
+    "PAYMENT_REQUIRED", "PAYMENT_FAILED", "PAYMENT_BUDGET_INVALID",
+    "PAYMENT_NETWORK_UNSUPPORTED", "PAYMENT_ASSET_MISMATCH",
+    "PAYMENT_BUDGET_EXCEEDED", "TELEGRAPH_REQUEST_FAILED",
+    "TELEGRAPH_UNAVAILABLE", "SIGNAL_VERIFICATION_FAILED",
+}
+WORKER_FAILURE_CODES = {
+    "WORKFLOW_BUDGET_EXCEEDED", "BUDGET_EXHAUSTED", "ACQUISITION_QUERY_INVALID",
+    "TELEGRAPH_INVALID_RESPONSE", "PAYMENT_COST_UNAVAILABLE",
+    "SINGLE_ACQUISITION_BUDGET_EXCEEDED", "PUBLIC_SPEND_AUTHORIZATION_INVALID",
+    "PUBLIC_SPEND_AUTHORIZATION_UNAVAILABLE", "PUBLIC_SPEND_SETTLEMENT_INVALID",
+    "AUTONOMY_RUN_MISSING", "AUTHORITY_COMPOSITION_RESTRICTED", "G13_HALT",
+    "G13_REVIEW", "G13_THROTTLE_CONSTRAINTS_REQUIRED", "AUTHORITY_PROFILE_MISSING",
+    "AUTHORITY_PROFILE_AMBIGUOUS", "AUTHORITY_HASH_UNVERIFIED",
+    "FULL_AUTONOMY_DISABLED", "AMBIGUOUS_AGENT_AUTHORITY", "AGENT_AUTONOMY_HALTED",
+    "AGENT_AUTONOMY_REVIEW_REQUIRED", "EXECUTION_PERMIT_INVALID",
+    "EXECUTION_PERMIT_EXPIRED", "EXECUTION_PERMIT_CONSUMED",
+    "GATEWAY_UNAVAILABLE", "GATEWAY_UNCLASSIFIED_RESPONSE",
+}
+KNOWN_FAILURE_CODES = GATEWAY_FAILURE_CODES | WORKER_FAILURE_CODES
 
 
 def uncertain_hold(session, mandate_id):
@@ -221,7 +248,20 @@ def execute_one(mandate_id, acquisition_id):
             headers["x-prama-internal-token"] = gateway_token
         request = Request(os.environ["GATEWAY_URL"] + "/ask",data=json.dumps(payload).encode(),headers=headers,method="POST")
         network_attempted = True
-        with urlopen(request, timeout=GATEWAY_REQUEST_TIMEOUT_SECONDS) as response: raw = json.loads(response.read())
+        try:
+            with urlopen(request, timeout=GATEWAY_REQUEST_TIMEOUT_SECONDS) as response: raw = json.loads(response.read())
+        except HTTPError as error:
+            # Gateway answered with an HTTP status: the transport reached it, so
+            # the failure is whatever the Gateway declared, not availability.
+            body = error.read()
+            gateway_code = None
+            try: gateway_code = json.loads(body).get("code")
+            except (ValueError, AttributeError): gateway_code = None
+            call.raw_response = {"gateway_http_status": error.code, "gateway_error_body": body.decode("utf-8", "replace")[:2048]}
+            raise RuntimeError(gateway_code or "GATEWAY_UNCLASSIFIED_RESPONSE") from error
+        except (URLError, TimeoutError, OSError) as error:
+            # DNS/connection-refused/TLS/socket-timeout before any HTTP status.
+            raise RuntimeError("GATEWAY_UNAVAILABLE") from error
         call.raw_response = raw if isinstance(raw,dict) else {"gateway_response":raw}
         call.status = "RECEIVED"
         session.commit()  # Preserve Gateway response before Evidence normalization.
@@ -254,9 +294,8 @@ def execute_one(mandate_id, acquisition_id):
         if not claimed: raise
         mandate = session.query(Mandate).filter_by(mandate_id=mandate_id).with_for_update().one()
         task = session.get(AcquisitionTask,acquisition_id)
-        known = {"WORKFLOW_BUDGET_EXCEEDED","BUDGET_EXHAUSTED","ACQUISITION_QUERY_INVALID","TELEGRAPH_INVALID_RESPONSE","PAYMENT_COST_UNAVAILABLE","SINGLE_ACQUISITION_BUDGET_EXCEEDED","PUBLIC_SPEND_AUTHORIZATION_INVALID","PUBLIC_SPEND_AUTHORIZATION_UNAVAILABLE","PUBLIC_SPEND_SETTLEMENT_INVALID","AUTONOMY_RUN_MISSING","AUTHORITY_COMPOSITION_RESTRICTED","G13_HALT","G13_REVIEW","G13_THROTTLE_CONSTRAINTS_REQUIRED","AUTHORITY_PROFILE_MISSING","AUTHORITY_PROFILE_AMBIGUOUS","AUTHORITY_HASH_UNVERIFIED","FULL_AUTONOMY_DISABLED","AMBIGUOUS_AGENT_AUTHORITY","AGENT_AUTONOMY_HALTED","AGENT_AUTONOMY_REVIEW_REQUIRED","EXECUTION_PERMIT_INVALID","EXECUTION_PERMIT_EXPIRED","EXECUTION_PERMIT_CONSUMED"}
-        message = getattr(error,"detail",str(error))
-        code = next((item for item in known if message == item or message.startswith(item + ":")), "GATEWAY_UNAVAILABLE")
+        message = getattr(error, "detail", str(error))
+        code = next((item for item in KNOWN_FAILURE_CODES if message == item or message.startswith(item + ":")), "GATEWAY_UNAVAILABLE")
         task.status = "FAILED"
         task.failure_code = code
         task.started_at = task.started_at or now()
