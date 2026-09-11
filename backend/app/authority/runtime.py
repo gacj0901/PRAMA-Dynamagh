@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.persistence.database import SessionLocal
 
 from app.agents.observation import build_o_agent_stream
-from app.authority.autonomy import G13PolicyInput, evaluate_g13_policy
+from app.authority.autonomy import G13PolicyInput, G13_RECOVERY_POLICY_VERSIONS, evaluate_g13_policy
 from app.authority.recovery import latest_operator_recovery
 from app.authority.composition import (
     AuthorityCompositionInput,
@@ -106,7 +106,28 @@ def evaluate_current_g13(session: Session, agent_id: str) -> PolicyEvaluationCor
         expected_current_missing_codes=G13_PRE_ACTION_EXPECTED_MISSING,
         **input_kwargs,
     )
-    return evaluate_g13_policy(longitudinal_input)
+    result = evaluate_g13_policy(longitudinal_input)
+    if policy_version in G13_RECOVERY_POLICY_VERSIONS and recovery_event is not None:
+        # The recovery probe is authoritative once its durable request/event
+        # exists, even if O_AGENT window compaction omits the marker.
+        from app.domain.mandates import UsageEvent
+        cutoff = recovery_event.created_at
+        probe_events = session.query(UsageEvent).all() if hasattr(session, "query") else []
+        probe_exists = any(
+            event.created_at > cutoff
+            and (
+                event.event_type == "G13_RECOVERY_PROBE_STARTED"
+                or (
+                    event.event_type == "TELEGRAPH_REQUEST"
+                    and (event.metadata_ or {}).get("recovery_probe_authorized") is True
+                )
+            )
+            for event in probe_events
+        )
+        if probe_exists:
+            result.result_core["recovery_probe_attempt_count"] = 1
+            result.result_core["recovery_probe_authorized"] = False
+    return result
 
 
 def _latest_epistemic_evaluation(session: Session, mandate_id: str) -> EpistemicEvaluation | None:
