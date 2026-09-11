@@ -245,7 +245,7 @@ def _facts(
         incurred = run.actual_cost_usdc
     planned = run.planned_cost_usdc if run is not None else None
     failure_events = sorted({item.event_type for item in events if "FAIL" in item.event_type})
-    recovery_events = sorted({item.event_type for item in events if "COMPLET" in item.event_type or "RECOVER" in item.event_type or item.event_type == "G13_RECOVERY_PROBE_STARTED"})
+    recovery_events = sorted({item.event_type for item in events if "COMPLET" in item.event_type or "RECOVER" in item.event_type or item.event_type == "G13_RECOVERY_PROBE_STARTED" or (item.event_type == "TELEGRAPH_REQUEST" and (item.metadata_ or {}).get("recovery_probe_authorized") is True)})
     has_failure = bool(failure_events) or bool(run and run.failure_code)
     recovered = recovered_override if recovered_override is not None else (bool(recovery_events) if has_failure else None)
     mandate_budget = mandate.max_budget_usdc if mandate is not None else None
