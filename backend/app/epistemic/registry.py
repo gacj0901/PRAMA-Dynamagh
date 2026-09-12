@@ -196,3 +196,83 @@ def lookup(target_type: str) -> dict | None:
     """
 
     return REGISTRY.get(target_type)
+
+
+def _claim_verification(name: str, *, fields_to_compare: list[str],
+                       numeric_fields: list[str] | None = None,
+                       hash_fields: list[str] | None = None,
+                       boolean_fields: list[str] | None = None,
+                       temporal_window_field: str | None = "as_of",
+                       evidence_admission: str = "multiple_observations_possible") -> dict:
+    """Declare one claim-verification intent with no imperative code."""
+    return {
+        "engine": ENGINE_CLAIM_VERIFICATION,
+        "engine_version": "claim-verification-v0.1",
+        "canonical_intent_id": name,
+        "fields_to_compare": fields_to_compare,
+        "numeric_fields": numeric_fields or [],
+        "hash_fields": hash_fields or [],
+        "boolean_fields": boolean_fields or [],
+        "temporal_window_field": temporal_window_field,
+        "evidence_admission_contract": evidence_admission,
+        "acquisition_parameters": {},
+        "normalized_output_mapping": {},
+    }
+
+
+GRUPO_B = {name: _claim_verification(name, fields_to_compare=fields, **opts)
+    for name, fields, opts in [
+        ("ASSET_RESERVE_ATTESTATION", ["reserve_asset", "reserve_amount", "custodian"], {}),
+        ("B2B_IDENTITY_ENRICHMENT", ["company_name", "domain", "industry"], {}),
+        ("CARRIER_SERVICEABILITY", ["origin", "destination", "service_date"], {}),
+        ("CODE_PATCH_VERIFY", ["commit_hash", "file_path", "patch_hash"], {}),
+        ("COMMERCE_PURCHASE_VERIFY", ["order_id", "item_sku", "quantity"], {}),
+        ("CONTENT_VERIFICATION", ["content_hash", "source_url", "author"], {}),
+        ("CONTRACT_OBLIGATION_AUDIT", ["contract_id", "obligation_type", "due_date"], {}),
+        ("CORPORATE_REGISTRY_LOOKUP", ["company_name", "jurisdiction", "registration_number"], {}),
+        ("CROSS_CHAIN_STATE_VERIFY", ["source_chain", "target_chain", "state_root"], {}),
+        ("CVE_LOOKUP", ["cve_id", "package", "severity"], {}),
+        ("DATACENTER_TELEMETRY_VERIFY", ["datacenter_id", "metric", "threshold"], {}),
+        ("DELIVERY_WINDOW_VERIFY", ["tracking_id", "promised_date", "carrier"], {}),
+        ("DOCUMENT_AUTHENTICITY", ["document_hash", "issuer", "issued_date"], {}),
+        ("EVENT_OUTCOME_RESOLUTION", ["event_id", "outcome", "event_date"], {}),
+        ("FACT_CHECK", ["claim_text", "source", "verdict"], {}),
+        ("FARE_RULE_VERIFY", ["fare_class", "route", "rule_code"], {}),
+        ("FLIGHT_AVAILABILITY", ["flight_number", "date", "origin", "destination"], {}),
+        ("GAME_RESULT", ["match_id", "home_team", "away_team", "score"], {}),
+        ("HOTEL_AVAILABILITY", ["hotel_id", "check_in", "check_out"], {}),
+        ("IMAGE_VERIFICATION", ["image_hash", "source_url", "metadata"], {}),
+        ("INVOICE_LEDGER_RECONCILE", ["invoice_id", "amount", "currency"], {}),
+        ("IP_GEOLOCATION", ["ip_address", "expected_country"], {}),
+        ("MEDIA_AUTHENTICITY_CHECK", ["media_hash", "source_platform", "upload_date"], {}),
+        ("MEDIA_FORENSIC_VERIFY", ["media_hash", "forensic_markers"], {}),
+        ("ONCHAIN_METRIC_VERIFY", ["chain", "metric", "expected_value"], {}),
+        ("ONCHAIN_TX_LOOKUP", ["tx_hash", "chain", "status"], {}),
+        ("PACKAGE_STATUS", ["tracking_id", "expected_status", "carrier"], {}),
+        ("PAYMENT_METHOD_VERIFY", ["payment_token", "amount", "currency"], {}),
+        ("PRODUCT_AUTHENTICITY", ["serial_number", "manufacturer", "product_id"], {}),
+        ("PURCHASE_ORDER_VERIFY", ["po_number", "vendor", "items"], {}),
+        ("REGRESSION_VERIFY", ["model_version", "metric", "threshold"], {}),
+        ("REGULATORY_FILING_MONITOR", ["company", "filing_type", "period"], {}),
+        ("RETURN_POLICY_VERIFY", ["merchant", "policy_type", "item_category"], {}),
+        ("SANCTIONS_SCREENING_MATCH", ["entity_name", "sanction_list", "match_score"], {}),
+        ("SENSOR_TELEMETRY_VERIFY", ["sensor_id", "metric", "threshold"], {}),
+        ("SHIPMENT_DELAY_RISK", ["tracking_id", "origin", "destination"], {}),
+        ("SLA_COMPLIANCE", ["service_id", "metric", "target_value"], {}),
+        ("SPORTS_SCORE", ["match_id", "team", "score"], {}),
+        ("SSL_VERIFICATION", ["hostname", "certificate_fingerprint", "expiry"], {}),
+        ("STORM_ALERT", ["location", "alert_type", "severity"], {}),
+        ("TEXT_AUTHENTICITY_CHECK", ["text_hash", "claimed_source", "timestamp"], {}),
+        ("TRAVEL_DISRUPTION", ["route_id", "disruption_type", "severity"], {}),
+        ("TRAVEL_TRANSIT_LOCK", ["itinerary_id", "leg", "lock_status"], {}),
+        ("URL_SAFE", ["url", "threat_type"], {}),
+        ("URL_SCAN", ["url", "scan_type"], {}),
+        ("VALIDATOR_PERFORMANCE_VERIFY", ["validator_id", "epoch", "metric"], {}),
+        ("VENDOR_VERIFY", ["vendor_id", "verification_type", "jurisdiction"], {}),
+        ("VESSEL_TELEMETRY_VERIFY", ["vessel_id", "metric", "threshold"], {}),
+        ("VIDEO_VERIFICATION", ["video_hash", "source_platform", "upload_date"], {}),
+        ("WEATHER_FORECAST_VERIFY", ["location", "metric", "forecast_time"], {}),
+    ]
+}
+
+REGISTRY.update(GRUPO_B)

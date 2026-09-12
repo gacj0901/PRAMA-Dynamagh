@@ -329,6 +329,120 @@ def _evaluate_value_feed_relation(
     )
 
 
+def _evaluate_claim_verification_relation(
+    *,
+    target: EpistemicTarget,
+    requirement: EvidenceRequirement,
+    typed: CryptoPriceEvidence | None,
+    fields_to_compare: tuple[str, ...],
+) -> tuple[str, dict[str, Any], tuple[str, ...]]:
+    """Compare multiple expected fields from the Target against observed values.
+
+    Each requirement_type maps to one comparison field; any field configured
+    in the registry must appear in parameters for the comparison to apply.
+    """
+    if typed is None:
+        return _typed_unavailable(requirement)
+    if typed.schema_version != CRYPTO_PRICE_EVIDENCE_SCHEMA_VERSION:
+        return _unresolved_basis(
+            requirement,
+            rule="unsupported_typed_evidence_schema",
+            limitation=UNSPECIFIED_CONTRACT_CASE,
+            detail={"schema_version": typed.schema_version},
+        )
+
+    requirement_type = requirement.requirement_type
+
+    if requirement_type == "temporal_applicability":
+        max_age = _explicit_window(requirement)
+        if max_age is None:
+            return _unresolved_basis(
+                requirement,
+                rule="explicit_temporal_window_required",
+                limitation=TEMPORAL_WINDOW_UNRESOLVED,
+            )
+        target_as_of = _parse_timestamp(target.temporal_scope.get("as_of"))
+        observed_at = _parse_timestamp(typed.observed_at)
+        if target_as_of is None or observed_at is None:
+            return _unresolved_basis(
+                requirement,
+                rule="temporal_timestamp_unavailable",
+                limitation=TEMPORAL_WINDOW_UNRESOLVED,
+            )
+        delta = abs(target_as_of - observed_at)
+        delta_seconds = Decimal(delta.days * 86400 * 1_000_000 + delta.seconds * 1_000_000 + delta.microseconds) / Decimal(1_000_000)
+        if delta_seconds > Decimal(max_age):
+            return "NOT_APPLICABLE", {
+                "rule": "explicit_temporal_window_outside",
+                "target_as_of": canonical_timestamp(target_as_of),
+                "observed_at": canonical_timestamp(observed_at),
+                "max_age_seconds": max_age,
+                "absolute_delta_seconds": canonical_decimal(delta_seconds),
+            }, ()
+        return "SATISFIES", {
+            "rule": "explicit_temporal_window",
+            "target_as_of": canonical_timestamp(target_as_of),
+            "observed_at": canonical_timestamp(observed_at),
+            "max_age_seconds": max_age,
+            "absolute_delta_seconds": canonical_decimal(delta_seconds),
+        }, ()
+
+    if requirement_type not in fields_to_compare:
+        return _unresolved_basis(
+            requirement,
+            rule="unsupported_requirement_type_for_engine",
+            limitation=UNSPECIFIED_CONTRACT_CASE,
+            detail={"requirement_type": requirement_type, "engine": "claim_verification"},
+        )
+
+    expected = target.parameters.get(requirement_type)
+    observed = getattr(typed, requirement_type, None)
+    if expected is None or observed is None:
+        return _unresolved_basis(
+            requirement,
+            rule="missing_required_datum",
+            limitation=MISSING_REQUIRED_DATUM,
+            detail={"field": requirement_type, "has_expected": expected is not None, "has_observed": observed is not None},
+        )
+
+    params = requirement.parameters or {}
+    if "max_abs_delta" in params and requirement_type in params.get("numeric_fields", ()):
+        try:
+            delta = abs(Decimal(str(expected)) - Decimal(str(observed)))
+            if delta > Decimal(str(params["max_abs_delta"])):
+                return "CONTRADICTS", {
+                    "rule": "numeric_tolerance_exceeded",
+                    "field": requirement_type,
+                    "expected_value": str(expected),
+                    "observed_value": str(observed),
+                    "absolute_delta": str(delta),
+                    "tolerance": str(params["max_abs_delta"]),
+                }, ()
+        except (InvalidOperation, TypeError, ValueError):
+            return _unresolved_basis(
+                requirement,
+                rule="numeric_comparison_failed",
+                limitation=UNSPECIFIED_CONTRACT_CASE,
+                detail={"field": requirement_type},
+            )
+        return "SATISFIES", {
+            "rule": "numeric_tolerance_match",
+            "field": requirement_type,
+            "expected_value": str(expected),
+            "observed_value": str(observed),
+            "absolute_delta": str(abs(Decimal(str(expected)) - Decimal(str(observed)))),
+            "tolerance": str(params["max_abs_delta"]),
+        }, ()
+
+    state = "SATISFIES" if observed == expected else "CONTRADICTS"
+    return state, {
+        "rule": "exact_field_match" if state == "SATISFIES" else "exact_field_mismatch",
+        "field": requirement_type,
+        "expected_value": str(expected),
+        "observed_value": str(observed),
+    }, ()
+
+
 def _evaluate_requirement_relation(
     *,
     target: EpistemicTarget,
@@ -352,6 +466,13 @@ def _evaluate_requirement_relation(
             typed=typed,
             identity_fields=tuple(config["identity_fields"]),
             value_field=config["value_field"],
+        )
+    if engine == "claim_verification":
+        return _evaluate_claim_verification_relation(
+            target=target,
+            requirement=requirement,
+            typed=typed,
+            fields_to_compare=config.get("fields_to_compare", ()),
         )
 
     return _unresolved_basis(
