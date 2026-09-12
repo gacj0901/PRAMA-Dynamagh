@@ -270,6 +270,9 @@ def build_target_from_acquisition(
         "unit": acquisition.target_unit,
         "constraints": dict(acquisition.target_constraints or {}),
         "schema_version": acquisition.target_schema_version,
+        # Pre-registry v0.1 compatibility: the evaluator reads asset/quote_currency.
+        "asset": acquisition.target_subject,
+        "quote_currency": acquisition.target_unit,
     }
     temporal_scope = dict(acquisition.temporal_scope or {})
     body = _target_body(

@@ -7,7 +7,7 @@ from urllib.request import Request, urlopen
 import redis
 from app.workers.celery_app import celery_app
 from app.persistence.database import SessionLocal
-from app.domain.mandates import AcquisitionTask, AcquisitionStatus, AnchorAttempt, Mandate, MandateStatus, TelegraphCall, Ticket, UsageEvent, Evidence, StructuralEvaluation, Decision
+from app.domain.mandates import AcquisitionTask, AcquisitionStatus, AnchorAttempt, Mandate, MandateStatus, TelegraphCall, Ticket, UsageEvent, Evidence, StructuralEvaluation, Decision, CryptoPriceEvidence, EvidenceRequirement, EpistemicEvaluation
 from app.domain.state_machine import transition_mandate
 from app.pramagraph.evaluation import classify, decide, digest
 from app.tickets.service import issue as issue_ticket
@@ -172,6 +172,74 @@ def evaluate_mandate(mandate_id):
         s.add(evaluation)
         s.flush()
         state, reasons = decide(structural)
+        # Epistemic evaluation: derive targets from precommitted task identity,
+        # requirements from the registry, and evaluate against admitted evidence.
+        from app.epistemic.contracts import build_target_from_acquisition
+        from app.epistemic.registry import lookup as registry_lookup
+        from app.epistemic.evaluator import evaluate_crypto_price, persist_e1_evaluation
+
+        for task in tasks:
+            if task.status != "SUCCEEDED" or not task.target_schema_version:
+                continue
+            config = registry_lookup(task.target_schema_version)
+            if config is None:
+                continue
+            target = build_target_from_acquisition(task, mandate_id=mandate_id)
+            if target is None:
+                continue
+            target_evidence = [
+                item for item in evidence
+                if item.acquisition_id == task.acquisition_id and item.admissibility in ("ADMITTED", "LIMITED")
+            ]
+            if not target_evidence:
+                continue
+            typed = {
+                item.evidence_id: CryptoPriceEvidence(
+                    evidence_id=item.evidence_id,
+                    asset=task.target_subject or "",
+                    quote_currency=task.target_unit or "",
+                    price_value=Decimal("0"),
+                    observed_at=item.created_at,
+                    schema_version="crypto-price-evidence-v0.1",
+                )
+                for item in target_evidence
+                if item.normalized_payload and isinstance(item.normalized_payload, dict) and item.normalized_payload.get("result")
+            }
+            if config["engine"] == "value_feed":
+                requirements = [
+                    EvidenceRequirement(
+                        target_id=target.target_id,
+                        requirement_type=field,
+                        parameters={"target_type": task.target_schema_version},
+                        required=True,
+                        contract_version=task.target_schema_version,
+                    )
+                    for field in config["identity_fields"]
+                ]
+                requirements.append(EvidenceRequirement(
+                    target_id=target.target_id,
+                    requirement_type=config["value_field"],
+                    parameters={"target_type": task.target_schema_version},
+                    required=True,
+                    contract_version=task.target_schema_version,
+                ))
+                requirements.append(EvidenceRequirement(
+                    target_id=target.target_id,
+                    requirement_type="temporal_applicability",
+                    parameters={"max_age_seconds": (task.target_constraints or {}).get("max_age_seconds", 3600)},
+                    required=True,
+                    contract_version=task.target_schema_version,
+                ))
+                e1 = evaluate_crypto_price(
+                    target=target,
+                    requirements=requirements,
+                    evidence=target_evidence,
+                    typed_evidence_by_id=typed,
+                    mandate_id=mandate_id,
+                )
+                persist_e1_evaluation(s, e1)
+                logger.info("epistemic evaluation persisted for acquisition_id=%s", task.acquisition_id)
+
         s.add(Decision(
             mandate_id=mandate_id,
             evaluation_id=evaluation.evaluation_id,
