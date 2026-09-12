@@ -314,10 +314,6 @@ class EvidenceRequirement(Base):
             "contract_version",
             name="uq_evidence_requirements_target_type_version",
         ),
-        CheckConstraint(
-            "requirement_type IN ('asset_identity', 'quote_currency', 'price_value', 'temporal_applicability')",
-            name="ck_evidence_requirements_crypto_price_v01_type",
-        ),
     )
 
     requirement_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))

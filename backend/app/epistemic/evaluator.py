@@ -27,6 +27,7 @@ from app.epistemic.contracts import (
     canonical_hash,
     canonical_timestamp,
 )
+from app.epistemic.registry import lookup as registry_lookup
 
 
 E1_C2_OBSERVER_VERSION = "O_EPISTEMIC-v0.1"
@@ -219,19 +220,16 @@ def _explicit_window(requirement: EvidenceRequirement) -> int | None:
     return value
 
 
-def _evaluate_requirement_relation(
+def _evaluate_value_feed_relation(
     *,
     target: EpistemicTarget,
     requirement: EvidenceRequirement,
     typed: CryptoPriceEvidence | None,
+    identity_fields: tuple[str, ...],
+    value_field: str,
 ) -> tuple[str, dict[str, Any], tuple[str, ...]]:
-    if target.target_type != "CRYPTO_PRICE":
-        return _unresolved_basis(
-            requirement,
-            rule="unsupported_target_type",
-            limitation=UNSPECIFIED_CONTRACT_CASE,
-            detail={"target_type": target.target_type},
-        )
+    """Single parameterized implementation for identity+value+temporal feeds."""
+
     if typed is None:
         return _typed_unavailable(requirement)
     if typed.schema_version != CRYPTO_PRICE_EVIDENCE_SCHEMA_VERSION:
@@ -242,59 +240,54 @@ def _evaluate_requirement_relation(
             detail={"schema_version": typed.schema_version},
         )
 
-    if requirement.requirement_type == "asset_identity":
-        expected = _target_value(target, "asset")
-        observed = typed.asset if isinstance(typed.asset, str) and typed.asset else None
-        if expected is None or observed is None:
-            return _unresolved_basis(
-                requirement,
-                rule="missing_required_datum",
-                limitation=MISSING_REQUIRED_DATUM,
-                detail={"field": "asset"},
-            )
-        state = "SATISFIES" if observed == expected else "CONTRADICTS"
-        return state, {
-            "rule": "exact_field_match" if state == "SATISFIES" else "exact_field_mismatch",
-            "evidence_field": "asset",
-            "expected_value": expected,
-            "observed_value": observed,
-        }, ()
+    requirement_type = requirement.requirement_type
 
-    if requirement.requirement_type == "quote_currency":
-        expected = _target_value(target, "quote_currency")
-        observed = typed.quote_currency if isinstance(typed.quote_currency, str) and typed.quote_currency else None
-        if expected is None or observed is None:
-            return _unresolved_basis(
-                requirement,
-                rule="missing_required_datum",
-                limitation=MISSING_REQUIRED_DATUM,
-                detail={"field": "quote_currency"},
-            )
-        state = "SATISFIES" if observed == expected else "CONTRADICTS"
-        return state, {
-            "rule": "exact_field_match" if state == "SATISFIES" else "exact_field_mismatch",
-            "evidence_field": "quote_currency",
-            "expected_value": expected,
-            "observed_value": observed,
-        }, ()
+    for field in identity_fields:
+        if requirement_type == f"{field}_identity" or (
+            # f"{field}_identity" is the canonical registry form; plain field
+            # name keeps the pre-registry CRYPTO_PRICE requirements valid.
+            field == {"asset": "asset", "quote_currency": "quote_currency"}.get(field)
+            and requirement_type == field
+        ):
+            expected = _target_value(target, field)
+            observed = getattr(typed, field, None)
+            observed = observed if isinstance(observed, str) and observed else None
+            if expected is None or observed is None:
+                return _unresolved_basis(
+                    requirement,
+                    rule="missing_required_datum",
+                    limitation=MISSING_REQUIRED_DATUM,
+                    detail={"field": field},
+                )
+            state = "SATISFIES" if observed == expected else "CONTRADICTS"
+            return state, {
+                "rule": "exact_field_match" if state == "SATISFIES" else "exact_field_mismatch",
+                "evidence_field": field,
+                "expected_value": expected,
+                "observed_value": observed,
+            }, ()
 
-    if requirement.requirement_type == "price_value":
+    if requirement_type == f"{value_field}_value" or (
+        # f"{value_field}_value" is the canonical registry form; plain field
+        # name keeps the pre-registry CRYPTO_PRICE requirements valid.
+        requirement_type == value_field
+    ):
         try:
-            observed = canonical_decimal(typed.price_value)
+            observed = canonical_decimal(getattr(typed, value_field))
         except (InvalidOperation, TypeError, ValueError):
             return _unresolved_basis(
                 requirement,
                 rule="missing_or_invalid_typed_datum",
                 limitation=MISSING_REQUIRED_DATUM,
-                detail={"field": "price_value"},
+                detail={"field": value_field},
             )
         return "SATISFIES", {
             "rule": "typed_field_present",
-            "evidence_field": "price_value",
+            "evidence_field": value_field,
             "observed_value": observed,
         }, ()
 
-    if requirement.requirement_type == "temporal_applicability":
+    if requirement_type == "temporal_applicability":
         max_age = _explicit_window(requirement)
         if max_age is None:
             return _unresolved_basis(
@@ -333,6 +326,39 @@ def _evaluate_requirement_relation(
         requirement,
         rule="unsupported_requirement_type",
         limitation=UNSPECIFIED_CONTRACT_CASE,
+    )
+
+
+def _evaluate_requirement_relation(
+    *,
+    target: EpistemicTarget,
+    requirement: EvidenceRequirement,
+    typed: CryptoPriceEvidence | None,
+) -> tuple[str, dict[str, Any], tuple[str, ...]]:
+    config = registry_lookup(target.target_type)
+    if config is None:
+        return _unresolved_basis(
+            requirement,
+            rule="unsupported_target_type",
+            limitation=UNSPECIFIED_CONTRACT_CASE,
+            detail={"target_type": target.target_type},
+        )
+
+    engine = config.get("engine")
+    if engine == "value_feed":
+        return _evaluate_value_feed_relation(
+            target=target,
+            requirement=requirement,
+            typed=typed,
+            identity_fields=tuple(config["identity_fields"]),
+            value_field=config["value_field"],
+        )
+
+    return _unresolved_basis(
+        requirement,
+        rule="unsupported_engine",
+        limitation=UNSPECIFIED_CONTRACT_CASE,
+        detail={"engine": engine},
     )
 
 

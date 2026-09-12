@@ -169,8 +169,20 @@ def build_evidence_requirement(
     contract_version: str = E1_REQUIREMENT_CONTRACT_VERSION,
     created_at: datetime | None = None,
 ) -> EvidenceRequirement:
+    """Build a requirement, validated against the epistemic registry.
+
+    CRYPTO_PRICE requirements keep their pre-registry validity; any other
+    requirement_type must resolve to a registered engine configuration.
+    """
+    from app.epistemic.registry import lookup as registry_lookup
+
     if requirement_type not in CRYPTO_PRICE_REQUIREMENT_TYPES:
-        raise ValueError("unsupported CRYPTO_PRICE v0.1 requirement type")
+        target_type = parameters and parameters.get("target_type") if isinstance(parameters, Mapping) else None
+        if target_type is None or registry_lookup(target_type) is None:
+            raise ValueError(
+                "unsupported requirement_type: not a registered epistemic engine type "
+                f"({requirement_type!r})"
+            )
     normalized_parameters = dict(parameters or {})
     body = _requirement_body(
         requirement_type=requirement_type,
