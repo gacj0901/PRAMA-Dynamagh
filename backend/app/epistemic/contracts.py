@@ -244,3 +244,50 @@ def build_crypto_price_evidence(
     if created_at is not None:
         values["created_at"] = created_at
     return CryptoPriceEvidence(**values)
+
+
+TARGET_BUILDER_VERSION = "acquisition-target-builder-v0.1"
+
+
+def build_target_from_acquisition(
+    acquisition: Any,
+    *,
+    mandate_id: str,
+    target_id: str | None = None,
+    created_at: datetime | None = None,
+) -> EpistemicTarget | None:
+    """Derive an EpistemicTarget exclusively from AcquisitionTask identity fields.
+
+    Returns None when the task has no schema version set (legacy rows; nothing
+    to build). Identity comes only from target_* columns written at enqueue
+    time; Evidence is never consulted here.
+    """
+    if not acquisition.target_schema_version:
+        return None
+    parameters = {
+        "subject": acquisition.target_subject,
+        "property": acquisition.target_property,
+        "unit": acquisition.target_unit,
+        "constraints": dict(acquisition.target_constraints or {}),
+        "schema_version": acquisition.target_schema_version,
+    }
+    temporal_scope = dict(acquisition.temporal_scope or {})
+    body = _target_body(
+        target_type=acquisition.requested_intent or "UNKNOWN",
+        parameters=parameters,
+        temporal_scope=temporal_scope,
+        contract_version=TARGET_BUILDER_VERSION,
+    )
+    values: dict[str, Any] = {
+        "mandate_id": mandate_id,
+        "target_type": acquisition.requested_intent or "UNKNOWN",
+        "parameters": parameters,
+        "temporal_scope": temporal_scope,
+        "contract_version": TARGET_BUILDER_VERSION,
+        "canonical_hash": canonical_hash(body),
+    }
+    if target_id is not None:
+        values["target_id"] = target_id
+    if created_at is not None:
+        values["created_at"] = created_at
+    return EpistemicTarget(**values)

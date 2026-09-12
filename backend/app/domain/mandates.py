@@ -110,6 +110,14 @@ class AcquisitionTask(Base):
     tx_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     block_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     onchain_output_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Epistemic target precommitment — identity fields set before the Telegraph
+    # call; normalized payloads may only fill observed state, never redefine.
+    target_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    target_property: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    target_unit: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    temporal_scope: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    target_constraints: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    target_schema_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class MandateTransition(Base):
