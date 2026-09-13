@@ -112,6 +112,7 @@ def execute_one(mandate_id, acquisition_id):
         preliminary_g13 = None
         throttle_limit = None
         throttle_ok = False
+        recovery_observation_permitted = False
         if mandate.origin == "AUTONOMOUS":
             from app.authority.delegated import resolve_profile
             from app.authority.runtime import evaluate_current_g13
@@ -127,7 +128,26 @@ def execute_one(mandate_id, acquisition_id):
                 preliminary_g13.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
                 and preliminary_g13.result_core.get("recovery_probe_authorized") is True
             )
-            if preliminary_g13.result == "HALT" or (preliminary_g13.result == "REVIEW" and not recovery_probe_authorized):
+            from app.authority.recovery import latest_operator_recovery
+            from app.authority.runtime import (
+                G13_RECOVERY_OBSERVATION_EVENT_TYPE,
+                recovery_observation_available,
+            )
+            recovery_observation_permitted = (
+                preliminary_g13.result == "REVIEW"
+                and not recovery_probe_authorized
+                and preliminary_g13.result_core.get("sole_blocker")
+                == "G13_CURRENT_CRITICAL_OBSERVATION_MISSING"
+                and recovery_observation_available(session, mandate.agent_identity_id)
+            )
+            if (
+                preliminary_g13.result == "HALT"
+                or (
+                    preliminary_g13.result == "REVIEW"
+                    and not recovery_probe_authorized
+                    and not recovery_observation_permitted
+                )
+            ):
                 raise RuntimeError("G13_" + preliminary_g13.result)
             if preliminary_g13.result == "THROTTLE" and preliminary_g13.result_core.get("operator_recovery_canary"):
                 recovery = preliminary_g13.input_core.get("operator_recovery") or {}
@@ -163,6 +183,31 @@ def execute_one(mandate_id, acquisition_id):
             })
         session.add(UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id, event_type="TELEGRAPH_REQUEST", metadata_=request_metadata))
         session.commit()  # Durable RUNNING claim before any outbound request.
+        if mandate.origin == "AUTONOMOUS" and recovery_observation_permitted:
+            # Consume the single recovery observation for this episode BEFORE
+            # opening the external connection. Any later external failure
+            # still counts as the fresh observation G13 will re-evaluate, and
+            # no second observation is granted for the same recovery episode.
+            recovery_event = latest_operator_recovery(session, mandate.agent_identity_id)
+            existing_consumption = session.query(UsageEvent).filter(
+                UsageEvent.event_type == G13_RECOVERY_OBSERVATION_EVENT_TYPE,
+                UsageEvent.metadata_["recovery_event_id"].astext == str(recovery_event.event_id),
+            ).one_or_none()
+            if existing_consumption is None:
+                session.add(UsageEvent(
+                    mandate_id=mandate_id,
+                    acquisition_id=acquisition_id,
+                    event_type=G13_RECOVERY_OBSERVATION_EVENT_TYPE,
+                    metadata_={
+                        "recovery_event_id": str(recovery_event.event_id),
+                        "agent_id": mandate.agent_identity_id,
+                        "autonomy_run_id": run.run_id,
+                        "sole_blocker": "G13_CURRENT_CRITICAL_OBSERVATION_MISSING",
+                        "g13_policy_evaluation_id": preliminary_g13.policy_evaluation_id,
+                        "g13_policy_version": preliminary_g13.policy_version,
+                    },
+                ))
+                session.commit()  # Consumption durable before external traffic.
         from app.authority.runtime import observe_authority_shadow
         observe_authority_shadow(
             mandate_id,

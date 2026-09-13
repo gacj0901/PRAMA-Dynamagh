@@ -181,13 +181,33 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
     identity = get_policy_identity(session, policy)
     recovery_probe_authorized = False
     longitudinal = None
+    recovery_observation_permitted = False
     if identity is not None:
-        from app.authority.runtime import evaluate_current_g13
+        from app.authority.runtime import (
+            evaluate_current_g13,
+            recovery_observation_available,
+        )
         longitudinal = evaluate_current_g13(session, identity.agent_id)
         recovery_probe_authorized = (
             longitudinal.policy_version == "g13-d-structural-autonomy-v0.4"
             and longitudinal.result_core.get("recovery_probe_authorized") is True
         )
+        # Observation-starvation bypass: exactly one recovery observation is
+        # granted per operator_recovery episode when the ONLY active blocker
+        # is a missing current critical observation. G13 keeps its REVIEW
+        # verdict and will re-evaluate the fresh observation next cycle.
+        recovery_observation_permitted = (
+            longitudinal.result == "REVIEW"
+            and not recovery_probe_authorized
+            and longitudinal.result_core.get("sole_blocker")
+            == "G13_CURRENT_CRITICAL_OBSERVATION_MISSING"
+            and recovery_observation_available(session, identity.agent_id)
+        )
+        if recovery_observation_permitted and identity.autonomy_state == "REVIEW_REQUIRED":
+            # The persisted identity state would short-circuit this schedule
+            # below; align the durable state with the current evaluation so
+            # the single permitted observation can be created.
+            identity.autonomy_state = "ACTIVE"
     if identity is not None and identity.autonomy_state == "HALTED":
         return None
     if identity is not None and identity.autonomy_state == "REVIEW_REQUIRED" and not recovery_probe_authorized:
@@ -197,7 +217,13 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
     if profile and not full_autonomy_enabled(identity.agent_id if identity else None):
         return None
     if longitudinal is not None:
-        if longitudinal.result == "HALT" or (longitudinal.result == "REVIEW" and not recovery_probe_authorized):
+        if longitudinal.result == "HALT":
+            return None
+        if (
+            longitudinal.result == "REVIEW"
+            and not recovery_probe_authorized
+            and not recovery_observation_permitted
+        ):
             return None
     slot = execution_slot(policy, instant, _effective_cadence(policy, profile))
     key = idempotency_key(policy, slot)

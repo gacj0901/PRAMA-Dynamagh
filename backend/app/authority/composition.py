@@ -39,6 +39,7 @@ class AuthorityCompositionInput:
     throttled_constraints_satisfied: bool
     current_runtime_action: str
     recovery_probe_authorized: bool = False
+    recovery_observation_permitted: bool = False
     shadow_mode: bool = True
     policy_version: str = AUTHORITY_COMPOSITION_POLICY_VERSION
 
@@ -66,6 +67,7 @@ class AuthorityCompositionInput:
             },
             "throttled_constraints_satisfied": self.throttled_constraints_satisfied,
             "recovery_probe_authorized": self.recovery_probe_authorized,
+            "recovery_observation_permitted": self.recovery_observation_permitted,
             "current_runtime_action": self.current_runtime_action,
             "shadow_mode": self.shadow_mode,
             "policy_version": self.policy_version,
@@ -86,6 +88,7 @@ def evaluate_authority_composition(value: AuthorityCompositionInput) -> PolicyEv
         longitudinal_result=value.longitudinal_result,
         throttled_constraints_satisfied=value.throttled_constraints_satisfied,
         recovery_probe_authorized=value.recovery_probe_authorized,
+        recovery_observation_permitted=value.recovery_observation_permitted,
     )
     output = "ALLOW" if allowed else "RESTRICT"
     runtime_allows = value.current_runtime_action in {"CONTINUE", "CONTINUE_TO_GATEWAY", "EXECUTE"}

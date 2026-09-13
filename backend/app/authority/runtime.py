@@ -130,6 +130,47 @@ def evaluate_current_g13(session: Session, agent_id: str) -> PolicyEvaluationCor
     return result
 
 
+G13_RECOVERY_OBSERVATION_EVENT_TYPE = "G13_RECOVERY_OBSERVATION_CONSUMED"
+
+
+def recovery_observation_available(session: Session, agent_id: str) -> bool:
+    """Whether the current recovery episode still holds an unconsumed
+    observation-of-recovery. Exactly one exists per operator_recovery event;
+    a new recovery event starts a fresh episode (the consumption record is
+    keyed by recovery_event_id, so prior episodes never leak)."""
+    if not hasattr(session, "query"):
+        return True
+    from app.domain.mandates import UsageEvent
+    recovery_event = latest_operator_recovery(session, agent_id)
+    if recovery_event is None:
+        return False
+    consumed = (
+        session.query(UsageEvent)
+        .filter(
+            UsageEvent.event_type == G13_RECOVERY_OBSERVATION_EVENT_TYPE,
+            UsageEvent.metadata_["recovery_event_id"].astext == str(recovery_event.event_id),
+        )
+        .first()
+    )
+    return consumed is None
+
+
+def current_g13_review_supersedable(session: Session, identity: Any, agent_id: str) -> bool:
+    """True iff the identity's persisted REVIEW_REQUIRED state represents an
+    observation-starvation episode whose recovery observation is still
+    available. Recomputes G13 to know the sole blocker, then attaches the
+    availability flag so callers can mutate identity.autonomy_state in their
+    own transaction (runtime evaluates without mutating)."""
+    if identity is None or getattr(identity, "autonomy_state", None) != "REVIEW_REQUIRED":
+        return False
+    longitudinal = evaluate_current_g13(session, agent_id)
+    if longitudinal.result != "REVIEW":
+        return False
+    if longitudinal.result_core.get("sole_blocker") != "G13_CURRENT_CRITICAL_OBSERVATION_MISSING":
+        return False
+    return recovery_observation_available(session, agent_id)
+
+
 def _latest_epistemic_evaluation(session: Session, mandate_id: str) -> EpistemicEvaluation | None:
     return (
         session.query(EpistemicEvaluation)
@@ -209,6 +250,12 @@ def run_pre_next_action_authority_check(
     # and hashes remain in the policy input for replay.
     longitudinal_core = longitudinal_core or evaluate_current_g13(session, agent_id)
     persist_policy_evaluation(session, longitudinal_core)
+    recovery_observation_permitted = (
+        longitudinal_core.result == "REVIEW"
+        and longitudinal_core.result_core.get("sole_blocker")
+        == "G13_CURRENT_CRITICAL_OBSERVATION_MISSING"
+        and recovery_observation_available(session, agent_id)
+    )
     if enforce:
         identity = session.get(AgentIdentity, agent_id)
         if identity is not None:
@@ -242,6 +289,7 @@ def run_pre_next_action_authority_check(
             longitudinal_core.policy_version == "g13-d-structural-autonomy-v0.4"
             and longitudinal_core.result_core.get("recovery_probe_authorized") is True
         ),
+        recovery_observation_permitted=recovery_observation_permitted,
         current_runtime_action=current_runtime_action,
         shadow_mode=not enforce,
     )
@@ -269,7 +317,10 @@ def run_pre_next_action_authority_check(
 __all__ = [
     "AuthorityShadowCheckpoint",
     "RUNTIME_CHECKPOINT_VERSION",
+    "G13_RECOVERY_OBSERVATION_EVENT_TYPE",
+    "current_g13_review_supersedable",
     "evaluate_current_g13",
+    "recovery_observation_available",
     "run_pre_next_action_authority_check",
 ]
 
