@@ -2,7 +2,7 @@
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0025_epistemic_registry_requirements"
+revision = "0025_epistemic_registry"
 down_revision = "0024_unlimited_agent_authority"
 branch_labels = None
 depends_on = None

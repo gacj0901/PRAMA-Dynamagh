@@ -3,8 +3,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
-revision = "0026_acquisition_epistemic_target"
-down_revision = "0025_epistemic_registry_requirements"
+revision = "0026_acq_epistemic_target"
+down_revision = "0025_epistemic_registry"
 branch_labels = None
 depends_on = None
 
