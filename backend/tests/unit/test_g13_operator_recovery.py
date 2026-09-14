@@ -80,13 +80,14 @@ def _observation(
     missing_data: tuple[str, ...] = (),
     telegraph_status: str | None = None,
     recovery_event_types: tuple[str, ...] = (),
+    failure_code: str | None = None,
 ) -> OAgentObservation:
     lineage = OAgentSourceLineage(agent_identity_id="autonomy-controller", autonomy_run_ids=(run_id,))
     facts = OAgentFacts(
         action_status="FAILED" if failed else "COMPLETED",
         local_decision_state="BLOCK" if failed else "PERMIT",
         local_decision_scope="LOCAL_DECISION_ONLY",
-        failure_code="GATEWAY_UNAVAILABLE" if failed else None,
+        failure_code=failure_code if failed and failure_code is not None else "GATEWAY_UNAVAILABLE" if failed else None,
         failure_event_types=("ACQUISITION_FAILED",) if failed else (),
         recovery_event_types=recovery_event_types,
         telegraph_statuses=(telegraph_status,) if telegraph_status else ("PAYMENT_UNCERTAIN",) if failed else ("SUCCEEDED",),
@@ -119,6 +120,7 @@ def test_operator_recovery_allows_one_bounded_canary_and_then_continues():
     )
     result = evaluate_g13_policy(canary)
     assert result.result == "THROTTLE"
+
     assert result.triggered_rule_ids == ("G13_OPERATOR_RECOVERY_CANARY",)
     assert result.result_core["operator_recovery_canary"] is True
     assert replay_g13_policy(canary).result_hash == result.result_hash
@@ -133,6 +135,26 @@ def test_operator_recovery_allows_one_bounded_canary_and_then_continues():
     assert after.result == "CONTINUE"
     assert after.result_core["post_recovery_execution_count"] == 1
     assert after.result_core["operator_recovery_canary"] is False
+
+
+def test_payment_required_challenge_is_external_and_not_agent_failure():
+    observation = _observation(
+        1,
+        "payment-required-run",
+        RECOVERY_AT,
+        failed=True,
+        telegraph_status="RECONCILED_NO_PAYMENT",
+        failure_code="PAYMENT_REQUIRED",
+    )
+    result = evaluate_g13_policy(
+        G13PolicyInput.from_observations(
+            "autonomy-controller",
+            [observation],
+            allow_sparse_window=True,
+        )
+    )
+    assert result.result == "CONTINUE"
+    assert result.result_core["distinct_failure_count"] == 0
 
 
 def test_invalid_recovery_fails_closed():

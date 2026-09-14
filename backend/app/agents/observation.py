@@ -250,6 +250,18 @@ def _facts(
     recovered = recovered_override if recovered_override is not None else (bool(recovery_events) if has_failure else None)
     mandate_budget = mandate.max_budget_usdc if mandate is not None else None
     daily_cap = policy.max_usdc_per_day if policy is not None else None
+    observed_failure_code = (
+        run.failure_code
+        if run is not None and run.failure_code
+        else next(
+            (
+                str((item.metadata_ or {}).get("failure_code"))
+                for item in events
+                if (item.metadata_ or {}).get("failure_code")
+            ),
+            None,
+        )
+    )
     return OAgentFacts(
         action_status=action_status,
         mandate_status=mandate.status if mandate is not None else None,
@@ -273,7 +285,7 @@ def _facts(
         cadence_seconds=policy.cadence_seconds if policy is not None else None,
         prior_run_count=prior_run_count,
         prior_mandate_count=prior_mandate_count,
-        failure_code=run.failure_code if run is not None and run.failure_code else None,
+        failure_code=observed_failure_code,
         failure_event_types=tuple(failure_events),
         recovery_event_types=tuple(recovery_events),
         recovered=recovered,

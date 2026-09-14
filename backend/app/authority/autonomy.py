@@ -238,11 +238,24 @@ def _distinct_execution_stats(policy_input: G13PolicyInput) -> tuple[int, int, i
         run_ids = tuple(lineage.get("autonomy_run_ids") or ())
         unit_id = run_ids[0] if run_ids else str(item.get("observation_id"))
         statuses = set(facts.get("telegraph_statuses") or ())
+        external_codes = {
+            "GATEWAY_UNAVAILABLE",
+            "TELEGRAPH_UNAVAILABLE",
+            "X402_FACILITATOR_TIMEOUT",
+            # A 402 PAYMENT_REQUIRED is a challenge, not an agent execution
+            # failure.  The worker reconciles it as no-payment when the
+            # facilitator did not settle; historical observations may still
+            # carry the original code and are classified here as external.
+            "PAYMENT_REQUIRED",
+        }
         unit = units.setdefault(unit_id, {"block": False, "failure": False, "not_executed": False, "executed": False})
-        unit["block"] = unit["block"] or facts.get("local_decision_state") == "BLOCK"
+        reconciled_no_payment = "RECONCILED_NO_PAYMENT" in statuses
+        unit["block"] = unit["block"] or (
+            facts.get("local_decision_state") == "BLOCK"
+            and not (reconciled_no_payment and facts.get("failure_code") in external_codes)
+        )
         # External failures reconciled without payment are recoverable
         # observations and must not escalate the longitudinal trajectory.
-        external_codes = {"GATEWAY_UNAVAILABLE", "TELEGRAPH_UNAVAILABLE", "X402_FACILITATOR_TIMEOUT"}
         failure_code = facts.get("failure_code")
         unit["failure"] = unit["failure"] or (
             not bool(facts.get("recovered"))
