@@ -54,14 +54,20 @@ def _fake_session():
         query="synthetic operator question",
         requested_intent=None,
     )
+    call = SimpleNamespace(
+        raw_response={},
+        status="REQUESTED",
+        cost_usd=None,
+        completed_at=None,
+    )
     added = []
 
-    return mandate, task, added
+    return mandate, task, call, added
 
 
 @pytest.fixture
 def run_once(monkeypatch):
-    mandate, task, added = _fake_session()
+    mandate, task, call, added = _fake_session()
 
     class _Query:
         def __init__(self, result):
@@ -94,20 +100,28 @@ def run_once(monkeypatch):
             return len(self.all())
 
     tasks_list = [task]
+    call_holder = [call]
 
     def query(model, *a, **k):
         if model is acquisition.Mandate:
             return _Query(mandate)
         if model is acquisition.AcquisitionTask:
             return _Query(tasks_list)
+        if model is acquisition.TelegraphCall:
+            return _Query(call_holder[0])
         return _Query(None)
+
+    def add(item):
+        added.append(item)
+        if isinstance(item, acquisition.TelegraphCall):
+            call_holder[0] = item
 
     session = _UnclosableSession(SimpleNamespace(
         query=query,
         get=lambda model, key: task if model is acquisition.AcquisitionTask else None,
         rollback=lambda: None,
         commit=lambda: None,
-        add=added.append,
+        add=add,
     ))
     monkeypatch.setattr(acquisition, "SessionLocal", lambda: session)
     monkeypatch.setenv("GATEWAY_URL", "http://gateway.test")
@@ -151,6 +165,9 @@ def test_gateway_payment_required_is_preserved(run_once):
     code, task, added = run_once(lambda request: (_ for _ in ()).throw(_http_error(402, {"code": "PAYMENT_REQUIRED"})))
     assert code == "PAYMENT_REQUIRED"
     assert task.failure_code == "PAYMENT_REQUIRED"
+    reconciliation = [e for e in added if getattr(e, "event_type", None) == "ACQUISITION_PAYMENT_RECONCILED"]
+    assert reconciliation and reconciliation[0].metadata_["settled_usdc"] == "0.000000"
+    assert not [e for e in added if getattr(e, "event_type", None) == "ACQUISITION_PAYMENT_UNCERTAIN"]
 
 
 def test_transport_failure_stays_gateway_unavailable(run_once):

@@ -21,6 +21,7 @@ from app.authority.recovery import G13_REVIEW_RECOVERY_POLICY_VERSION
 logger = logging.getLogger(__name__)
 now = lambda: datetime.now(timezone.utc)
 GATEWAY_REQUEST_TIMEOUT_SECONDS = 120
+NO_PAYMENT_GATEWAY_FAILURE = "PAYMENT_REQUIRED"
 
 
 def maximum(mandate, session=None):
@@ -80,10 +81,25 @@ def uncertain_hold(session, mandate_id):
     )
 
 
+def _gateway_reconciled_without_payment(code: str, call: TelegraphCall | None, gateway_http_status: int | None = None) -> bool:
+    """Return true only for an explicit x402 challenge with no settlement.
+
+    A 402 ``PAYMENT_REQUIRED`` response is a gateway challenge.  No payment
+    has been attempted yet, so retaining the reservation as payment-uncertain
+    deadlocks the autonomous scheduler.  Other payment errors remain
+    uncertain because they may occur after a payment attempt.
+    """
+    return bool(
+        code == NO_PAYMENT_GATEWAY_FAILURE
+        and gateway_http_status == 402
+    )
+
+
 def execute_one(mandate_id, acquisition_id):
     session = SessionLocal()
     network_attempted = False
     failure_stage = "PRE_NETWORK"
+    gateway_http_status: int | None = None
     budget = Decimal("0")
     claimed = False
     try:
@@ -301,6 +317,7 @@ def execute_one(mandate_id, acquisition_id):
             # Gateway answered with an HTTP status: the transport reached it, so
             # the failure is whatever the Gateway declared, not availability.
             body = error.read()
+            gateway_http_status = error.code
             gateway_code = None
             try: gateway_code = json.loads(body).get("code")
             except (ValueError, AttributeError): gateway_code = None
@@ -370,8 +387,20 @@ def execute_one(mandate_id, acquisition_id):
         if mandate.status == "RECEIVED": transition_mandate(session,mandate,MandateStatus.PLANNED)
         if mandate.status == "PLANNED": transition_mandate(session,mandate,MandateStatus.ACQUIRING)
         call = session.query(TelegraphCall).filter_by(acquisition_id=acquisition_id).one_or_none()
+        no_payment_reconciled = _gateway_reconciled_without_payment(code, call, gateway_http_status)
         if call:
-            call.status = "PAYMENT_UNCERTAIN" if network_attempted else "NOT_EXECUTED"
+            call.status = (
+                "RECONCILED_NO_PAYMENT"
+                if no_payment_reconciled
+                else "PAYMENT_UNCERTAIN" if network_attempted else "NOT_EXECUTED"
+            )
+            if no_payment_reconciled:
+                call.raw_response = {
+                    **(call.raw_response or {}),
+                    "gateway_http_status": gateway_http_status,
+                    "payment_state": "RECONCILED_NO_PAYMENT",
+                }
+                call.cost_usd = Decimal("0.000000")
             call.completed_at = now()
         failure_metadata={
             "failure_code": code,
@@ -382,7 +411,21 @@ def execute_one(mandate_id, acquisition_id):
             "gateway_url": effective_gateway_url,
         }
         session.add(UsageEvent(mandate_id=mandate_id,acquisition_id=acquisition_id,event_type="ACQUISITION_FAILED",metadata_=failure_metadata))
-        if network_attempted:
+        if no_payment_reconciled:
+            session.add(UsageEvent(
+                mandate_id=mandate_id,
+                acquisition_id=acquisition_id,
+                event_type="ACQUISITION_PAYMENT_RECONCILED",
+                metadata_={
+                    "settled": False,
+                    "payment_state": "RECONCILED_NO_PAYMENT",
+                    "settled_usdc": "0.000000",
+                    "actual_cost_usdc": "0.000000",
+                    "failure_code": code,
+                    "gateway_http_status": 402,
+                },
+            ))
+        elif network_attempted:
             session.add(UsageEvent(mandate_id=mandate_id,acquisition_id=acquisition_id,event_type="ACQUISITION_PAYMENT_UNCERTAIN",metadata_={"held_budget_usdc":str(budget),"failure_code":code}))
         session.commit()
         return code
