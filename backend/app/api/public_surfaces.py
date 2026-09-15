@@ -12,6 +12,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.domain.mandates import (
@@ -205,14 +206,29 @@ def _operational_ledger(session: Session, public_mandates: list[Mandate], autono
     task_failures = [task for task in autonomous_tasks if task.failure_code]
     call_acquisition_ids = {call.acquisition_id for call in autonomous_calls}
 
+    authority_reason = func.jsonb_extract_path_text(PolicyEvaluation.result_core, "authority_reason")
     authority_counts = Counter()
-    for evaluation in session.query(PolicyEvaluation).all():
-        if evaluation.policy_type != "AUTHORITY_COMPOSITION":
-            continue
-        core = evaluation.result_core or {}
-        triggered = evaluation.triggered_rule_ids or []
-        reason = core.get("authority_reason") or (triggered[0] if triggered else "UNKNOWN")
-        authority_counts[str(reason)] += 1
+    try:
+        authority_rows = (
+            session.query(authority_reason, func.count(PolicyEvaluation.policy_evaluation_id))
+            .filter(PolicyEvaluation.policy_type == "AUTHORITY_COMPOSITION")
+            .group_by(authority_reason)
+            .all()
+        )
+    except (AttributeError, TypeError):
+        # Lightweight test/read-only Session implementations may only expose
+        # model queries; keep the same derived semantics for those callers.
+        evaluations = session.query(PolicyEvaluation).all()
+        fallback = Counter()
+        for evaluation in evaluations:
+            if evaluation.policy_type != "AUTHORITY_COMPOSITION":
+                continue
+            core = evaluation.result_core or {}
+            triggered = evaluation.triggered_rule_ids or []
+            fallback[str(core.get("authority_reason") or (triggered[0] if triggered else "UNKNOWN"))] += 1
+        authority_rows = fallback.items()
+    for reason, count in authority_rows:
+        authority_counts[str(reason or "UNKNOWN")] += int(count)
 
     return {
         "mandates": {
