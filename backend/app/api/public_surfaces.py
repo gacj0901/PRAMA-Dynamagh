@@ -103,8 +103,12 @@ def public_activity(session: Session) -> dict[str, Any]:
     """
 
     mandates = _public_mandates(session)
+    manual = [item for item in mandates if item.origin == "MANUAL"]
+    m2m = [item for item in mandates if item.origin == "M2M"]
     autonomous = session.query(Mandate).filter(Mandate.origin == "AUTONOMOUS").all()
     autonomous_summary = _activity_aggregate(session, autonomous)
+    manual_summary = _activity_aggregate(session, manual)
+    m2m_summary = _activity_aggregate(session, m2m)
 
     mandate_ids = [item.mandate_id for item in mandates]
     if not mandate_ids:
@@ -135,6 +139,8 @@ def public_activity(session: Session) -> dict[str, Any]:
             "public_spend_usdc": "0.000000",
         }
         base["autonomous"] = autonomous_summary
+        base["manual"] = manual_summary
+        base["m2m"] = m2m_summary
         return base
 
     tasks = session.query(AcquisitionTask).filter(AcquisitionTask.mandate_id.in_(mandate_ids)).all()
@@ -178,6 +184,8 @@ def public_activity(session: Session) -> dict[str, Any]:
         "average_evidence_per_workflow": round(len(evidence) / len(mandates), 6),
         "average_latency_ms": round(sum(durations) / len(durations), 3) if durations else None,
         "public_spend_usdc": _money(public_spend),
+        "manual": manual_summary,
+        "m2m": m2m_summary,
         "autonomous": autonomous_summary,
     }
 

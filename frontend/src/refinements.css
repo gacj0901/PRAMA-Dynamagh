@@ -206,6 +206,15 @@
   text-align: right;
 }
 
+.activity-scope-heading {
+  margin: 12px 0 2px;
+  padding-top: 8px;
+  border-top: 1px solid #4a4c4d;
+  color: #d7ae7a;
+  font: 11px "Sometype Mono", "Courier New", monospace;
+  letter-spacing: .08em;
+}
+
 .share-alert {
   position: fixed;
   z-index: 40;

@@ -250,6 +250,8 @@ export interface PublicActivity {
   average_evidence_per_workflow: number;
   average_latency_ms: number | null;
   public_spend_usdc: string | number;
+  manual: ActivityAggregate;
+  m2m: ActivityAggregate;
   autonomous?: ActivityAggregate;
 }
 
