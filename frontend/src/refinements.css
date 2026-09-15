@@ -147,6 +147,46 @@
   line-height: 1.5;
 }
 
+.multi-intent-demo {
+  border-color: #735c45;
+}
+
+.demo-task-list {
+  display: grid;
+  gap: 5px;
+  margin: 9px 0 11px;
+}
+
+.demo-task {
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr);
+  gap: 7px;
+  padding: 6px 7px;
+  border-left: 2px solid #89b1ca;
+  background: #12191c;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.demo-task strong {
+  color: #d7ae7a;
+  font-weight: 500;
+}
+
+.demo-task span {
+  color: #d8d5d1;
+}
+
+.multi-intent-demo .primary span {
+  color: #6b625c;
+  font-size: 10px;
+}
+
+.demo-message {
+  margin: 9px 0 0;
+  color: #9bcbe5;
+}
+
 .new-mandate select {
   width: 100%;
   margin-top: 4px;

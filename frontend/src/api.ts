@@ -208,6 +208,7 @@ export interface ActivityAggregate {
   telegraph_successful_calls: number;
   real_miners_used: string[];
   intents_used: string[];
+  multi_intent_workflows: number;
   evidence_created: number;
   decisions_emitted: number;
   tickets_emitted: number;
@@ -297,10 +298,10 @@ async function optional<T>(path: string): Promise<T | null> {
 
 export const api = {
   health: () => request<{ status: string; service: string }>("/health"),
-  mandates: () => request<Mandate[]>("/v1/mandates"),
+  mandates: (limit = 200) => request<Mandate[]>(`/v1/mandates?limit=${limit}`),
   jobs: () => request<Erc8183Job[]>("/v1/erc8183/jobs"),
   policies: () => request<AutonomyPolicy[]>("/v1/autonomy/policies"),
-  runs: () => request<AutonomyRun[]>("/v1/autonomy/runs"),
+  runs: (limit = 200) => request<AutonomyRun[]>(`/v1/autonomy/runs?limit=${limit}`),
   autonomy: () => request<AutonomyStatus>("/v1/autonomy/status"),
   activity: () => request<PublicActivity>("/v1/public/activity"),
   ticketShare: (ticketId: string) => request<PublicTicketSummary>(`/v1/tickets/${ticketId}/share`),
@@ -319,7 +320,7 @@ export const api = {
     const anchor = ticket ? await optional<Anchor>(`/v1/tickets/${ticket.ticket_id}/anchor`) : null;
     return { mandate, acquisitions: acquisitionResponse.acquisitions, evidence, evaluation, decision, ticket, verification, anchor, timeline };
   },
-  createMandate: (payload: Pick<Mandate, "actor_id" | "text" | "mandate_type" | "constraints" | "max_budget_usdc">) =>
+  createMandate: (payload: Pick<Mandate, "actor_id" | "text" | "mandate_type" | "constraints" | "max_budget_usdc"> & { acquisitions?: Array<{ query: string; requested_intent?: string }> }) =>
     request<Mandate>("/v1/mandates", { method: "POST", body: JSON.stringify(payload) }),
   setPolicyEnabled: (policyId: string, enabled: boolean) => request<AutonomyPolicy>(`/v1/autonomy/policies/${policyId}/${enabled ? "enable" : "disable"}`, { method: "POST" }),
   patchPolicy: (policyId: string, payload: Partial<Pick<AutonomyPolicy, "strict_verification" | "read_only_replay" | "allow_anchor">>) =>

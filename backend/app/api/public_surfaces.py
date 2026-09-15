@@ -57,7 +57,7 @@ def _activity_aggregate(session: Session, mandates: list[Mandate]) -> dict[str, 
         return {
             "real_users": 0, "workflows_started": 0, "workflows_completed": 0,
             "telegraph_calls": 0, "telegraph_successful_calls": 0,
-            "real_miners_used": [], "intents_used": [],
+            "real_miners_used": [], "intents_used": [], "multi_intent_workflows": 0,
             "evidence_created": 0, "decisions_emitted": 0, "tickets_emitted": 0,
             "public_spend_usdc": "0.000000",
         }
@@ -69,6 +69,10 @@ def _activity_aggregate(session: Session, mandates: list[Mandate]) -> dict[str, 
     tickets = session.query(Ticket).filter(Ticket.mandate_id.in_(mandate_ids)).all()
     actor_counts = Counter(item.actor_id for item in mandates)
     successful_calls = [item for item in calls if item.status == "SUCCEEDED"]
+    intents_by_mandate: dict[str, set[str]] = {}
+    for item in successful_calls:
+        if item.intent:
+            intents_by_mandate.setdefault(item.mandate_id, set()).add(item.intent)
     spend = sum((Decimal(item.cost_usd or 0) for item in successful_calls), Decimal("0"))
     return {
         "real_users": len(actor_counts),
@@ -78,6 +82,7 @@ def _activity_aggregate(session: Session, mandates: list[Mandate]) -> dict[str, 
         "telegraph_successful_calls": len(successful_calls),
         "real_miners_used": sorted({str(item.miner_id) for item in successful_calls if item.miner_id}),
         "intents_used": sorted({str(item.intent) for item in successful_calls if item.intent}),
+        "multi_intent_workflows": sum(len(intents) > 1 for intents in intents_by_mandate.values()),
         "evidence_created": len(evidence),
         "decisions_emitted": len(decisions),
         "tickets_emitted": len(tickets),
