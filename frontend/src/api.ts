@@ -215,6 +215,27 @@ export interface ActivityAggregate {
   public_spend_usdc: string;
 }
 
+export interface OperationalLedger {
+  mandates: { total: number; ticketed: number; manual: number; m2m: number; autonomous: number };
+  autonomous_outcomes: {
+    telegraph_succeeded: number;
+    authority_restricted: number;
+    composition_restricted: number;
+    g13_review: number;
+    external_worker_failures: number;
+    running: number;
+  };
+  telegraph_call_state: {
+    succeeded: number;
+    reconciled_no_payment: number;
+    payment_uncertain: number;
+    requested: number;
+    not_executed: number;
+    no_telegraph_call: number;
+  };
+  authority: { next_action_authorized: number; g13_review: number; g13_throttle: number };
+}
+
 export interface PublicActivity {
   budget_profile: {
     configured_max_usdc_per_workflow: string;
@@ -253,6 +274,7 @@ export interface PublicActivity {
   manual: ActivityAggregate;
   m2m: ActivityAggregate;
   autonomous?: ActivityAggregate;
+  operational_ledger?: OperationalLedger;
 }
 
 export interface PublicTicketSummary {

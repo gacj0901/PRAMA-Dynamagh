@@ -20,6 +20,7 @@ from app.domain.mandates import (
     Decision,
     Evidence,
     Mandate,
+    PolicyEvaluation,
     StructuralEvaluation,
     TelegraphCall,
     Ticket,
@@ -105,10 +106,11 @@ def public_activity(session: Session) -> dict[str, Any]:
     mandates = _public_mandates(session)
     manual = [item for item in mandates if item.origin == "MANUAL"]
     m2m = [item for item in mandates if item.origin == "M2M"]
-    autonomous = session.query(Mandate).filter(Mandate.origin == "AUTONOMOUS").all()
+    autonomous = [item for item in session.query(Mandate).all() if item.origin == "AUTONOMOUS"]
     autonomous_summary = _activity_aggregate(session, autonomous)
     manual_summary = _activity_aggregate(session, manual)
     m2m_summary = _activity_aggregate(session, m2m)
+    operational_ledger = _operational_ledger(session, mandates, autonomous)
 
     mandate_ids = [item.mandate_id for item in mandates]
     if not mandate_ids:
@@ -141,6 +143,7 @@ def public_activity(session: Session) -> dict[str, Any]:
         base["autonomous"] = autonomous_summary
         base["manual"] = manual_summary
         base["m2m"] = m2m_summary
+        base["operational_ledger"] = operational_ledger
         return base
 
     tasks = session.query(AcquisitionTask).filter(AcquisitionTask.mandate_id.in_(mandate_ids)).all()
@@ -187,6 +190,59 @@ def public_activity(session: Session) -> dict[str, Any]:
         "manual": manual_summary,
         "m2m": m2m_summary,
         "autonomous": autonomous_summary,
+        "operational_ledger": operational_ledger,
+    }
+
+
+def _operational_ledger(session: Session, public_mandates: list[Mandate], autonomous: list[Mandate]) -> dict[str, Any]:
+    """Build the read-only ledger from persisted production records."""
+    all_mandates = [*public_mandates, *autonomous]
+    autonomous_ids = {item.mandate_id for item in autonomous}
+    autonomous_tasks = [task for task in session.query(AcquisitionTask).all() if task.mandate_id in autonomous_ids]
+    autonomous_calls = [call for call in session.query(TelegraphCall).all() if call.mandate_id in autonomous_ids]
+    call_counts = Counter(str(call.status) for call in autonomous_calls)
+    authority_codes = {"AUTHORITY_COMPOSITION_RESTRICTED", "G13_REVIEW"}
+    task_failures = [task for task in autonomous_tasks if task.failure_code]
+    call_acquisition_ids = {call.acquisition_id for call in autonomous_calls}
+
+    authority_counts = Counter()
+    for evaluation in session.query(PolicyEvaluation).all():
+        if evaluation.policy_type != "AUTHORITY_COMPOSITION":
+            continue
+        core = evaluation.result_core or {}
+        triggered = evaluation.triggered_rule_ids or []
+        reason = core.get("authority_reason") or (triggered[0] if triggered else "UNKNOWN")
+        authority_counts[str(reason)] += 1
+
+    return {
+        "mandates": {
+            "total": len(all_mandates),
+            "ticketed": sum(item.status == "TICKETED" for item in all_mandates),
+            "manual": sum(item.origin == "MANUAL" for item in all_mandates),
+            "m2m": sum(item.origin == "M2M" for item in all_mandates),
+            "autonomous": len(autonomous),
+        },
+        "autonomous_outcomes": {
+            "telegraph_succeeded": call_counts.get("SUCCEEDED", 0),
+            "authority_restricted": sum(task.failure_code in authority_codes for task in task_failures),
+            "composition_restricted": sum(task.failure_code == "AUTHORITY_COMPOSITION_RESTRICTED" for task in task_failures),
+            "g13_review": sum(task.failure_code == "G13_REVIEW" for task in task_failures),
+            "external_worker_failures": sum(task.failure_code not in authority_codes for task in task_failures),
+            "running": sum(task.status == "RUNNING" for task in autonomous_tasks),
+        },
+        "telegraph_call_state": {
+            "succeeded": call_counts.get("SUCCEEDED", 0),
+            "reconciled_no_payment": call_counts.get("RECONCILED_NO_PAYMENT", 0),
+            "payment_uncertain": call_counts.get("PAYMENT_UNCERTAIN", 0),
+            "requested": call_counts.get("REQUESTED", 0),
+            "not_executed": call_counts.get("NOT_EXECUTED", 0),
+            "no_telegraph_call": sum(task.acquisition_id not in call_acquisition_ids for task in autonomous_tasks),
+        },
+        "authority": {
+            "next_action_authorized": authority_counts.get("NEXT_ACTION_AUTHORIZED", 0),
+            "g13_review": authority_counts.get("G13_REVIEW", 0),
+            "g13_throttle": authority_counts.get("G13_THROTTLE_CONSTRAINTS_REQUIRED", 0),
+        },
     }
 
 

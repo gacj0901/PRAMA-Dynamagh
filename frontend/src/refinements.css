@@ -79,6 +79,88 @@
   margin-top: 3px;
 }
 
+.ledger-trigger {
+  margin-top: 2px;
+  border-color: #e6d9ca;
+  outline-color: #e6d9ca;
+  background: #f7ece6;
+  color: #171819;
+}
+
+.ledger-trigger:hover,
+.ledger-trigger.active {
+  background: #d8c8b7;
+}
+
+.operational-ledger-stage {
+  position: fixed;
+  z-index: 25;
+  max-width: calc(100vw - 28px);
+  max-height: calc(100vh - 28px);
+  overflow: auto;
+  border: 1px solid #29414b;
+  padding: 34px 24px 22px;
+  background: #080b0c;
+  color: #b9e6f8;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.62), inset 0 0 22px rgba(21, 92, 112, 0.12);
+}
+
+.operational-ledger-stage .about-close {
+  border-color: #52717c;
+  color: #b9e6f8;
+  background: #080b0c;
+}
+
+.operational-ledger-console {
+  font: 12px/1.45 "Sometype Mono", "Courier New", monospace;
+  letter-spacing: .01em;
+}
+
+.ledger-title {
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #0b7184;
+  color: #13b6cf;
+  font-size: 12px;
+  letter-spacing: .08em;
+}
+
+.operational-ledger-console section {
+  margin: 0 0 17px;
+}
+
+.operational-ledger-console h3 {
+  margin: 0 0 5px;
+  color: #13b6cf;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .07em;
+}
+
+.ledger-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  padding: 2px 0;
+  color: #8ad4e3;
+}
+
+.ledger-row strong {
+  color: #d7f5fb;
+  font-weight: 500;
+  text-align: right;
+}
+
+.ledger-row-indent {
+  padding-left: 15px;
+  color: #72b6c7;
+}
+
+.ledger-empty {
+  color: #d6aa7b;
+  font-size: 12px;
+}
+
 .about-stage {
   position: relative;
   min-height: 670px;
