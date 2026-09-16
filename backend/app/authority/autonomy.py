@@ -34,6 +34,19 @@ G13_POLICY_TYPE = "STRUCTURAL_AUTONOMY"
 G13_OUTPUTS = frozenset({"CONTINUE", "THROTTLE", "REVIEW", "HALT"})
 G13_PRECEDENCE = {"CONTINUE": 0, "THROTTLE": 1, "REVIEW": 2, "HALT": 3}
 G13_NON_EXECUTION_STATUSES = frozenset({"NOT_EXECUTED", "REQUESTED", "RECONCILED_NO_PAYMENT"})
+G13_EXTERNAL_DEPENDENCY_FAILURE_CODES = frozenset({
+    "GATEWAY_UNAVAILABLE",
+    "TELEGRAPH_UNAVAILABLE",
+    "TELEGRAPH_REQUEST_FAILED",
+    "X402_FACILITATOR_TIMEOUT",
+    "PAYMENT_FAILED",
+    "PAYMENT_REQUIRED",
+})
+G13_EXTERNAL_NON_BLOCKING_CODES = frozenset({
+    "TELEGRAPH_REQUEST_FAILED",
+    "X402_FACILITATOR_TIMEOUT",
+    "PAYMENT_FAILED",
+})
 G13_RULES = {
     "G13_OPERATOR_RECOVERY_CANARY": {
         "phenomenon": "an operator-reviewed infrastructure recovery has no post-recovery execution yet",
@@ -238,25 +251,18 @@ def _distinct_execution_stats(policy_input: G13PolicyInput) -> tuple[int, int, i
         run_ids = tuple(lineage.get("autonomy_run_ids") or ())
         unit_id = run_ids[0] if run_ids else str(item.get("observation_id"))
         statuses = set(facts.get("telegraph_statuses") or ())
-        external_codes = {
-            "GATEWAY_UNAVAILABLE",
-            "TELEGRAPH_UNAVAILABLE",
-            "X402_FACILITATOR_TIMEOUT",
-            # A 402 PAYMENT_REQUIRED is a challenge, not an agent execution
-            # failure.  The worker reconciles it as no-payment when the
-            # facilitator did not settle; historical observations may still
-            # carry the original code and are classified here as external.
-            "PAYMENT_REQUIRED",
-        }
+        external_codes = G13_EXTERNAL_DEPENDENCY_FAILURE_CODES
         unit = units.setdefault(unit_id, {"block": False, "failure": False, "not_executed": False, "executed": False})
-        reconciled_no_payment = "RECONCILED_NO_PAYMENT" in statuses
+        failure_code = facts.get("failure_code")
+        external_dependency = failure_code in G13_EXTERNAL_NON_BLOCKING_CODES or (
+            "RECONCILED_NO_PAYMENT" in statuses and failure_code in external_codes
+        )
         unit["block"] = unit["block"] or (
             facts.get("local_decision_state") == "BLOCK"
-            and not (reconciled_no_payment and facts.get("failure_code") in external_codes)
+            and not external_dependency
         )
         # External failures reconciled without payment are recoverable
         # observations and must not escalate the longitudinal trajectory.
-        failure_code = facts.get("failure_code")
         unit["failure"] = unit["failure"] or (
             not bool(facts.get("recovered"))
             and failure_code not in external_codes
@@ -334,7 +340,8 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
         if latest and not latest_is_pre_action
         else set()
     )
-    if current_missing - expected_missing:
+    latest_external_dependency = latest_facts.get("failure_code") in G13_EXTERNAL_NON_BLOCKING_CODES
+    if current_missing - expected_missing and not latest_external_dependency:
         trigger("G13_CURRENT_CRITICAL_OBSERVATION_MISSING", "REVIEW")
 
     executed_count = 0

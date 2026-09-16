@@ -157,6 +157,28 @@ def test_payment_required_challenge_is_external_and_not_agent_failure():
     assert result.result_core["distinct_failure_count"] == 0
 
 
+def test_telegraph_request_failure_is_external_and_does_not_freeze_g13():
+    observation = _observation(
+        1,
+        "facilitator-timeout-run",
+        RECOVERY_AT,
+        failed=True,
+        telegraph_status="PAYMENT_UNCERTAIN",
+        failure_code="TELEGRAPH_REQUEST_FAILED",
+        missing_data=("EXTERNAL_RESULT_UNAVAILABLE",),
+    )
+    result = evaluate_g13_policy(
+        G13PolicyInput.from_observations(
+            "autonomy-controller",
+            [observation],
+            allow_sparse_window=True,
+            expected_current_missing_codes=("EVIDENCE_NOT_PRESENT",),
+        )
+    )
+    assert result.result == "CONTINUE"
+    assert result.result_core["distinct_failure_count"] == 0
+
+
 def test_invalid_recovery_fails_closed():
     recovery = {**_recovery(), "canonical_hash": "0x" + "0" * 64}
     assert validate_recovery_payload(recovery) is False
