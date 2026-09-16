@@ -1,0 +1,8 @@
+{
+  "name": "prama-dynamagh-mcp-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "@telegraphprotocol/telegraph-protocol-mcp": "1.0.0"
+  }
+}

@@ -78,7 +78,9 @@ services:
       retries: 12
 
   worker:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: worker.Dockerfile
     env_file:
       - ./.secrets/gateway-worker.env
     command: celery --app app.workers.celery_app worker --beat --loglevel=INFO
@@ -87,6 +89,10 @@ services:
       RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672//}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/3}
       GATEWAY_URL: ${GATEWAY_URL:-http://gateway:8081}
+      ACQUISITION_PROVIDER: ${ACQUISITION_PROVIDER:-GATEWAY}
+      TELEGRAPH_NODE_URL: ${TELEGRAPH_NODE_URL:-http://13.237.89.59:7044}
+      TELEGRAPH_ENGINE_URL: ${TELEGRAPH_ENGINE_URL:-http://13.237.89.59:8080}
+      TELEGRAPH_DAEMON_URL: ${TELEGRAPH_DAEMON_URL:-http://13.237.89.59:8081}
       ERC8183_CALLBACK_ADDRESS: ${TELEGRAPH_CALLBACK_CONTRACT_ADDRESS:-}
       ERC8183_LIVE_WRITES_ENABLED: ${ERC8183_LIVE_WRITES_ENABLED:-false}
       AUTONOMY_GLOBAL_ENABLED: ${AUTONOMY_GLOBAL_ENABLED:-false}
