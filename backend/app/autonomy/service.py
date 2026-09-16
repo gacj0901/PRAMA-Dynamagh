@@ -216,6 +216,24 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
         return None
     if profile and not full_autonomy_enabled(identity.agent_id if identity else None):
         return None
+    # A run that was already authorized and persisted must be resumed before
+    # evaluating whether a *new* slot may be created.  This matters after a
+    # worker restart: the run can remain SCHEDULED with a committed mandate
+    # while the current longitudinal evaluation has moved to REVIEW.  Returning
+    # it here does not bypass the action gate; ``execute_one`` still performs
+    # the binding G13/G12 check immediately before any network request.
+    if policy.acquisition_mode == "TELEGRAPH_HTTP":
+        existing_authorized = (
+            session.query(AutonomyRun)
+            .filter(
+                AutonomyRun.policy_id == policy.policy_id,
+                AutonomyRun.state.in_({"SCHEDULED", "CLAIMED", "RUNNING"}),
+            )
+            .order_by(AutonomyRun.created_at)
+            .first()
+        )
+        if existing_authorized is not None:
+            return existing_authorized
     if longitudinal is not None:
         if longitudinal.result == "HALT":
             return None
@@ -264,7 +282,28 @@ def execute_claimed(session, run: AutonomyRun) -> str:
         if not policy.allow_telegraph_http or policy.read_only_replay:
             run.state = "FAILED"; run.failure_code = "HTTP_RAIL_NOT_ALLOWED"; run.finished_at = now(); _event(session, run, "AUTONOMY_RUN_FAILED"); return run.state
         if run.mandate_id:
-            return "ALREADY_EXECUTED"
+            # A worker can be lost after the mandate/tasks are committed but
+            # before Celery receives the acquisition message.  ``recover_runs``
+            # puts that run back in SCHEDULED so it can be claimed again.  In
+            # that case the mandate already exists, so resume its queued task
+            # instead of leaving the run in CLAIMED forever.
+            pending = (
+                session.query(AcquisitionTask)
+                .filter(
+                    AcquisitionTask.mandate_id == run.mandate_id,
+                    AcquisitionTask.status == AcquisitionStatus.QUEUED.value,
+                )
+                .order_by(AcquisitionTask.ordinal)
+                .first()
+            )
+            if pending is not None:
+                run.state = "RUNNING"
+                return "ACQUISITION_QUEUED"
+            run.state = "FAILED"
+            run.failure_code = "AUTONOMY_ORPHANED_MANDATE"
+            run.finished_at = now()
+            _event(session, run, "AUTONOMY_RUN_FAILED")
+            return run.state
         instruction = policy.mandate_template.get("instruction")
         title = policy.mandate_template.get("title", "Autonomous PRAMA mandate")
         if not isinstance(instruction, str) or not instruction.strip() or not isinstance(title, str):
@@ -387,6 +426,28 @@ def recover_runs(session) -> list[str]:
     recovered = []
     for run in session.query(AutonomyRun).filter(AutonomyRun.state.in_(["CLAIMED", "RUNNING"])).all():
         run.state = "SCHEDULED"; run.started_at = None; recovered.append(run.run_id)
+    # If the worker was lost after creating the mandate/tasks, the run may
+    # already have been reset to SCHEDULED while its first task is still
+    # RUNNING.  Such a run is an orphaned dispatch, not a live concurrent
+    # execution: put only that task back in QUEUED so the normal claim path can
+    # dispatch it once.  Runs without a mandate are left untouched.
+    for run in session.query(AutonomyRun).filter(
+        AutonomyRun.state == "SCHEDULED",
+        AutonomyRun.mandate_id.is_not(None),
+    ).all():
+        reset = (
+            session.query(AcquisitionTask)
+            .filter(
+                AcquisitionTask.mandate_id == run.mandate_id,
+                AcquisitionTask.status == AcquisitionStatus.RUNNING.value,
+            )
+            .update(
+                {AcquisitionTask.status: AcquisitionStatus.QUEUED.value, AcquisitionTask.started_at: None},
+                synchronize_session=False,
+            )
+        )
+        if reset:
+            recovered.append(run.run_id)
     return recovered
 
 

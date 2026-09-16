@@ -25,7 +25,7 @@ from app.autonomy.service import (
     status,
     validate_policy,
 )
-from app.domain.mandates import AcquisitionTask, AgentAuthorityProfile, AgentIdentity, AutonomyPolicy, AutonomyRun, Mandate, PublicManualSpendReservation, UsageEvent
+from app.domain.mandates import AcquisitionStatus, AcquisitionTask, AgentAuthorityProfile, AgentIdentity, AutonomyPolicy, AutonomyRun, Mandate, PublicManualSpendReservation, UsageEvent
 from app.main import app
 
 LIVE_G9_JOB = "04e5ba3c-d4e2-45d1-a21e-cf10f510916c"
@@ -165,6 +165,45 @@ def test_caps_and_restart_recovery_are_persistent(session):
     session.add_all([claimed, waiting]); session.flush()
     assert claimed.run_id in recover_runs(session)
     assert claimed.state == "SCHEDULED" and waiting.state == "WAITING_EXTERNAL"
+
+
+def test_restart_recovery_requeues_orphaned_scheduled_acquisition(session):
+    value = policy()
+    session.add(value)
+    session.flush()
+    mandate = Mandate(
+        actor_id="autonomy-controller",
+        text="Recover the queued production acquisition",
+        mandate_type="AUTONOMOUS",
+        max_budget_usdc=Decimal("0.010000"),
+        origin="AUTONOMOUS",
+        autonomy_policy_id=value.policy_id,
+    )
+    session.add(mandate)
+    session.flush()
+    run = AutonomyRun(
+        policy_id=value.policy_id,
+        scheduled_for=datetime.now(timezone.utc),
+        idempotency_key="orphan-" + str(uuid.uuid4()),
+        state="SCHEDULED",
+        mandate_id=mandate.mandate_id,
+        planned_cost_usdc=Decimal("0.010000"),
+        actual_cost_usdc=Decimal("0.000000"),
+    )
+    task = AcquisitionTask(
+        mandate_id=mandate.mandate_id,
+        query="Recover the queued production acquisition",
+        ordinal=0,
+        required=True,
+        status=AcquisitionStatus.RUNNING.value,
+    )
+    session.add_all([run, task])
+    session.flush()
+
+    assert run.run_id in recover_runs(session)
+    session.flush()
+    assert task.status == AcquisitionStatus.QUEUED.value
+    assert task.started_at is None
 
 
 def test_profile_without_own_limits_inherits_policy_cadence_and_g12(session, monkeypatch):
