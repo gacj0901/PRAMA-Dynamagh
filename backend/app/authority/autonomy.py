@@ -252,11 +252,15 @@ def _distinct_execution_stats(policy_input: G13PolicyInput) -> tuple[int, int, i
         unit_id = run_ids[0] if run_ids else str(item.get("observation_id"))
         statuses = set(facts.get("telegraph_statuses") or ())
         external_codes = G13_EXTERNAL_DEPENDENCY_FAILURE_CODES
-        unit = units.setdefault(unit_id, {"block": False, "failure": False, "not_executed": False, "executed": False})
+        unit = units.setdefault(
+            unit_id,
+            {"block": False, "failure": False, "not_executed": False, "executed": False, "external_dependency": False},
+        )
         failure_code = facts.get("failure_code")
         external_dependency = failure_code in G13_EXTERNAL_NON_BLOCKING_CODES or (
             "RECONCILED_NO_PAYMENT" in statuses and failure_code in external_codes
         )
+        unit["external_dependency"] = unit["external_dependency"] or external_dependency
         unit["block"] = unit["block"] or (
             facts.get("local_decision_state") == "BLOCK"
             and not external_dependency
@@ -272,8 +276,8 @@ def _distinct_execution_stats(policy_input: G13PolicyInput) -> tuple[int, int, i
         unit["executed"] = unit["executed"] or bool(statuses - G13_NON_EXECUTION_STATUSES)
     eligible = [unit for unit in units.values() if unit["executed"] or not unit["not_executed"]]
     return (
-        sum(1 for unit in eligible if unit["block"]),
-        sum(1 for unit in eligible if unit["failure"]),
+        sum(1 for unit in eligible if unit["block"] and not unit["external_dependency"]),
+        sum(1 for unit in eligible if unit["failure"] and not unit["external_dependency"]),
         sum(1 for unit in eligible if unit["executed"]),
     )
 
