@@ -5,6 +5,7 @@ from app.acquisition.gateway import (
     AcquisitionAdapterError,
     TelegraphGatewayAdapter,
 )
+from app.acquisition.mcp import MCPPreflight, MCPProtocolError, TelegraphMCPAdapter
 from app.acquisition.provider import configured_acquisition_adapter
 
 __all__ = [
@@ -12,5 +13,8 @@ __all__ = [
     "AcquisitionAdapter",
     "AcquisitionAdapterError",
     "TelegraphGatewayAdapter",
+    "TelegraphMCPAdapter",
+    "MCPProtocolError",
+    "MCPPreflight",
     "configured_acquisition_adapter",
 ]
