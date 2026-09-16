@@ -17,6 +17,7 @@ from app.persistence.database import SessionLocal
 from app.users import credit as user_credit
 from app.public_safety import MAX_SINGLE_ACQUISITION_USDC, m2m_max_workflow_usdc, public_max_mandate_usdc, verify_spend_reservation, settle_spend, release_spend_reservation
 from app.authority.recovery import G13_REVIEW_RECOVERY_POLICY_VERSION
+from app.autonomy.service import finalize_http_run
 
 logger = logging.getLogger(__name__)
 now = lambda: datetime.now(timezone.utc)
