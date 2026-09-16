@@ -179,6 +179,64 @@ def test_telegraph_request_failure_is_external_and_does_not_freeze_g13():
     assert result.result_core["distinct_failure_count"] == 0
 
 
+def test_v04_external_acquisition_failure_degrades_to_throttle():
+    recovery = _review_recovery()
+    observation = _observation(
+        1,
+        "facilitator-timeout-v04",
+        RECOVERY_AT,
+        failed=True,
+        telegraph_status="PAYMENT_UNCERTAIN",
+        failure_code="TELEGRAPH_REQUEST_FAILED",
+        missing_data=("EXTERNAL_RESULT_UNAVAILABLE",),
+    )
+    result = evaluate_g13_policy(
+        G13PolicyInput.from_observations(
+            "autonomy-controller",
+            [observation],
+            policy_version=G13_REVIEW_RECOVERY_POLICY_VERSION,
+            operator_recovery=recovery,
+            allow_sparse_window=True,
+            expected_current_missing_codes=("EVIDENCE_NOT_PRESENT",),
+        )
+    )
+    assert result.result == "THROTTLE"
+    assert "G13_EXTERNAL_ACQUISITION_DEGRADATION" in result.triggered_rule_ids
+    assert "G13_CURRENT_CRITICAL_OBSERVATION_MISSING" not in result.triggered_rule_ids
+    assert result.result_core["distinct_failure_count"] == 0
+    assert result.result_core["distinct_external_dependency_count"] == 1
+
+
+def test_v04_external_recurrence_escalates_to_review():
+    recovery = _review_recovery()
+    observations = [
+        _observation(
+            index,
+            f"facilitator-timeout-v04-{index}",
+            RECOVERY_AT + timedelta(minutes=index),
+            failed=True,
+            telegraph_status="PAYMENT_UNCERTAIN",
+            failure_code="TELEGRAPH_REQUEST_FAILED",
+            missing_data=("EXTERNAL_RESULT_UNAVAILABLE",),
+        )
+        for index in range(1, 4)
+    ]
+    result = evaluate_g13_policy(
+        G13PolicyInput.from_observations(
+            "autonomy-controller",
+            observations,
+            policy_version=G13_REVIEW_RECOVERY_POLICY_VERSION,
+            operator_recovery=recovery,
+            allow_sparse_window=True,
+            expected_current_missing_codes=("EVIDENCE_NOT_PRESENT",),
+        )
+    )
+    assert result.result == "REVIEW"
+    assert "G13_EXTERNAL_ACQUISITION_RECURRENCE" in result.triggered_rule_ids
+    assert result.result_core["distinct_failure_count"] == 0
+    assert result.result_core["distinct_external_dependency_count"] == 3
+
+
 def test_invalid_recovery_fails_closed():
     recovery = {**_recovery(), "canonical_hash": "0x" + "0" * 64}
     assert validate_recovery_payload(recovery) is False

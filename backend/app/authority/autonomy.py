@@ -47,6 +47,7 @@ G13_EXTERNAL_NON_BLOCKING_CODES = frozenset({
     "X402_FACILITATOR_TIMEOUT",
     "PAYMENT_FAILED",
 })
+G13_EXTERNAL_RECURRENCE_REVIEW_THRESHOLD = 3
 G13_RULES = {
     "G13_OPERATOR_RECOVERY_CANARY": {
         "phenomenon": "an operator-reviewed infrastructure recovery has no post-recovery execution yet",
@@ -87,6 +88,26 @@ G13_RULES = {
         "output": "REVIEW",
         "recovery": "a later complete observation",
         "falsification": "a complete latest observation must not trigger this rule",
+    },
+    "G13_EXTERNAL_ACQUISITION_DEGRADATION": {
+        "phenomenon": "the latest observation is incomplete because an attributable external acquisition dependency failed",
+        "input_fields": ["ordered_observations", "facts.failure_code", "missing_data"],
+        "history": "latest supplied observation only",
+        "predicate": "latest missing_data is present and the failure is externally attributable",
+        "authority_consequence": "continuation is permitted only under G12 and throttle constraints",
+        "output": "THROTTLE",
+        "recovery": "a later complete external observation",
+        "falsification": "an internal or unexplained missing observation must remain REVIEW",
+    },
+    "G13_EXTERNAL_ACQUISITION_RECURRENCE": {
+        "phenomenon": "repeated attributable external acquisition failures",
+        "input_fields": ["ordered_observations", "facts.failure_code"],
+        "history": "the bounded ordered window",
+        "predicate": "at least three distinct external acquisition failures",
+        "authority_consequence": "recurrence is trajectory-relevant and requires review",
+        "output": "REVIEW",
+        "recovery": "a later window below the recurrence threshold",
+        "falsification": "fewer than three distinct external failures must not trigger this rule",
     },
     "G13_REPEATED_LOCAL_BLOCK": {
         "phenomenon": "repeated local Decision BLOCK observations",
@@ -300,6 +321,26 @@ def _distinct_recovery_probe_count(policy_input: G13PolicyInput) -> int:
     return len(units)
 
 
+def _distinct_external_dependency_count(policy_input: G13PolicyInput) -> int:
+    """Count distinct runs blocked by an attributable external dependency.
+
+    Projections from one autonomy run can contain several failure records.  A
+    run therefore counts once, and only recovery-policy trajectories use this
+    signal so historical v0.2 replay remains byte-for-byte stable.
+    """
+    if policy_input.policy_version not in G13_RECOVERY_POLICY_VERSIONS:
+        return 0
+    units: set[str] = set()
+    for item in policy_input.ordered_observations:
+        facts = dict(item.get("facts") or {})
+        if facts.get("failure_code") not in G13_EXTERNAL_DEPENDENCY_FAILURE_CODES:
+            continue
+        lineage = dict(item.get("source_lineage") or {})
+        run_ids = tuple(lineage.get("autonomy_run_ids") or ())
+        units.add(run_ids[0] if run_ids else str(item.get("observation_id")))
+    return len(units)
+
+
 def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
     if policy_input.policy_version not in G13_SUPPORTED_POLICY_VERSIONS:
         raise ValueError("G13_POLICY_VERSION_UNSUPPORTED")
@@ -344,17 +385,27 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
         if latest and not latest_is_pre_action
         else set()
     )
-    latest_external_dependency = latest_facts.get("failure_code") in G13_EXTERNAL_NON_BLOCKING_CODES
-    if current_missing - expected_missing and not latest_external_dependency:
-        trigger("G13_CURRENT_CRITICAL_OBSERVATION_MISSING", "REVIEW")
+    latest_external_dependency = latest_facts.get("failure_code") in G13_EXTERNAL_DEPENDENCY_FAILURE_CODES
+    latest_nonblocking_external = latest_facts.get("failure_code") in G13_EXTERNAL_NON_BLOCKING_CODES
+    external_dependency_recovery = (
+        policy_input.policy_version in G13_RECOVERY_POLICY_VERSIONS
+        and latest_external_dependency
+    )
+    if current_missing - expected_missing:
+        if external_dependency_recovery:
+            trigger("G13_EXTERNAL_ACQUISITION_DEGRADATION", "THROTTLE")
+        elif not latest_nonblocking_external:
+            trigger("G13_CURRENT_CRITICAL_OBSERVATION_MISSING", "REVIEW")
 
     executed_count = 0
+    external_dependency_count = 0
     if policy_input.policy_version == G13_LEGACY_POLICY_VERSION:
         block_count = sum(1 for item in facts if item.get("local_decision_state") == "BLOCK")
         failure_count = sum(1 for item in facts if item.get("failure_code") or item.get("failure_event_types"))
         policy_id = G13_STRUCTURAL_AUTONOMY_POLICY_V0_1
     else:
         block_count, failure_count, executed_count = _distinct_execution_stats(policy_input)
+        external_dependency_count = _distinct_external_dependency_count(policy_input)
         policy_id = (
             G13_REVIEW_RECOVERY_POLICY_ID
             if policy_input.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
@@ -376,6 +427,8 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
     )
     if recovery_probe_authorized:
         trigger("G13_OPERATOR_RECOVERY_CANARY", "THROTTLE")
+    if external_dependency_count >= G13_EXTERNAL_RECURRENCE_REVIEW_THRESHOLD:
+        trigger("G13_EXTERNAL_ACQUISITION_RECURRENCE", "REVIEW")
     if block_count >= 2:
         trigger("G13_REPEATED_LOCAL_BLOCK", "REVIEW")
     elif block_count == 1:
@@ -398,6 +451,7 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
         result_core.update({
             "distinct_block_count": block_count,
             "distinct_failure_count": failure_count,
+            "distinct_external_dependency_count": external_dependency_count,
         })
     if policy_input.policy_version in G13_RECOVERY_POLICY_VERSIONS:
         result_core.update({
