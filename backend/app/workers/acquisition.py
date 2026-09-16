@@ -3,13 +3,11 @@
 PostgreSQL serializes claims across tasks and deliveries. A network outcome
 that cannot be established holds its maximum and is never paid again.
 """
-import json
 import logging
 import os
 from datetime import datetime, timezone
 from decimal import Decimal
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
 
 from app.domain.mandates import AcquisitionTask, TelegraphCall, Mandate, MandateStatus, PublicManualSpendReservation, UsageEvent, AutonomyRun
 from app.domain.state_machine import transition_mandate
@@ -24,6 +22,8 @@ from app.authority.failure_episode import (
     failure_episode_id,
     is_external_dependency_failure,
 )
+from app.acquisition.gateway import AcquisitionAdapterError
+from app.acquisition.provider import configured_acquisition_adapter
 from app.autonomy.service import finalize_http_run
 
 logger = logging.getLogger(__name__)
@@ -310,50 +310,46 @@ def execute_one(mandate_id, acquisition_id):
                         },
                     ))
                     session.commit()
-        payload = {"query":task.query,"context":({"requested_intent":task.requested_intent} if task.requested_intent else {}),"causal_request_id":mandate_id}
-        payload["budget_usdc"] = str(budget)
-        headers = {"content-type":"application/json"}
-        gateway_token = os.environ.get("PRAMA_GATEWAY_INTERNAL_TOKEN")
-        if gateway_token:
-            headers["x-prama-internal-token"] = gateway_token
-        request = Request(os.environ["GATEWAY_URL"] + "/ask",data=json.dumps(payload).encode(),headers=headers,method="POST")
         network_attempted = True
         failure_stage = "NETWORK"
         try:
-            with urlopen(request, timeout=GATEWAY_REQUEST_TIMEOUT_SECONDS) as response: raw = json.loads(response.read())
-        except HTTPError as error:
-            # Gateway answered with an HTTP status: the transport reached it, so
-            # the failure is whatever the Gateway declared, not availability.
-            body = error.read()
-            gateway_http_status = error.code
-            gateway_code = None
-            try: gateway_code = json.loads(body).get("code")
-            except (ValueError, AttributeError): gateway_code = None
-            call.raw_response = {"gateway_http_status": error.code, "gateway_error_body": body.decode("utf-8", "replace")[:2048]}
-            raise RuntimeError(gateway_code or "GATEWAY_UNCLASSIFIED_RESPONSE") from error
-        except (URLError, TimeoutError, OSError) as error:
-            # DNS/connection-refused/TLS/socket-timeout before any HTTP status.
-            raise RuntimeError("GATEWAY_UNAVAILABLE") from error
-        call.raw_response = raw if isinstance(raw,dict) else {"gateway_response":raw}
+            result = configured_acquisition_adapter(
+                timeout_seconds=GATEWAY_REQUEST_TIMEOUT_SECONDS,
+                urlopen_fn=urlopen,
+            ).acquire(
+                query=task.query,
+                requested_intent=task.requested_intent,
+                causal_request_id=mandate_id,
+                budget_usdc=budget,
+            )
+        except AcquisitionAdapterError as error:
+            gateway_http_status = error.http_status
+            # A response received over HTTP is durably retained before the
+            # existing failure path applies its task/payment transitions.
+            # HTTP error bodies intentionally retain the prior behavior: they
+            # are classified, while the call remains unreconciled until the
+            # normal exception path persists its state.
+            if error.http_status is None and error.raw_payload is not None:
+                call.raw_response = error.raw_payload
+                call.status = "RECEIVED"
+                session.commit()
+                failure_stage = "POST_RESPONSE"
+            raise RuntimeError(error.code) from error
+        raw = result.raw_payload
+        actual = result.cost_usdc
+        call.raw_response = raw
         call.status = "RECEIVED"
         session.commit()  # Preserve Gateway response before Evidence normalization.
         failure_stage = "POST_RESPONSE"
-        if not isinstance(raw,dict) or not all(raw.get(k) for k in ("miner_id","intent","signal_hash")):
-            raise RuntimeError("TELEGRAPH_INVALID_RESPONSE")
-        cost_value = (raw.get("payment") or {}).get("amount_usdc",raw.get("cost_usd"))
-        if cost_value is None: raise RuntimeError("PAYMENT_COST_UNAVAILABLE")
-        actual = Decimal(str(cost_value))
-        if not actual.is_finite() or actual < 0 or actual > budget or actual.as_tuple().exponent < -6:
-            raise RuntimeError("SINGLE_ACQUISITION_BUDGET_EXCEEDED")
         mandate = session.query(Mandate).filter_by(mandate_id=mandate_id).with_for_update().one()
         queued = session.query(AcquisitionTask).filter(AcquisitionTask.mandate_id==mandate_id,AcquisitionTask.status.in_(["QUEUED","PENDING"])).count()
         finalize = not queued and uncertain_hold(session,mandate_id)==0
         user_credit.settle(session,mandate,acquisition_id,actual,finalize=finalize)
         settle_spend(session, mandate_id, actual, cap, mandate.origin, finalize=finalize)
-        for name in ["miner_id","miner_name","intent","signal_hash","duration_ms","reasoning"]:
-            setattr(call,name,raw.get(name))
-        call.miner_id = str(raw["miner_id"])
-        call.warnings = raw.get("warnings") or []
+        for name in ["miner_id", "miner_name", "intent", "signal_hash", "duration_ms", "reasoning"]:
+            setattr(call, name, getattr(result, name))
+        call.miner_id = str(result.miner_id)
+        call.warnings = result.warnings
         call.cost_usd = actual
         call.status = "SUCCEEDED"
         call.completed_at = task.completed_at = now()
