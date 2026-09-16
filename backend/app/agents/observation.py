@@ -78,6 +78,10 @@ class OAgentFacts(BaseModel):
     prior_run_count: int | None = None
     prior_mandate_count: int | None = None
     failure_code: str | None = None
+    # Trusted causal identity for an attributable external dependency failure.
+    # It is optional for historical observations that predate this contract.
+    failure_episode_id: str | None = None
+    failure_episode_ids: tuple[str, ...] = ()
     failure_event_types: tuple[str, ...] = ()
     recovery_event_types: tuple[str, ...] = ()
     recovered: bool | None = None
@@ -110,7 +114,14 @@ class OAgentObservation(BaseModel):
     def canonical_payload(self) -> dict[str, Any]:
         """Return the exact JSON-safe payload covered by ``content_hash``."""
 
-        return self.model_dump(mode="json", exclude={"content_hash"})
+        payload = self.model_dump(mode="json", exclude={"content_hash"})
+        # Preserve byte-identical canonical payloads for historical o-agent-v0
+        # observations, which did not contain this optional field.
+        if payload.get("facts", {}).get("failure_episode_id") is None:
+            payload["facts"].pop("failure_episode_id", None)
+        if not payload.get("facts", {}).get("failure_episode_ids"):
+            payload["facts"].pop("failure_episode_ids", None)
+        return payload
 
     def canonical_bytes(self) -> bytes:
         return canonical(self.canonical_payload())
@@ -262,6 +273,11 @@ def _facts(
             None,
         )
     )
+    episode_ids = _unique([
+        str((item.metadata_ or {}).get("failure_episode_id"))
+        for item in events
+        if (item.metadata_ or {}).get("failure_episode_id")
+    ])
     return OAgentFacts(
         action_status=action_status,
         mandate_status=mandate.status if mandate is not None else None,
@@ -286,6 +302,8 @@ def _facts(
         prior_run_count=prior_run_count,
         prior_mandate_count=prior_mandate_count,
         failure_code=observed_failure_code,
+        failure_episode_id=episode_ids[0] if len(episode_ids) == 1 else None,
+        failure_episode_ids=episode_ids,
         failure_event_types=tuple(failure_events),
         recovery_event_types=tuple(recovery_events),
         recovered=recovered,
@@ -636,6 +654,10 @@ def build_o_agent_stream(
             "facts": item.facts.model_dump(mode="json"),
             "missing_data": list(item.missing_data),
         }
+        if item.facts.failure_episode_id is None:
+            payload["facts"].pop("failure_episode_id", None)
+        if not item.facts.failure_episode_ids:
+            payload["facts"].pop("failure_episode_ids", None)
         observations.append(OAgentObservation(**payload, content_hash=digest(payload)))
     return observations
 

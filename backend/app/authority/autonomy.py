@@ -13,6 +13,10 @@ from app.authority.recovery import (
     G13_REVIEW_RECOVERY_POLICY_VERSION,
     validate_recovery_payload,
 )
+from app.authority.failure_episode import (
+    EXTERNAL_DEPENDENCY_FAILURE_CODES,
+    valid_failure_episode_id,
+)
 from app.policy_gate.substrate import PolicyEvaluationCore, PolicyInputTypeError, replay_policy
 
 
@@ -34,14 +38,7 @@ G13_POLICY_TYPE = "STRUCTURAL_AUTONOMY"
 G13_OUTPUTS = frozenset({"CONTINUE", "THROTTLE", "REVIEW", "HALT"})
 G13_PRECEDENCE = {"CONTINUE": 0, "THROTTLE": 1, "REVIEW": 2, "HALT": 3}
 G13_NON_EXECUTION_STATUSES = frozenset({"NOT_EXECUTED", "REQUESTED", "RECONCILED_NO_PAYMENT"})
-G13_EXTERNAL_DEPENDENCY_FAILURE_CODES = frozenset({
-    "GATEWAY_UNAVAILABLE",
-    "TELEGRAPH_UNAVAILABLE",
-    "TELEGRAPH_REQUEST_FAILED",
-    "X402_FACILITATOR_TIMEOUT",
-    "PAYMENT_FAILED",
-    "PAYMENT_REQUIRED",
-})
+G13_EXTERNAL_DEPENDENCY_FAILURE_CODES = EXTERNAL_DEPENDENCY_FAILURE_CODES
 G13_EXTERNAL_NON_BLOCKING_CODES = frozenset({
     "TELEGRAPH_REQUEST_FAILED",
     "X402_FACILITATOR_TIMEOUT",
@@ -108,6 +105,16 @@ G13_RULES = {
         "output": "REVIEW",
         "recovery": "a later window below the recurrence threshold",
         "falsification": "fewer than three distinct external failures must not trigger this rule",
+    },
+    "G13_FAILURE_EPISODE_IDENTITY_MISSING": {
+        "phenomenon": "an attributable external failure has no trusted causal episode identity",
+        "input_fields": ["facts.failure_code", "facts.failure_episode_id"],
+        "history": "the bounded ordered window",
+        "predicate": "an external dependency failure is present without a valid episode identity and no fresh external-result absence explains it",
+        "authority_consequence": "autonomous continuation requires review",
+        "output": "REVIEW",
+        "recovery": "a later trusted observation with valid causal episode lineage",
+        "falsification": "a valid trusted episode identity must not trigger this rule",
     },
     "G13_REPEATED_LOCAL_BLOCK": {
         "phenomenon": "repeated local Decision BLOCK observations",
@@ -321,24 +328,46 @@ def _distinct_recovery_probe_count(policy_input: G13PolicyInput) -> int:
     return len(units)
 
 
-def _distinct_external_dependency_count(policy_input: G13PolicyInput) -> int:
-    """Count distinct runs blocked by an attributable external dependency.
-
-    Projections from one autonomy run can contain several failure records.  A
-    run therefore counts once, and only recovery-policy trajectories use this
-    signal so historical v0.2 replay remains byte-for-byte stable.
-    """
-    if policy_input.policy_version not in G13_RECOVERY_POLICY_VERSIONS:
-        return 0
+def _external_dependency_episode_stats(policy_input: G13PolicyInput) -> tuple[int, tuple[str, ...], int]:
+    """Count distinct causal failure episodes, never runs or projections."""
+    if policy_input.policy_version != G13_REVIEW_RECOVERY_POLICY_VERSION:
+        return 0, (), 0
     units: set[str] = set()
-    for item in policy_input.ordered_observations:
+    missing_identity = 0
+    for index, item in enumerate(policy_input.ordered_observations, start=1):
         facts = dict(item.get("facts") or {})
         if facts.get("failure_code") not in G13_EXTERNAL_DEPENDENCY_FAILURE_CODES:
             continue
-        lineage = dict(item.get("source_lineage") or {})
-        run_ids = tuple(lineage.get("autonomy_run_ids") or ())
-        units.add(run_ids[0] if run_ids else str(item.get("observation_id")))
-    return len(units)
+        raw_episode_values = facts.get("failure_episode_ids")
+        if raw_episode_values is None:
+            raw_episode_values = (
+                [facts.get("failure_episode_id")] if facts.get("failure_episode_id") is not None else []
+            )
+        episode_values = list(raw_episode_values) if isinstance(raw_episode_values, (list, tuple)) else [raw_episode_values]
+        valid_episodes = [value for value in episode_values if valid_failure_episode_id(value)]
+        # Missing identity is handled conservatively: each representation is
+        # treated as an independent unknown episode, preventing unsafe PERMIT.
+        # It is never silently reconstructed from autonomy_run_id.
+        if valid_episodes:
+            units.update(valid_episodes)
+        if not valid_episodes or len(valid_episodes) != len(episode_values):
+            missing_identity += 1
+            units.add(f"unknown:{item.get('observation_id', index)}")
+    return len(units), tuple(sorted(value for value in units if not value.startswith("unknown:"))), missing_identity
+
+
+def _distinct_external_dependency_count(policy_input: G13PolicyInput) -> int:
+    if policy_input.policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION:
+        units: set[str] = set()
+        for item in policy_input.ordered_observations:
+            facts = dict(item.get("facts") or {})
+            if facts.get("failure_code") not in G13_EXTERNAL_DEPENDENCY_FAILURE_CODES:
+                continue
+            lineage = dict(item.get("source_lineage") or {})
+            run_ids = tuple(lineage.get("autonomy_run_ids") or ())
+            units.add(run_ids[0] if run_ids else str(item.get("observation_id")))
+        return len(units)
+    return _external_dependency_episode_stats(policy_input)[0]
 
 
 def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
@@ -399,13 +428,18 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
 
     executed_count = 0
     external_dependency_count = 0
+    external_episode_ids: tuple[str, ...] = ()
+    missing_episode_identity_count = 0
     if policy_input.policy_version == G13_LEGACY_POLICY_VERSION:
         block_count = sum(1 for item in facts if item.get("local_decision_state") == "BLOCK")
         failure_count = sum(1 for item in facts if item.get("failure_code") or item.get("failure_event_types"))
         policy_id = G13_STRUCTURAL_AUTONOMY_POLICY_V0_1
     else:
         block_count, failure_count, executed_count = _distinct_execution_stats(policy_input)
-        external_dependency_count = _distinct_external_dependency_count(policy_input)
+        if policy_input.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION:
+            external_dependency_count, external_episode_ids, missing_episode_identity_count = _external_dependency_episode_stats(policy_input)
+        else:
+            external_dependency_count = _distinct_external_dependency_count(policy_input)
         policy_id = (
             G13_REVIEW_RECOVERY_POLICY_ID
             if policy_input.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
@@ -429,6 +463,14 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
         trigger("G13_OPERATOR_RECOVERY_CANARY", "THROTTLE")
     if external_dependency_count >= G13_EXTERNAL_RECURRENCE_REVIEW_THRESHOLD:
         trigger("G13_EXTERNAL_ACQUISITION_RECURRENCE", "REVIEW")
+    if (
+        policy_input.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
+        and missing_episode_identity_count
+        and any(item.get("facts", {}).get("failure_code") in G13_EXTERNAL_DEPENDENCY_FAILURE_CODES for item in source_observations)
+        and not current_missing
+        and bool(set(latest_facts.get("telegraph_statuses") or ()) - G13_NON_EXECUTION_STATUSES)
+    ):
+        trigger("G13_FAILURE_EPISODE_IDENTITY_MISSING", "REVIEW")
     if block_count >= 2:
         trigger("G13_REPEATED_LOCAL_BLOCK", "REVIEW")
     elif block_count == 1:
@@ -452,6 +494,8 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
             "distinct_block_count": block_count,
             "distinct_failure_count": failure_count,
             "distinct_external_dependency_count": external_dependency_count,
+            "external_failure_episode_ids": list(external_episode_ids),
+            "missing_failure_episode_identity_count": missing_episode_identity_count,
         })
     if policy_input.policy_version in G13_RECOVERY_POLICY_VERSIONS:
         result_core.update({

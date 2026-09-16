@@ -17,6 +17,13 @@ from app.persistence.database import SessionLocal
 from app.users import credit as user_credit
 from app.public_safety import MAX_SINGLE_ACQUISITION_USDC, m2m_max_workflow_usdc, public_max_mandate_usdc, verify_spend_reservation, settle_spend, release_spend_reservation
 from app.authority.recovery import G13_REVIEW_RECOVERY_POLICY_VERSION
+from app.authority.failure_episode import (
+    FAILURE_EPISODE_ACCESS_MECHANISM,
+    FAILURE_EPISODE_PROVIDER,
+    FAILURE_EPISODE_SCHEMA_VERSION,
+    failure_episode_id,
+    is_external_dependency_failure,
+)
 from app.autonomy.service import finalize_http_run
 
 logger = logging.getLogger(__name__)
@@ -388,6 +395,28 @@ def execute_one(mandate_id, acquisition_id):
         if mandate.status == "RECEIVED": transition_mandate(session,mandate,MandateStatus.PLANNED)
         if mandate.status == "PLANNED": transition_mandate(session,mandate,MandateStatus.ACQUIRING)
         call = session.query(TelegraphCall).filter_by(acquisition_id=acquisition_id).one_or_none()
+        episode_id = None
+        if is_external_dependency_failure(code):
+            existing_episode = next(
+                (
+                    str((event.metadata_ or {}).get("failure_episode_id"))
+                    for event in (
+                        session.query(UsageEvent)
+                        .filter_by(mandate_id=mandate_id, acquisition_id=acquisition_id)
+                        .order_by(UsageEvent.created_at.desc(), UsageEvent.event_id.desc())
+                        .all()
+                        or []
+                    )
+                    if event is not None and (event.metadata_ or {}).get("failure_episode_id")
+                ),
+                None,
+            )
+            episode_id = existing_episode or failure_episode_id(
+                agent_identity_id=getattr(mandate, "agent_identity_id", None),
+                mandate_id=mandate_id,
+                acquisition_id=acquisition_id,
+                causal_request_id=getattr(call, "causal_request_id", None),
+            )
         no_payment_reconciled = _gateway_reconciled_without_payment(code, call, gateway_http_status)
         if call:
             call.status = (
@@ -411,6 +440,29 @@ def execute_one(mandate_id, acquisition_id):
             "exception_message": exception_message,
             "gateway_url": effective_gateway_url,
         }
+        if episode_id is not None:
+            failure_metadata.update({
+                "failure_episode_id": episode_id,
+                "failure_episode_schema_version": FAILURE_EPISODE_SCHEMA_VERSION,
+                "provider": FAILURE_EPISODE_PROVIDER,
+                "access_mechanism": FAILURE_EPISODE_ACCESS_MECHANISM,
+                "originating_call": call.telegraph_call_id if call is not None else None,
+                "autonomy_run_id": run_id_for_log,
+                "failure_class": code,
+            })
+        episode_metadata = (
+            {
+                "failure_episode_id": episode_id,
+                "failure_episode_schema_version": FAILURE_EPISODE_SCHEMA_VERSION,
+                "provider": FAILURE_EPISODE_PROVIDER,
+                "access_mechanism": FAILURE_EPISODE_ACCESS_MECHANISM,
+                "originating_call": call.telegraph_call_id if call is not None else None,
+                "autonomy_run_id": run_id_for_log,
+                "failure_class": code,
+            }
+            if episode_id is not None
+            else {}
+        )
         session.add(UsageEvent(mandate_id=mandate_id,acquisition_id=acquisition_id,event_type="ACQUISITION_FAILED",metadata_=failure_metadata))
         if no_payment_reconciled:
             session.add(UsageEvent(
@@ -424,10 +476,11 @@ def execute_one(mandate_id, acquisition_id):
                     "actual_cost_usdc": "0.000000",
                     "failure_code": code,
                     "gateway_http_status": 402,
+                    **episode_metadata,
                 },
             ))
         elif network_attempted:
-            session.add(UsageEvent(mandate_id=mandate_id,acquisition_id=acquisition_id,event_type="ACQUISITION_PAYMENT_UNCERTAIN",metadata_={"held_budget_usdc":str(budget),"failure_code":code}))
+            session.add(UsageEvent(mandate_id=mandate_id,acquisition_id=acquisition_id,event_type="ACQUISITION_PAYMENT_UNCERTAIN",metadata_={"held_budget_usdc":str(budget),"failure_code":code, **episode_metadata}))
         session.commit()
         return code
     finally:
