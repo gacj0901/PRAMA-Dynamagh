@@ -129,4 +129,5 @@ class TelegraphGatewayAdapter:
             reasoning=raw.get("reasoning"),
             warnings=raw.get("warnings") or [],
             raw_payload=normalized_raw,
+            access_mechanism="GATEWAY",
         )

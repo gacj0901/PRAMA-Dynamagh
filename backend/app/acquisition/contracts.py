@@ -25,6 +25,8 @@ class AcquisitionResult:
     warnings: list[Any] = field(default_factory=list)
     raw_payload: Any = None
     http_status: int | None = None
+    # Provenance distinguishes the intelligence source from the access path.
+    access_mechanism: str = "UNKNOWN"
 
 
 class AcquisitionAdapter(Protocol):
