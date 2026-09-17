@@ -282,9 +282,31 @@ def _distinct_execution_stats(policy_input: G13PolicyInput) -> tuple[int, int, i
         external_codes = G13_EXTERNAL_DEPENDENCY_FAILURE_CODES
         unit = units.setdefault(
             unit_id,
-            {"block": False, "failure": False, "not_executed": False, "executed": False, "external_dependency": False},
+            {
+                "block": False,
+                "failure": False,
+                "not_executed": False,
+                "executed": False,
+                "external_dependency": False,
+                "terminal_success": False,
+            },
         )
         failure_code = facts.get("failure_code")
+        # A duplicate/restarted dispatch can leave the run row marked
+        # AUTONOMY_ORPHANED_MANDATE after the acquisition already completed.
+        # The durable terminal artifacts are the authoritative outcome for
+        # that execution; this bookkeeping race must not become a longitudinal
+        # G13 execution failure that freezes subsequent scheduler slots.
+        terminal_success = (
+            facts.get("mandate_status") == "TICKETED"
+            and "SUCCEEDED" in set(facts.get("acquisition_statuses") or ())
+            and "SUCCEEDED" in statuses
+            and bool(facts.get("evidence_complete"))
+            and bool(facts.get("evaluation_complete"))
+            and bool(facts.get("decision_complete"))
+            and bool(facts.get("ticket_complete"))
+        )
+        unit["terminal_success"] = unit["terminal_success"] or terminal_success
         external_dependency = failure_code in G13_EXTERNAL_NON_BLOCKING_CODES or (
             "RECONCILED_NO_PAYMENT" in statuses and failure_code in external_codes
         )
@@ -298,10 +320,17 @@ def _distinct_execution_stats(policy_input: G13PolicyInput) -> tuple[int, int, i
         unit["failure"] = unit["failure"] or (
             not bool(facts.get("recovered"))
             and failure_code not in external_codes
+            and not (failure_code == "AUTONOMY_ORPHANED_MANDATE" and unit["terminal_success"])
             and bool(failure_code or facts.get("failure_event_types"))
         )
         unit["not_executed"] = unit["not_executed"] or bool(statuses & {"NOT_EXECUTED", "RECONCILED_NO_PAYMENT"})
         unit["executed"] = unit["executed"] or bool(statuses - G13_NON_EXECUTION_STATUSES)
+    # A later terminal-success projection can arrive after the failure event
+    # for the same causal execution. Collapse that race before counting the
+    # unit so one completed acquisition cannot poison the trajectory.
+    for unit in units.values():
+        if unit["terminal_success"]:
+            unit["failure"] = False
     eligible = [unit for unit in units.values() if unit["executed"] or not unit["not_executed"]]
     return (
         sum(1 for unit in eligible if unit["block"] and not unit["external_dependency"]),
