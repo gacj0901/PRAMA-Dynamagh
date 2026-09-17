@@ -61,6 +61,35 @@ def provision_autonomous_subject(
     created_by: str = "operator",
     principal_id: str | None = None,
 ) -> ProvisionedSubject:
+    """Create one subject inside a savepoint; the caller still owns commit."""
+    with session.begin_nested():
+        return _provision_autonomous_subject(
+            session,
+            agent_id=agent_id,
+            name=name,
+            policy_name=policy_name,
+            title=title,
+            instruction=instruction,
+            max_payment_usdc=max_payment_usdc,
+            cadence_seconds=cadence_seconds,
+            created_by=created_by,
+            principal_id=principal_id,
+        )
+
+
+def _provision_autonomous_subject(
+    session: Session,
+    *,
+    agent_id: str,
+    name: str,
+    policy_name: str,
+    title: str,
+    instruction: str,
+    max_payment_usdc: Decimal = DEFAULT_MAX_PAYMENT,
+    cadence_seconds: int = DEFAULT_CADENCE_SECONDS,
+    created_by: str = "operator",
+    principal_id: str | None = None,
+) -> ProvisionedSubject:
     """Atomically create one autonomous subject in a safe, inactive state.
 
     The function intentionally does not commit.  A caller can compose it with
