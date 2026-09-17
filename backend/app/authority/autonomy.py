@@ -539,6 +539,7 @@ def pre_next_action_gate(
     throttled_constraints_satisfied: bool = False,
     recovery_probe_authorized: bool = False,
     recovery_observation_permitted: bool = False,
+    bootstrap_authorized: bool = False,
 ) -> tuple[bool, str]:
     """Compose independent authorities without allowing an override."""
 
@@ -552,12 +553,15 @@ def pre_next_action_gate(
         longitudinal_result == "REVIEW"
         and not recovery_probe_authorized
         and not recovery_observation_permitted
+        and not bootstrap_authorized
     ):
         return False, "G13_REVIEW"
     if longitudinal_result == "THROTTLE" and not throttled_constraints_satisfied:
         return False, "G13_THROTTLE_CONSTRAINTS_REQUIRED"
     if longitudinal_result not in G13_OUTPUTS:
         return False, "G13_RESULT_UNSUPPORTED"
+    if longitudinal_result == "REVIEW" and bootstrap_authorized:
+        return True, "BOOTSTRAP_AUTHORIZATION"
     return True, "NEXT_ACTION_AUTHORIZED"
 
 

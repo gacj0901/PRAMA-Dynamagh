@@ -57,6 +57,12 @@ def evaluate_current_g13(session: Session, agent_id: str) -> PolicyEvaluationCor
         item for item in build_o_agent_stream(session, agent_id)
         if item.facts.autonomy_run_state != "SKIPPED"
     ]
+    # The observer always emits an identity anchor.  It is not a trajectory
+    # observation: a brand-new subject with no runs/events must remain a true
+    # cold start so G13 emits REQUIRED_TRAJECTORY_MISSING rather than treating
+    # the identity's missing downstream artifacts as a current failure.
+    if not any(item.source_kind != "AGENT_IDENTITY" for item in observations):
+        observations = []
     recovery_event = latest_operator_recovery(session, agent_id)
     recovery_payload = None
     policy_version = None
@@ -209,6 +215,7 @@ def run_pre_next_action_authority_check(
     current_runtime_action: str = "CONTINUE_TO_GATEWAY",
     throttled_constraints_satisfied: bool = False,
     recovery_probe_authorized: bool = False,
+    bootstrap_authorized: bool = False,
     enforce: bool = False,
     longitudinal_core: PolicyEvaluationCore | None = None,
 ) -> AuthorityShadowCheckpoint:
@@ -290,6 +297,7 @@ def run_pre_next_action_authority_check(
             and longitudinal_core.result_core.get("recovery_probe_authorized") is True
         ),
         recovery_observation_permitted=recovery_observation_permitted,
+        bootstrap_authorized=bootstrap_authorized,
         current_runtime_action=current_runtime_action,
         shadow_mode=not enforce,
     )

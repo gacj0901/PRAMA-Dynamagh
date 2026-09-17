@@ -203,6 +203,42 @@ class AgentAuthorityProfile(Base):
     lifecycle_events: Mapped[list[AuthorityProfileEvent]] = relationship(back_populates="profile", order_by="AuthorityProfileEvent.sequence")
 
 
+class BootstrapAuthority(Base):
+    """Explicit, bounded authority for one cold-start evidence action.
+
+    Bootstrap authority is separate from longitudinal G13.  Its mutable
+    allowance is protected by a row lock; every transition is also recorded as
+    an append-only UsageEvent by the authority service.
+    """
+
+    __tablename__ = "bootstrap_authorities"
+    __table_args__ = (
+        CheckConstraint("max_actions > 0", name="ck_bootstrap_max_actions"),
+        CheckConstraint("consumed_actions >= 0 AND consumed_actions <= max_actions", name="ck_bootstrap_consumed_actions"),
+        CheckConstraint("max_spend_usdc >= 0", name="ck_bootstrap_max_spend"),
+        CheckConstraint("status IN ('ACTIVE', 'REVOKED', 'EXHAUSTED')", name="ck_bootstrap_status"),
+    )
+
+    bootstrap_authority_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    agent_identity_id: Mapped[str] = mapped_column(ForeignKey("agent_identities.agent_id"), nullable=False, index=True)
+    authority_profile_id: Mapped[str] = mapped_column(ForeignKey("agent_authority_profiles.authority_profile_id"), nullable=False, index=True)
+    policy_id: Mapped[str] = mapped_column(ForeignKey("autonomy_policies.policy_id"), nullable=False, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="ACTIVE", index=True)
+    max_actions: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    consumed_actions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_spend_usdc: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    allowed_action_kinds: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    authority_hash: Mapped[str] = mapped_column(String(66), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    last_consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class AuthorityProfileEvent(Base):
     """Append-only lifecycle; the original authority grant remains immutable."""
 

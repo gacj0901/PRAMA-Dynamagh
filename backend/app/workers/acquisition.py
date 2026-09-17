@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from urllib.request import urlopen
 
-from app.domain.mandates import AcquisitionTask, TelegraphCall, Mandate, MandateStatus, PublicManualSpendReservation, UsageEvent, AutonomyRun
+from app.domain.mandates import AcquisitionTask, TelegraphCall, Mandate, MandateStatus, PublicManualSpendReservation, UsageEvent, AutonomyRun, AgentIdentity, AutonomyPolicy
 from app.domain.state_machine import transition_mandate
 from app.persistence.database import SessionLocal
 from app.users import credit as user_credit
@@ -137,6 +137,8 @@ def execute_one(mandate_id, acquisition_id):
         throttle_limit = None
         throttle_ok = False
         recovery_observation_permitted = False
+        bootstrap_authorized = False
+        bootstrap_grant = None
         if mandate.origin == "AUTONOMOUS":
             from app.authority.delegated import resolve_profile
             from app.authority.runtime import evaluate_current_g13
@@ -164,12 +166,24 @@ def execute_one(mandate_id, acquisition_id):
                 == "G13_CURRENT_CRITICAL_OBSERVATION_MISSING"
                 and recovery_observation_available(session, mandate.agent_identity_id)
             )
+            from app.authority.bootstrap import bootstrap_eligibility
+            identity = session.get(AgentIdentity, mandate.agent_identity_id)
+            bootstrap_authorized, _bootstrap_reason, bootstrap_grant = bootstrap_eligibility(
+                session,
+                identity=identity,
+                policy=session.get(AutonomyPolicy, run.policy_id),
+                profile=profile,
+                g13_core=preliminary_g13,
+                action_kind="TELEGRAPH_HTTP_ACQUISITION",
+                amount=Decimal(mandate.max_budget_usdc),
+            )
             if (
                 preliminary_g13.result == "HALT"
                 or (
                     preliminary_g13.result == "REVIEW"
                     and not recovery_probe_authorized
                     and not recovery_observation_permitted
+                    and not bootstrap_authorized
                 )
             ):
                 raise RuntimeError("G13_" + preliminary_g13.result)
@@ -204,6 +218,8 @@ def execute_one(mandate_id, acquisition_id):
                 "throttle_limit_usdc": str(throttle_limit) if throttle_limit is not None else None,
                 "throttled_constraints_satisfied": throttle_ok,
                 "recovery_probe_authorized": recovery_probe_authorized,
+                "bootstrap_authorized": bootstrap_authorized,
+                "authorization_source": "BOOTSTRAP" if bootstrap_authorized else "NORMAL_G13",
             })
         session.add(UsageEvent(mandate_id=mandate_id, acquisition_id=acquisition_id, event_type="TELEGRAPH_REQUEST", metadata_=request_metadata))
         session.commit()  # Durable RUNNING claim before any outbound request.
@@ -257,6 +273,7 @@ def execute_one(mandate_id, acquisition_id):
                     preliminary_g13.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
                     and preliminary_g13.result_core.get("recovery_probe_authorized") is True
                 ),
+                bootstrap_authorized=bootstrap_authorized,
                 enforce=True,
                 longitudinal_core=preliminary_g13,
             )
@@ -278,6 +295,8 @@ def execute_one(mandate_id, acquisition_id):
                         preliminary_g13.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
                         and preliminary_g13.result_core.get("recovery_probe_authorized") is True
                     ),
+                    "bootstrap_authorized": bootstrap_authorized,
+                    "authorization_source": "BOOTSTRAP" if bootstrap_authorized else "NORMAL_G13",
                     "throttle_limit_usdc": str(throttle_limit) if throttle_limit is not None else None,
                     "g12_reservation_verified": True,
                     "g12_reserved_usdc": str(reservation.reserved_usdc),
@@ -286,6 +305,18 @@ def execute_one(mandate_id, acquisition_id):
             session.commit()
             consume_execution_permit(session, permit.permit_id)
             session.commit()
+            if bootstrap_authorized and bootstrap_grant is not None:
+                from app.authority.bootstrap import consume_bootstrap_authority
+                consume_bootstrap_authority(
+                    session,
+                    grant_id=bootstrap_grant.bootstrap_authority_id,
+                    action_id=acquisition_id,
+                    action_kind="TELEGRAPH_HTTP_ACQUISITION",
+                    amount=budget,
+                    mandate_id=mandate_id,
+                    run_id=run.run_id,
+                )
+                session.commit()
             if (
                 preliminary_g13.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
                 and preliminary_g13.result_core.get("recovery_probe_authorized") is True

@@ -89,7 +89,8 @@ def issue_execution_permit(session, *, mandate: Mandate, action_id: str, action_
     if identity.autonomy_state == "HALTED":
         raise ValueError("G13_HALT")
     recovery_probe = bool((constraints or {}).get("recovery_probe_authorized"))
-    if identity.autonomy_state == "REVIEW_REQUIRED" and not recovery_probe:
+    bootstrap_authorized = bool((constraints or {}).get("bootstrap_authorized"))
+    if identity.autonomy_state == "REVIEW_REQUIRED" and not recovery_probe and not bootstrap_authorized:
         raise ValueError("G13_REVIEW")
     if profile.status != "ACTIVE" or not _allowed(profile, action_kind, intent):
         raise ValueError("AUTHORITY_ACTION_NOT_ALLOWED")
@@ -101,7 +102,7 @@ def issue_execution_permit(session, *, mandate: Mandate, action_id: str, action_
     if not allowed:
         raise ValueError(g12_result)
     if g13_result == "HALT": raise ValueError("G13_HALT")
-    if g13_result == "REVIEW" and not recovery_probe: raise ValueError("G13_REVIEW")
+    if g13_result == "REVIEW" and not recovery_probe and not bootstrap_authorized: raise ValueError("G13_REVIEW")
     if g13_result == "THROTTLE" and not (constraints or {}).get("throttle_satisfied"):
         raise ValueError("G13_THROTTLE_CONSTRAINTS_REQUIRED")
     existing = session.query(ExecutionPermit).filter_by(action_id=action_id).one_or_none()

@@ -182,6 +182,7 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
     recovery_probe_authorized = False
     longitudinal = None
     recovery_observation_permitted = False
+    bootstrap_authorized = False
     if identity is not None:
         from app.authority.runtime import (
             evaluate_current_g13,
@@ -203,6 +204,17 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
             == "G13_CURRENT_CRITICAL_OBSERVATION_MISSING"
             and recovery_observation_available(session, identity.agent_id)
         )
+        if longitudinal.result == "REVIEW" and not recovery_probe_authorized and not recovery_observation_permitted:
+            from app.authority.bootstrap import bootstrap_eligibility
+            bootstrap_authorized, _reason, _grant = bootstrap_eligibility(
+                session,
+                identity=identity,
+                policy=policy,
+                profile=profile,
+                g13_core=longitudinal,
+                action_kind="TELEGRAPH_HTTP_ACQUISITION",
+                amount=_planned_cost(policy, profile),
+            )
         if recovery_observation_permitted and identity.autonomy_state == "REVIEW_REQUIRED":
             # The persisted identity state would short-circuit this schedule
             # below; align the durable state with the current evaluation so
@@ -210,7 +222,7 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
             identity.autonomy_state = "ACTIVE"
     if identity is not None and identity.autonomy_state == "HALTED":
         return None
-    if identity is not None and identity.autonomy_state == "REVIEW_REQUIRED" and not recovery_probe_authorized:
+    if identity is not None and identity.autonomy_state == "REVIEW_REQUIRED" and not recovery_probe_authorized and not bootstrap_authorized:
         return None
     if identity is not None and full_autonomy_enabled(identity.agent_id) and profile is None:
         return None
@@ -241,6 +253,7 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
             longitudinal.result == "REVIEW"
             and not recovery_probe_authorized
             and not recovery_observation_permitted
+            and not bootstrap_authorized
         ):
             return None
     slot = execution_slot(policy, instant, _effective_cadence(policy, profile))
