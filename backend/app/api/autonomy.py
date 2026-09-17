@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.autonomy.service import PAID_MIN_CADENCE_SECONDS, status as autonomy_status, validate_policy
+from app.authority.provisioning import validate_policy_activation
 from app.domain.mandates import AutonomyPolicy, AutonomyRun
 from app.persistence.database import get_session
 
@@ -82,8 +83,13 @@ def patch_policy(policy_id: str, payload: PolicyPatch, session: Session = Depend
     policy = session.get(AutonomyPolicy, policy_id)
     if not policy: raise HTTPException(404, "AUTONOMY_POLICY_MISSING")
     for key, value in payload.model_dump(exclude_none=True).items(): setattr(policy, key, value)
-    try: validate_policy({key: getattr(policy, key) for key in PolicyInput.model_fields})
-    except ValueError as error: raise HTTPException(422, str(error)) from error
+    try:
+        validate_policy({key: getattr(policy, key) for key in PolicyInput.model_fields})
+        if policy.enabled and policy.state == "ACTIVE":
+            validate_policy_activation(session, policy)
+    except ValueError as error:
+        session.rollback()
+        raise HTTPException(409 if str(error).startswith(("AGENT_", "AUTHORITY_")) else 422, str(error)) from error
     session.commit(); session.refresh(policy); return _read(policy)
 
 
@@ -91,8 +97,12 @@ def patch_policy(policy_id: str, payload: PolicyPatch, session: Session = Depend
 def enable_policy(policy_id: str, session: Session = Depends(get_session)):
     policy = session.get(AutonomyPolicy, policy_id)
     if not policy: raise HTTPException(404, "AUTONOMY_POLICY_MISSING")
-    try: validate_policy({key: getattr(policy, key) for key in PolicyInput.model_fields})
-    except ValueError as error: raise HTTPException(422, str(error)) from error
+    try:
+        validate_policy({key: getattr(policy, key) for key in PolicyInput.model_fields})
+        validate_policy_activation(session, policy)
+    except ValueError as error:
+        session.rollback()
+        raise HTTPException(409 if str(error).startswith(("AGENT_", "AUTHORITY_")) else 422, str(error)) from error
     policy.enabled = True; policy.state = "ACTIVE"; session.commit(); return _read(policy)
 
 

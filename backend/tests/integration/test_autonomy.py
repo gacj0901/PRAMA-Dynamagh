@@ -347,9 +347,8 @@ def test_policy_management_endpoints_keep_safe_defaults_and_enable_disable():
         assert payload["enabled"] is False and payload["allow_anchor"] is False and payload["max_concurrent_runs"] == 1
         assert client.get(f"/v1/autonomy/policies/{policy_id}").status_code == 200
         assert client.patch(f"/v1/autonomy/policies/{policy_id}", json={"max_runs_per_day": 3}).json()["max_runs_per_day"] == 3
-        assert client.post(f"/v1/autonomy/policies/{policy_id}/enable").json()["state"] == "ACTIVE"
-        disabled = client.post(f"/v1/autonomy/policies/{policy_id}/disable").json()
-        assert disabled["enabled"] is False and disabled["state"] == "PAUSED"
+        blocked = client.post(f"/v1/autonomy/policies/{policy_id}/enable")
+        assert blocked.status_code == 409 and blocked.json()["detail"] == "AGENT_IDENTITY_MISSING"
     finally:
         with create_engine(os.environ["DATABASE_URL"]).begin() as connection:
             connection.execute(text("DELETE FROM autonomy_policies WHERE policy_id = :policy_id"), {"policy_id": policy_id})
