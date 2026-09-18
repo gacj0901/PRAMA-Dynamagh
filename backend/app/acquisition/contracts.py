@@ -10,6 +10,9 @@ from decimal import Decimal
 from typing import Any, Protocol
 
 
+X402_PAYMENT_RAIL = "X402"
+
+
 @dataclass(frozen=True, slots=True)
 class AcquisitionResult:
     """Normalized output produced by an acquisition adapter."""
@@ -27,12 +30,27 @@ class AcquisitionResult:
     http_status: int | None = None
     # Provenance distinguishes the intelligence source from the access path.
     access_mechanism: str = "UNKNOWN"
+    # Payment is an Access Plane concern; authority consumes only the
+    # normalized cost and provenance, never the rail implementation.
+    payment_rail: str = "UNSPECIFIED"
+
+
+@dataclass(frozen=True, slots=True)
+class AcquisitionRequest:
+    """Provider-neutral request emitted from an AcquisitionTask."""
+
+    query: str
+    requested_intent: str | None
+    causal_request_id: str
+    budget_usdc: Decimal
 
 
 class AcquisitionAdapter(Protocol):
     """Provider-neutral Access Plane interface consumed by the worker."""
 
     provider: str
+    access_mechanism: str
+    payment_rail: str
 
     def acquire(
         self,
@@ -43,3 +61,9 @@ class AcquisitionAdapter(Protocol):
         budget_usdc: Decimal,
     ) -> AcquisitionResult:
         ...
+
+
+# ResourceAdapter is the domain-neutral name used by new code.  The
+# AcquisitionAdapter name remains as a compatibility alias for existing
+# callers and persisted Telegraph-era integrations.
+ResourceAdapter = AcquisitionAdapter

@@ -207,7 +207,21 @@ def execute_one(mandate_id, acquisition_id):
             throttle_ok = budget <= throttle_limit
         user_credit.verify_reserved(session, mandate, budget)
         if not task.query.strip(): raise RuntimeError("ACQUISITION_QUERY_INVALID")
-        call = TelegraphCall(mandate_id=mandate_id, acquisition_id=acquisition_id, causal_request_id=mandate_id, raw_response={}, status="REQUESTED", cost_usd=None)
+        adapter = configured_acquisition_adapter(
+            timeout_seconds=GATEWAY_REQUEST_TIMEOUT_SECONDS,
+            urlopen_fn=urlopen,
+        )
+        call = TelegraphCall(
+            mandate_id=mandate_id,
+            acquisition_id=acquisition_id,
+            causal_request_id=mandate_id,
+            raw_response={"access_plane": {"provider": getattr(adapter, "provider", None), "access_mechanism": getattr(adapter, "access_mechanism", None), "payment_rail": getattr(adapter, "payment_rail", None)}},
+            resource_provider=getattr(adapter, "provider", None),
+            access_mechanism=getattr(adapter, "access_mechanism", None),
+            payment_rail=getattr(adapter, "payment_rail", None),
+            status="REQUESTED",
+            cost_usd=None,
+        )
         session.add(call)
         request_metadata = {"budget_usdc": str(budget), "origin": mandate.origin}
         if mandate.origin == "AUTONOMOUS":
@@ -344,10 +358,7 @@ def execute_one(mandate_id, acquisition_id):
         network_attempted = True
         failure_stage = "NETWORK"
         try:
-            result = configured_acquisition_adapter(
-                timeout_seconds=GATEWAY_REQUEST_TIMEOUT_SECONDS,
-                urlopen_fn=urlopen,
-            ).acquire(
+            result = adapter.acquire(
                 query=task.query,
                 requested_intent=task.requested_intent,
                 causal_request_id=mandate_id,
@@ -382,6 +393,17 @@ def execute_one(mandate_id, acquisition_id):
         call.miner_id = str(result.miner_id)
         call.warnings = result.warnings
         call.cost_usd = actual
+        task.resource_provider = result.provider
+        task.access_mechanism = result.access_mechanism
+        task.payment_rail = result.payment_rail
+        task.resource_metadata = {
+            "provider": result.provider,
+            "access_mechanism": result.access_mechanism,
+            "payment_rail": result.payment_rail,
+        }
+        call.resource_provider = result.provider
+        call.access_mechanism = result.access_mechanism
+        call.payment_rail = result.payment_rail
         call.status = "SUCCEEDED"
         call.completed_at = task.completed_at = now()
         task.status = "SUCCEEDED"

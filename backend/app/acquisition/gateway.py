@@ -7,7 +7,7 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from app.acquisition.contracts import AcquisitionResult
+from app.acquisition.contracts import AcquisitionResult, X402_PAYMENT_RAIL
 
 
 class AcquisitionAdapterError(RuntimeError):
@@ -35,6 +35,8 @@ class TelegraphGatewayAdapter:
     """
 
     provider = "TELEGRAPH"
+    access_mechanism = "GATEWAY"
+    payment_rail = X402_PAYMENT_RAIL
 
     def __init__(
         self,
@@ -129,5 +131,6 @@ class TelegraphGatewayAdapter:
             reasoning=raw.get("reasoning"),
             warnings=raw.get("warnings") or [],
             raw_payload=normalized_raw,
-            access_mechanism="GATEWAY",
+            access_mechanism=self.access_mechanism,
+            payment_rail=self.payment_rail,
         )

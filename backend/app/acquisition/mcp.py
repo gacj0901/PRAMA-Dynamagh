@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Sequence
 
-from app.acquisition.contracts import AcquisitionResult
+from app.acquisition.contracts import AcquisitionResult, X402_PAYMENT_RAIL
 from app.acquisition.gateway import AcquisitionAdapterError
 
 DEFAULT_MCP_COMMAND = "npx.cmd -y telegraph-protocol-mcp" if sys.platform == "win32" else "npx -y telegraph-protocol-mcp"
@@ -239,6 +239,8 @@ class TelegraphMCPAdapter:
     """Provider-neutral acquisition through the official Telegraph MCP server."""
 
     provider = "TELEGRAPH"
+    access_mechanism = "MCP"
+    payment_rail = X402_PAYMENT_RAIL
 
     def __init__(self, *, command: Sequence[str], timeout_seconds: int = 120, environment: dict[str, str] | None = None, client_factory: Any = MCPStdioClient) -> None:
         self.command = list(command)
@@ -284,4 +286,4 @@ class TelegraphMCPAdapter:
         intent = payload.get("intent") or requested_intent
         if not miner_id or not signal_hash or not intent:
             raise MCPProtocolError("TELEGRAPH_INVALID_RESPONSE", raw_payload=payload)
-        return AcquisitionResult(provider=self.provider, access_mechanism="MCP", miner_id=str(miner_id), miner_name=payload.get("miner_name") or payload.get("minerName"), intent=str(intent), signal_hash=str(signal_hash), cost_usdc=cost, duration_ms=payload.get("duration_ms", duration_ms), reasoning=payload.get("reasoning"), warnings=payload.get("warnings") or [], raw_payload=payload, http_status=payload.get("http_status"))
+        return AcquisitionResult(provider=self.provider, access_mechanism=self.access_mechanism, payment_rail=self.payment_rail, miner_id=str(miner_id), miner_name=payload.get("miner_name") or payload.get("minerName"), intent=str(intent), signal_hash=str(signal_hash), cost_usdc=cost, duration_ms=payload.get("duration_ms", duration_ms), reasoning=payload.get("reasoning"), warnings=payload.get("warnings") or [], raw_payload=payload, http_status=payload.get("http_status"))
