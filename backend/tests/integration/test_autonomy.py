@@ -8,6 +8,7 @@ import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -204,6 +205,91 @@ def test_restart_recovery_requeues_orphaned_scheduled_acquisition(session):
     session.flush()
     assert task.status == AcquisitionStatus.QUEUED.value
     assert task.started_at is None
+
+
+def test_restart_recovery_closes_task_whose_parent_run_is_terminal(session):
+    value = policy()
+    session.add(value)
+    session.flush()
+    mandate = Mandate(
+        actor_id="autonomy-controller",
+        text="Close a stale terminal-parent dispatch",
+        mandate_type="AUTONOMOUS",
+        max_budget_usdc=Decimal("0.010000"),
+        origin="AUTONOMOUS",
+        autonomy_policy_id=value.policy_id,
+        status=MandateStatus.ACQUIRING.value,
+    )
+    run = AutonomyRun(
+        policy_id=value.policy_id,
+        mandate_id=mandate.mandate_id,
+        scheduled_for=datetime.now(timezone.utc) - timedelta(minutes=10),
+        idempotency_key="terminal-parent-" + str(uuid.uuid4()),
+        state="FAILED",
+        failure_code="AUTONOMY_ORPHANED_MANDATE",
+        planned_cost_usdc=Decimal("0.010000"),
+        actual_cost_usdc=Decimal("0.000000"),
+        finished_at=datetime.now(timezone.utc) - timedelta(minutes=9),
+    )
+    task = AcquisitionTask(
+        mandate_id=mandate.mandate_id,
+        query="Close a stale terminal-parent dispatch",
+        ordinal=0,
+        required=True,
+        status=AcquisitionStatus.RUNNING.value,
+        started_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+    )
+    session.add_all([mandate, run, task])
+    session.flush()
+
+    recovered = recover_runs(session)
+
+    assert task.acquisition_id in recovered
+    assert task.status == AcquisitionStatus.FAILED.value
+    assert task.failure_code == "AUTONOMY_ORPHANED_MANDATE"
+    assert task.completed_at is not None
+    assert mandate.status == MandateStatus.FAILED.value
+    assert session.query(UsageEvent).filter_by(
+        mandate_id=mandate.mandate_id,
+        acquisition_id=task.acquisition_id,
+        event_type="ACQUISITION_FAILED",
+    ).one().metadata_["failure_code"] == "AUTONOMY_ORPHANED_MANDATE"
+
+
+def test_g13_review_records_skip_and_advances_scheduler_clock(session, monkeypatch):
+    value = policy(next_run_at=datetime.now(timezone.utc) - timedelta(hours=1))
+    session.add(value)
+    session.flush()
+    identity = AgentIdentity(
+        agent_id="g13-review-skip-" + str(uuid.uuid4()),
+        name="G13 review skip test",
+        origin="INTERNAL_AUTONOMY",
+        policy_id=value.policy_id,
+        autonomy_state="REVIEW_REQUIRED",
+    )
+    session.add(identity)
+    session.flush()
+    session.add(authority_profile(identity.agent_id))
+    session.flush()
+    monkeypatch.setenv("FULL_AUTONOMY_ENABLED", "true")
+    monkeypatch.setattr(
+        "app.authority.runtime.evaluate_current_g13",
+        lambda *_args: SimpleNamespace(
+            result="REVIEW",
+            policy_version="g13-d-structural-autonomy-v0.4",
+            result_core={},
+        ),
+    )
+    monkeypatch.setattr("app.authority.runtime.recovery_observation_available", lambda *_args: False)
+    instant = datetime.now(timezone.utc).replace(microsecond=0)
+
+    run = schedule_due(session, value, instant, global_switch=True)
+
+    assert run is not None
+    assert run.state == "SKIPPED"
+    assert run.skip_reason == "G13_REVIEW"
+    assert run.mandate_id is None
+    assert value.next_run_at > instant
 
 
 def test_recovered_ticketed_mandate_closes_duplicate_run(session, monkeypatch):

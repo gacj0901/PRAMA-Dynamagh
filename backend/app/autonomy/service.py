@@ -184,6 +184,7 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
     longitudinal = None
     recovery_observation_permitted = False
     bootstrap_authorized = False
+    g13_block_reason = None
     if identity is not None:
         from app.authority.runtime import (
             evaluate_current_g13,
@@ -224,7 +225,13 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
     if identity is not None and identity.autonomy_state == "HALTED":
         return None
     if identity is not None and identity.autonomy_state == "REVIEW_REQUIRED" and not recovery_probe_authorized and not bootstrap_authorized:
-        return None
+        # REVIEW remains binding at the action gate, but must not freeze the
+        # scheduler clock.  Record one terminal control-cycle skip when the
+        # slot is due, then advance to the next future slot below.
+        if longitudinal is not None and longitudinal.result == "REVIEW":
+            g13_block_reason = "G13_REVIEW"
+        else:
+            return None
     if identity is not None and full_autonomy_enabled(identity.agent_id) and profile is None:
         return None
     if profile and not full_autonomy_enabled(identity.agent_id if identity else None):
@@ -256,7 +263,7 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
             and not recovery_observation_permitted
             and not bootstrap_authorized
         ):
-            return None
+            g13_block_reason = "G13_REVIEW"
     slot = execution_slot(policy, instant, _effective_cadence(policy, profile))
     key = idempotency_key(policy, slot)
     existing = session.query(AutonomyRun).filter_by(idempotency_key=key).one_or_none()
@@ -265,7 +272,7 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
     if policy.next_run_at and instant < policy.next_run_at:
         return None
     planned = _planned_cost(policy, profile)
-    reason = _budget_reason(session, policy, instant, planned)
+    reason = g13_block_reason or _budget_reason(session, policy, instant, planned)
     run = AutonomyRun(policy_id=policy.policy_id, agent_identity_id=identity.agent_id if identity else None, scheduled_for=slot, idempotency_key=key, state="SKIPPED" if reason else "SCHEDULED", planned_cost_usdc=planned, actual_cost_usdc=Decimal("0.000000"), skip_reason=reason)
     try:
         session.add(run); session.flush()
@@ -273,7 +280,15 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
         session.rollback()
         return session.query(AutonomyRun).filter_by(idempotency_key=key).one()
     policy.last_run_at = instant
-    policy.next_run_at = slot + timedelta(seconds=_effective_cadence(policy, profile))
+    next_slot = slot + timedelta(seconds=_effective_cadence(policy, profile))
+    if g13_block_reason:
+        # Do not replay every missed blocked slot one scheduler tick at a
+        # time.  The blocked cycle is represented once and the clock resumes
+        # at the first future cadence boundary; G13 still guards all action.
+        cadence = _effective_cadence(policy, profile)
+        while next_slot <= instant:
+            next_slot += timedelta(seconds=cadence)
+    policy.next_run_at = next_slot
     _event(session, run, "AUTONOMY_RUN_SKIPPED" if reason else "AUTONOMY_RUN_SCHEDULED")
     return run
 
@@ -493,6 +508,65 @@ def recover_runs(session) -> list[str]:
         )
         if reset:
             recovered.append(run.run_id)
+    # A worker can die after marking an acquisition RUNNING but after its
+    # parent run has already been closed.  Such a task is no longer eligible
+    # for dispatch and must not keep the queue or spend reservation occupied.
+    # Reconcile only after the same bounded lease grace period; active parent
+    # runs remain untouched so a live Telegraph request is never duplicated.
+    for task in session.query(AcquisitionTask).filter(
+        AcquisitionTask.status == AcquisitionStatus.RUNNING.value,
+    ).all():
+        parent = (
+            session.query(AutonomyRun)
+            .filter(AutonomyRun.mandate_id == task.mandate_id)
+            .order_by(AutonomyRun.created_at.desc())
+            .first()
+        )
+        if parent is None or parent.state in ACTIVE_RUN_STATES:
+            continue
+        started_at = task.started_at or task.created_at or parent.updated_at or parent.created_at
+        if started_at is not None and now() - started_at < timedelta(seconds=RUN_RECOVERY_GRACE_SECONDS):
+            continue
+        task.status = AcquisitionStatus.FAILED.value
+        task.failure_code = "AUTONOMY_ORPHANED_MANDATE"
+        task.completed_at = now()
+        call = session.query(TelegraphCall).filter_by(acquisition_id=task.acquisition_id).one_or_none()
+        call_unresolved = call is not None and call.status in {"REQUESTED", "PAYMENT_UNCERTAIN"}
+        existing = next(
+            (
+                item for item in session.query(UsageEvent).filter_by(
+                    mandate_id=task.mandate_id,
+                    acquisition_id=task.acquisition_id,
+                    event_type="ACQUISITION_FAILED",
+                )
+                if item.metadata_.get("failure_code") == "AUTONOMY_ORPHANED_MANDATE"
+            ),
+            None,
+        )
+        if existing is None:
+            session.add(UsageEvent(
+                mandate_id=task.mandate_id,
+                acquisition_id=task.acquisition_id,
+                event_type="ACQUISITION_FAILED",
+                metadata_={
+                    "failure_code": "AUTONOMY_ORPHANED_MANDATE",
+                    "failure_stage": "RECOVERY",
+                    "network_attempted": call_unresolved,
+                    "append_only": True,
+                },
+            ))
+        mandate = session.get(Mandate, task.mandate_id)
+        if mandate is not None and mandate.status not in {MandateStatus.TICKETED.value, MandateStatus.FAILED.value}:
+            from app.domain.state_machine import transition_mandate
+            transition_mandate(session, mandate, MandateStatus.FAILED, "AUTONOMY_ORPHANED_MANDATE")
+            # Release only a definitely unspent reservation.  Payment-
+            # uncertain holds remain reserved for reconciliation.
+            from app.workers.acquisition import uncertain_hold
+            from app.public_safety import release_spend_reservation
+            reservation = session.query(PublicManualSpendReservation).filter_by(mandate_id=mandate.mandate_id).one_or_none()
+            if reservation is not None and reservation.status == "RESERVED" and not call_unresolved and uncertain_hold(session, mandate.mandate_id) == 0:
+                release_spend_reservation(session, mandate.mandate_id, mandate.origin)
+        recovered.append(task.acquisition_id)
     return recovered
 
 
@@ -502,5 +576,5 @@ def status(session, instant: datetime | None = None) -> dict:
     runs = session.query(AutonomyRun).all()
     today = [run for run in runs if start <= run.scheduled_for < end]
     active = [run for run in runs if run.state in ACTIVE_RUN_STATES]
-    next_due = min((policy.next_run_at for policy in policies if policy.enabled and policy.next_run_at), default=None)
+    next_due = min((policy.next_run_at for policy in policies if policy.enabled and policy.state == "ACTIVE" and policy.next_run_at), default=None)
     return {"global_enabled": global_enabled(), "active_policy_count": sum(1 for policy in policies if policy.enabled and policy.state == "ACTIVE"), "active_run_count": len(active), "today_run_count": len(today), "today_spend_usdc": str(sum((Decimal(run.actual_cost_usdc) for run in today), Decimal("0"))), "next_due_at": next_due, "autonomous_runs_total": len(runs), "completed": sum(1 for run in runs if run.state == "COMPLETED"), "skipped": sum(1 for run in runs if run.state == "SKIPPED"), "failed": sum(1 for run in runs if run.state == "FAILED"), "actual_usdc_spend": str(sum((Decimal(run.actual_cost_usdc) for run in runs), Decimal("0")))}
