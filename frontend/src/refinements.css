@@ -11,6 +11,54 @@
   letter-spacing: 0.02em;
 }
 
+.autonomy-runs-view {
+  display: grid;
+  gap: 14px;
+}
+
+.autonomy-run-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  border-bottom: 1px solid #3c3e3f;
+  padding-bottom: 12px;
+}
+
+.autonomy-run-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid #596064;
+  background: #17191a;
+  color: #c3d3da;
+  padding: 8px 11px;
+  font: 11px "Sometype Mono", "Courier New", monospace;
+  cursor: pointer;
+}
+
+.autonomy-run-filter span {
+  color: #f7ece6;
+  border-left: 1px solid #596064;
+  padding-left: 9px;
+}
+
+.autonomy-run-filter:hover,
+.autonomy-run-filter.active {
+  border-color: #caa07d;
+  background: #2a241f;
+  color: #e0b783;
+}
+
+.autonomy-run-placeholder {
+  min-height: 190px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed #465257;
+  color: #9bcbe5;
+  font-size: 12px;
+  text-align: center;
+}
+
 .brand {
   position: relative;
 }

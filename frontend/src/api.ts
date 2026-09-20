@@ -164,6 +164,8 @@ export interface AutonomyRun {
   ticket_id: string | null;
   planned_cost_usdc: string | number;
   actual_cost_usdc: string | number;
+  skip_reason?: string | null;
+  failure_code?: string | null;
   scheduled_for: string;
   finished_at: string | null;
 }
