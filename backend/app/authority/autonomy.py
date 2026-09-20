@@ -44,6 +44,14 @@ G13_EXTERNAL_NON_BLOCKING_CODES = frozenset({
     "X402_FACILITATOR_TIMEOUT",
     "PAYMENT_FAILED",
 })
+# This is a scheduler bookkeeping outcome, not an external acquisition
+# failure.  A restarted/duplicate dispatch can leave the run row orphaned
+# after the durable acquisition pipeline has already produced its terminal
+# artifacts.  It remains in O_AGENT and replay, but must not turn one
+# dispatch race into a longitudinal G13 block for later slots.
+G13_NON_BLOCKING_BOOKKEEPING_CODES = frozenset({
+    "AUTONOMY_ORPHANED_MANDATE",
+})
 G13_EXTERNAL_RECURRENCE_REVIEW_THRESHOLD = 3
 G13_RULES = {
     "G13_OPERATOR_RECOVERY_CANARY": {
@@ -292,6 +300,7 @@ def _distinct_execution_stats(policy_input: G13PolicyInput) -> tuple[int, int, i
             },
         )
         failure_code = facts.get("failure_code")
+        bookkeeping_failure = failure_code in G13_NON_BLOCKING_BOOKKEEPING_CODES
         # A duplicate/restarted dispatch can leave the run row marked
         # AUTONOMY_ORPHANED_MANDATE after the acquisition already completed.
         # The durable terminal artifacts are the authoritative outcome for
@@ -314,13 +323,14 @@ def _distinct_execution_stats(policy_input: G13PolicyInput) -> tuple[int, int, i
         unit["block"] = unit["block"] or (
             facts.get("local_decision_state") == "BLOCK"
             and not external_dependency
+            and not bookkeeping_failure
         )
         # External failures reconciled without payment are recoverable
         # observations and must not escalate the longitudinal trajectory.
         unit["failure"] = unit["failure"] or (
             not bool(facts.get("recovered"))
             and failure_code not in external_codes
-            and not (failure_code == "AUTONOMY_ORPHANED_MANDATE" and unit["terminal_success"])
+            and not bookkeeping_failure
             and bool(failure_code or facts.get("failure_event_types"))
         )
         unit["not_executed"] = unit["not_executed"] or bool(statuses & {"NOT_EXECUTED", "RECONCILED_NO_PAYMENT"})
