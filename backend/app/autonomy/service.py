@@ -312,6 +312,20 @@ def execute_claimed(session, run: AutonomyRun) -> str:
             if pending is not None:
                 run.state = "RUNNING"
                 return "ACQUISITION_QUEUED"
+            # A duplicate recovery claim can arrive after the acquisition
+            # worker has already produced the terminal mandate artifacts.
+            # Reconcile that durable outcome instead of manufacturing an
+            # orphaned failure for a run that was actually ticketed.
+            mandate = session.get(Mandate, run.mandate_id)
+            ticket = session.query(Ticket).filter_by(mandate_id=run.mandate_id).one_or_none()
+            if mandate is not None and mandate.status == MandateStatus.TICKETED.value and ticket is not None:
+                run.ticket_id = ticket.ticket_id
+                run.actual_cost_usdc = _actual_cost(session, run.mandate_id)
+                run.state = "COMPLETED"
+                run.failure_code = None
+                run.finished_at = now()
+                _event(session, run, "AUTONOMY_RUN_COMPLETED")
+                return run.state
             run.state = "FAILED"
             run.failure_code = "AUTONOMY_ORPHANED_MANDATE"
             run.finished_at = now()

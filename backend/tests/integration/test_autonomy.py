@@ -25,7 +25,7 @@ from app.autonomy.service import (
     status,
     validate_policy,
 )
-from app.domain.mandates import AcquisitionStatus, AcquisitionTask, AgentAuthorityProfile, AgentIdentity, AutonomyPolicy, AutonomyRun, Mandate, PublicManualSpendReservation, UsageEvent
+from app.domain.mandates import AcquisitionStatus, AcquisitionTask, AgentAuthorityProfile, AgentIdentity, AutonomyPolicy, AutonomyRun, Mandate, MandateStatus, PublicManualSpendReservation, Ticket, UsageEvent
 from app.main import app
 
 LIVE_G9_JOB = "04e5ba3c-d4e2-45d1-a21e-cf10f510916c"
@@ -204,6 +204,48 @@ def test_restart_recovery_requeues_orphaned_scheduled_acquisition(session):
     session.flush()
     assert task.status == AcquisitionStatus.QUEUED.value
     assert task.started_at is None
+
+
+def test_recovered_ticketed_mandate_closes_duplicate_run(session, monkeypatch):
+    value = policy()
+    session.add(value)
+    session.flush()
+    mandate = Mandate(
+        actor_id="autonomy-controller",
+        text="Reconcile the already ticketed acquisition",
+        mandate_type="AUTONOMOUS",
+        max_budget_usdc=Decimal("0.010000"),
+        origin="AUTONOMOUS",
+        autonomy_policy_id=value.policy_id,
+        status=MandateStatus.TICKETED.value,
+    )
+    session.add(mandate)
+    session.flush()
+    ticket = Ticket(
+        mandate_id=mandate.mandate_id,
+        decision_id="decision-recovered-ticket",
+        schema_version="prama.ticket.v0",
+        canonical_payload={},
+        ticket_hash="0x" + "ab" * 32,
+        hash_algorithm="keccak256",
+        anchor_status="LOCAL_ONLY",
+    )
+    run = AutonomyRun(
+        policy_id=value.policy_id,
+        mandate_id=mandate.mandate_id,
+        scheduled_for=datetime.now(timezone.utc),
+        idempotency_key="ticketed-recovery-" + str(uuid.uuid4()),
+        state="SCHEDULED",
+        planned_cost_usdc=Decimal("0.010000"),
+        actual_cost_usdc=Decimal("0.000000"),
+    )
+    session.add_all([ticket, run])
+    session.flush()
+    monkeypatch.setattr("app.autonomy.service.global_enabled", lambda: True)
+
+    assert execute_claimed(session, run) == "COMPLETED"
+    assert run.failure_code is None
+    assert run.ticket_id == ticket.ticket_id
 
 
 def test_profile_without_own_limits_inherits_policy_cadence_and_g12(session, monkeypatch):
