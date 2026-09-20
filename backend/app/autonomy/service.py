@@ -33,6 +33,7 @@ from app.domain.mandates import AgentAuthorityProfile
 from app.authority.delegated import full_autonomy_enabled, resolve_profile
 
 PAID_MIN_CADENCE_SECONDS = 900
+RUN_RECOVERY_GRACE_SECONDS = 300
 MODES = {"TELEGRAPH_HTTP", "TELEGRAPH_ERC8183", "REPLAY_ONLY"}
 ACTIVE_RUN_STATES = {"SCHEDULED", "CLAIMED", "RUNNING", "WAITING_EXTERNAL"}
 FORBIDDEN_TEMPLATE_KEYS = {"private_key", "secret", "credential", "calldata", "spender", "callback"}
@@ -452,6 +453,23 @@ def finalize_http_run(session, mandate_id: str, *, failure_code: str | None = No
 def recover_runs(session) -> list[str]:
     recovered = []
     for run in session.query(AutonomyRun).filter(AutonomyRun.state.in_(["CLAIMED", "RUNNING"])).all():
+        # A normal Telegraph request may remain RUNNING for longer than one
+        # scheduler tick.  Do not reset its durable lease while its acquisition
+        # task is actively executing; doing so dispatches a duplicate and can
+        # manufacture AUTONOMY_ORPHANED_MANDATE.  A genuinely stale task still
+        # becomes recoverable after the bounded grace period.
+        if run.mandate_id:
+            active_task = (
+                session.query(AcquisitionTask)
+                .filter(
+                    AcquisitionTask.mandate_id == run.mandate_id,
+                    AcquisitionTask.status == AcquisitionStatus.RUNNING.value,
+                )
+                .first()
+            )
+            updated_at = run.updated_at or run.created_at
+            if active_task is not None and updated_at is not None and now() - updated_at < timedelta(seconds=RUN_RECOVERY_GRACE_SECONDS):
+                continue
         run.state = "SCHEDULED"; run.started_at = None; recovered.append(run.run_id)
     # If the worker was lost after creating the mandate/tasks, the run may
     # already have been reset to SCHEDULED while its first task is still

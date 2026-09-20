@@ -248,6 +248,46 @@ def test_recovered_ticketed_mandate_closes_duplicate_run(session, monkeypatch):
     assert run.ticket_id == ticket.ticket_id
 
 
+def test_recovery_does_not_reset_active_acquisition_within_grace_window(session):
+    value = policy()
+    session.add(value)
+    session.flush()
+    mandate = Mandate(
+        actor_id="autonomy-controller",
+        text="Keep the active acquisition lease",
+        mandate_type="AUTONOMOUS",
+        max_budget_usdc=Decimal("0.010000"),
+        origin="AUTONOMOUS",
+        autonomy_policy_id=value.policy_id,
+        status=MandateStatus.ACQUIRING.value,
+    )
+    session.add(mandate)
+    session.flush()
+    run = AutonomyRun(
+        policy_id=value.policy_id,
+        mandate_id=mandate.mandate_id,
+        scheduled_for=datetime.now(timezone.utc),
+        idempotency_key="active-lease-" + str(uuid.uuid4()),
+        state="RUNNING",
+        planned_cost_usdc=Decimal("0.010000"),
+        actual_cost_usdc=Decimal("0.000000"),
+    )
+    task = AcquisitionTask(
+        mandate_id=mandate.mandate_id,
+        query="Keep the active acquisition lease",
+        ordinal=0,
+        required=True,
+        status=AcquisitionStatus.RUNNING.value,
+        started_at=datetime.now(timezone.utc),
+    )
+    session.add_all([run, task])
+    session.flush()
+
+    assert recover_runs(session) == []
+    assert run.state == "RUNNING"
+    assert task.status == AcquisitionStatus.RUNNING.value
+
+
 def test_profile_without_own_limits_inherits_policy_cadence_and_g12(session, monkeypatch):
     value = policy(
         mandate_template={"title": "Unlimited authority", "instruction": "Run authorized acquisition"},
