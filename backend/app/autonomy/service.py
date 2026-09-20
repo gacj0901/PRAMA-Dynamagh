@@ -22,6 +22,7 @@ from app.domain.mandates import (
     Mandate,
     MandateStatus,
     MandateTransition,
+    PublicManualSpendReservation,
     TelegraphCall,
     Ticket,
     UsageEvent,
