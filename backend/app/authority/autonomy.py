@@ -52,6 +52,19 @@ G13_EXTERNAL_NON_BLOCKING_CODES = frozenset({
 G13_NON_BLOCKING_BOOKKEEPING_CODES = frozenset({
     "AUTONOMY_ORPHANED_MANDATE",
 })
+# Authority gate denials are governance outcomes, not execution failures.
+# When G13 itself blocks an action (G13_REVIEW, G13_HALT) the mandated
+# acquisition never reaches the network, and when throttle constraints are
+# not yet satisfiable (G13_THROTTLE_CONSTRAINTS_REQUIRED) the worker aborts
+# pre-network.  Counting these as agent execution failures makes G13 count
+# its own denials as evidence of agent malfunction, which is a causal
+# semantics error.  They remain in O_AGENT for audit, but must not
+# increment execution failure counts or feed G13_REPEATED_EXECUTION_FAILURE.
+G13_AUTHORITY_DENIAL_CODES = frozenset({
+    "G13_REVIEW",
+    "G13_HALT",
+    "G13_THROTTLE_CONSTRAINTS_REQUIRED",
+})
 G13_EXTERNAL_RECURRENCE_REVIEW_THRESHOLD = 3
 G13_RULES = {
     "G13_OPERATOR_RECOVERY_CANARY": {
@@ -301,6 +314,7 @@ def _distinct_execution_stats(policy_input: G13PolicyInput) -> tuple[int, int, i
         )
         failure_code = facts.get("failure_code")
         bookkeeping_failure = failure_code in G13_NON_BLOCKING_BOOKKEEPING_CODES
+        authority_denial = failure_code in G13_AUTHORITY_DENIAL_CODES
         # A duplicate/restarted dispatch can leave the run row marked
         # AUTONOMY_ORPHANED_MANDATE after the acquisition already completed.
         # The durable terminal artifacts are the authoritative outcome for
@@ -324,13 +338,18 @@ def _distinct_execution_stats(policy_input: G13PolicyInput) -> tuple[int, int, i
             facts.get("local_decision_state") == "BLOCK"
             and not external_dependency
             and not bookkeeping_failure
+            and not authority_denial
         )
         # External failures reconciled without payment are recoverable
         # observations and must not escalate the longitudinal trajectory.
+        # Authority gate denials (G13_REVIEW / G13_HALT /
+        # G13_THROTTLE_CONSTRAINTS_REQUIRED) likewise must not escalate:
+        # a gate denial is an outcome of governance, not an execution failure.
         unit["failure"] = unit["failure"] or (
             not bool(facts.get("recovered"))
             and failure_code not in external_codes
             and not bookkeeping_failure
+            and not authority_denial
             and bool(failure_code or facts.get("failure_event_types"))
         )
         unit["not_executed"] = unit["not_executed"] or bool(statuses & {"NOT_EXECUTED", "RECONCILED_NO_PAYMENT"})

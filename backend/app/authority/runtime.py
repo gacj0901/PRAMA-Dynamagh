@@ -35,6 +35,17 @@ from app.policy_gate.substrate import PolicyEvaluationCore, persist_policy_evalu
 logger = logging.getLogger(__name__)
 RUNTIME_CHECKPOINT_VERSION = "pre-next-action-authority-check-v0.1"
 G13_ENFORCEMENT_WINDOW_SIZE = 16
+# Failure codes that denote a G13 family governance denial, not an execution
+# attempt. An authority denial is an outcome of governance, not execution
+# evidence: the run was *impeded* by the gate and never performed external
+# work.  They stay in O_AGENT as audit records but are excluded from the
+# binding longitudinal trajectory window (evaluate_current_g13) and from
+# execution-failure counting (_distinct_execution_stats).
+_G13_AUTHORITY_DENIAL_CODES = frozenset({
+    "G13_HALT",
+    "G13_REVIEW",
+    "G13_THROTTLE_CONSTRAINTS_REQUIRED",
+})
 G13_PRE_ACTION_EXPECTED_MISSING = (
     "EVIDENCE_NOT_PRESENT",
     "EVALUATION_NOT_PRESENT",
@@ -93,6 +104,35 @@ def evaluate_current_g13(session: Session, agent_id: str) -> PolicyEvaluationCor
         if "NOT_EXECUTED" in statuses and not statuses - {"NOT_EXECUTED", "REQUESTED"}:
             continue
         significant_units.append(unit_id)
+    # Authority gate denials (G13_REVIEW etc.) are outcomes of governance,
+    # not execution evidence. A run aborted pre-network solely because G13
+    # denied the action cannot become the current trajectory anchor and must
+    # not feed repetition counting, or G13 would be triggering REVIEW on its
+    # own denials forever.  These observations stay in the audit log; they
+    # are only excluded from the binding longitudinal window.
+    for unit_id, items in list(grouped.items()):
+        all_authority_denial = all(
+            item.facts.failure_code in _G13_AUTHORITY_DENIAL_CODES
+            for item in items
+        )
+        if not all_authority_denial:
+            continue
+        non_executed_only = all(
+            not (set(item.facts.telegraph_statuses) - {"NOT_EXECUTED", "REQUESTED"})
+            and not (item.facts.local_decision_state in {"PERMIT", "BLOCK"})
+            for item in items
+        )
+        if non_executed_only:
+            grouped.pop(unit_id, None)
+            observations = [
+                item for item in observations
+                if (
+                    tuple(item.source_lineage.autonomy_run_ids)[0]
+                    if item.source_lineage.autonomy_run_ids
+                    else item.observation_id
+                ) != unit_id
+            ]
+    significant_units = [unit_id for unit_id in significant_units if unit_id in grouped]
     selected = set(significant_units[-G13_ENFORCEMENT_WINDOW_SIZE:])
     observations = [
         item for item in observations
