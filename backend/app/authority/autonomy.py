@@ -11,6 +11,8 @@ from app.authority.recovery import (
     G13_OPERATOR_RECOVERY_POLICY_VERSION,
     G13_REVIEW_RECOVERY_POLICY_ID,
     G13_REVIEW_RECOVERY_POLICY_VERSION,
+    G13_REVIEW_RECOVERY_V2_POLICY_ID,
+    G13_REVIEW_RECOVERY_V2_POLICY_VERSION,
     validate_recovery_payload,
 )
 from app.authority.failure_episode import (
@@ -29,10 +31,12 @@ G13_SUPPORTED_POLICY_VERSIONS = frozenset({
     G13_STRUCTURAL_AUTONOMY_POLICY_VERSION,
     G13_OPERATOR_RECOVERY_POLICY_VERSION,
     G13_REVIEW_RECOVERY_POLICY_VERSION,
+    G13_REVIEW_RECOVERY_V2_POLICY_VERSION,
 })
 G13_RECOVERY_POLICY_VERSIONS = frozenset({
     G13_OPERATOR_RECOVERY_POLICY_VERSION,
     G13_REVIEW_RECOVERY_POLICY_VERSION,
+    G13_REVIEW_RECOVERY_V2_POLICY_VERSION,
 })
 G13_POLICY_TYPE = "STRUCTURAL_AUTONOMY"
 G13_OUTPUTS = frozenset({"CONTINUE", "THROTTLE", "REVIEW", "HALT"})
@@ -388,7 +392,10 @@ def _distinct_recovery_probe_count(policy_input: G13PolicyInput) -> int:
 
 def _external_dependency_episode_stats(policy_input: G13PolicyInput) -> tuple[int, tuple[str, ...], int]:
     """Count distinct causal failure episodes, never runs or projections."""
-    if policy_input.policy_version != G13_REVIEW_RECOVERY_POLICY_VERSION:
+    if policy_input.policy_version not in (
+        G13_REVIEW_RECOVERY_POLICY_VERSION,
+        G13_REVIEW_RECOVERY_V2_POLICY_VERSION,
+    ):
         return 0, (), 0
     units: set[str] = set()
     missing_identity = 0
@@ -494,27 +501,31 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
         policy_id = G13_STRUCTURAL_AUTONOMY_POLICY_V0_1
     else:
         block_count, failure_count, executed_count = _distinct_execution_stats(policy_input)
-        if policy_input.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION:
+        if policy_input.policy_version in (G13_REVIEW_RECOVERY_POLICY_VERSION, G13_REVIEW_RECOVERY_V2_POLICY_VERSION):
             external_dependency_count, external_episode_ids, missing_episode_identity_count = _external_dependency_episode_stats(policy_input)
         else:
             external_dependency_count = _distinct_external_dependency_count(policy_input)
         policy_id = (
-            G13_REVIEW_RECOVERY_POLICY_ID
-            if policy_input.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
+            G13_REVIEW_RECOVERY_V2_POLICY_ID
+            if policy_input.policy_version == G13_REVIEW_RECOVERY_V2_POLICY_VERSION
             else (
-                G13_OPERATOR_RECOVERY_POLICY_ID
-                if policy_input.policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION
-                else G13_STRUCTURAL_AUTONOMY_POLICY_V0_2
+                G13_REVIEW_RECOVERY_POLICY_ID
+                if policy_input.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
+                else (
+                    G13_OPERATOR_RECOVERY_POLICY_ID
+                    if policy_input.policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION
+                    else G13_STRUCTURAL_AUTONOMY_POLICY_V0_2
+                )
             )
         )
     recovery_probe_attempt_count = (
         _distinct_recovery_probe_count(policy_input)
-        if policy_input.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
+        if policy_input.policy_version in (G13_REVIEW_RECOVERY_POLICY_VERSION, G13_REVIEW_RECOVERY_V2_POLICY_VERSION)
         else 0
     )
     recovery_probe_limit = int((policy_input.operator_recovery or {}).get("canary_execution_limit", 0))
     recovery_probe_authorized = valid_recovery and executed_count == 0 and (
-        policy_input.policy_version != G13_REVIEW_RECOVERY_POLICY_VERSION
+        policy_input.policy_version not in (G13_REVIEW_RECOVERY_POLICY_VERSION, G13_REVIEW_RECOVERY_V2_POLICY_VERSION)
         or recovery_probe_attempt_count < recovery_probe_limit
     )
     if recovery_probe_authorized:
@@ -522,7 +533,7 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
     if external_dependency_count >= G13_EXTERNAL_RECURRENCE_REVIEW_THRESHOLD:
         trigger("G13_EXTERNAL_ACQUISITION_RECURRENCE", "REVIEW")
     if (
-        policy_input.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
+        policy_input.policy_version in (G13_REVIEW_RECOVERY_POLICY_VERSION, G13_REVIEW_RECOVERY_V2_POLICY_VERSION)
         and missing_episode_identity_count
         and any(item.get("facts", {}).get("failure_code") in G13_EXTERNAL_DEPENDENCY_FAILURE_CODES for item in source_observations)
         and not current_missing
@@ -562,7 +573,7 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
             "recovery_event_id": (policy_input.operator_recovery or {}).get("recovery_event_id"),
             "recovery_canonical_hash": (policy_input.operator_recovery or {}).get("canonical_hash"),
         })
-    if policy_input.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION:
+    if policy_input.policy_version in (G13_REVIEW_RECOVERY_POLICY_VERSION, G13_REVIEW_RECOVERY_V2_POLICY_VERSION):
         result_core.update({
             "recovery_probe_attempt_count": recovery_probe_attempt_count,
             "recovery_probe_execution_limit": recovery_probe_limit,

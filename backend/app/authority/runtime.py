@@ -333,7 +333,10 @@ def run_pre_next_action_authority_check(
         longitudinal_result_hash=longitudinal_core.result_hash,
         throttled_constraints_satisfied=throttled_constraints_satisfied,
         recovery_probe_authorized=(
-            longitudinal_core.policy_version == "g13-d-structural-autonomy-v0.4"
+            longitudinal_core.policy_version in (
+                "g13-d-structural-autonomy-v0.4",
+                "g13-d-structural-autonomy-v0.5",
+            )
             and longitudinal_core.result_core.get("recovery_probe_authorized") is True
         ),
         recovery_observation_permitted=recovery_observation_permitted,

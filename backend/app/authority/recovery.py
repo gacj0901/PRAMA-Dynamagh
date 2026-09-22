@@ -25,6 +25,18 @@ G13_REVIEW_RECOVERY_REASON = "RECONCILED_EXTERNAL_FAILURES"
 G13_REVIEW_RECOVERY_POLICY_VERSION = "g13-d-structural-autonomy-v0.4"
 G13_REVIEW_RECOVERY_POLICY_ID = "G13_STRUCTURAL_AUTONOMY_POLICY_V0_4"
 G13_REVIEW_RECOVERY_PREVIOUS_POLICY_VERSION = G13_OPERATOR_RECOVERY_POLICY_VERSION
+# Explicit versioned transition v0.4 -> v0.5 for a follow-up reviewed recovery
+# after G13_EXTERNAL_ACQUISITION_RECURRENCE.  Distinct schema and constants so
+# the historical v0.3->v0.4 contract remains byte-identical and replayable.
+G13_REVIEW_RECOVERY_V2_SCHEMA_VERSION = "g13-review-recovery-event-v0.2"
+G13_REVIEW_RECOVERY_V2_REASON = "RECONCILED_EXTERNAL_FAILURES"
+G13_REVIEW_RECOVERY_V2_POLICY_VERSION = "g13-d-structural-autonomy-v0.5"
+G13_REVIEW_RECOVERY_V2_POLICY_ID = "G13_STRUCTURAL_AUTONOMY_POLICY_V0_5"
+G13_REVIEW_RECOVERY_V2_PREVIOUS_POLICY_VERSION = G13_REVIEW_RECOVERY_POLICY_VERSION
+# Blocker admitted for the v0.4 -> v0.5 recovery.  The historical v0.3 -> v0.4
+# recovery only had to satisfy REVIEW shape; for the v2 transition we bind the
+# admitted blocker explicitly so only the external-recurrence case clears.
+G13_REVIEW_RECOVERY_V2_SUPPORTED_BLOCKER = "G13_EXTERNAL_ACQUISITION_RECURRENCE"
 G13_OPERATOR_RECOVERY_FAILURE_RULES = (
     "G13_REPEATED_EXECUTION_FAILURE",
     "G13_REPEATED_LOCAL_BLOCK",
@@ -61,6 +73,12 @@ _REVIEW_CANONICAL_FIELDS = (
     "canary_execution_limit",
     "concurrency_limit",
     "created_at",
+)
+
+_REVIEW_V2_CANONICAL_FIELDS = (
+    *_REVIEW_CANONICAL_FIELDS[:8],
+    "source_failure_episode_ids",
+    *_REVIEW_CANONICAL_FIELDS[8:],
 )
 
 
@@ -108,6 +126,10 @@ def canonical_review_recovery_material(payload: Mapping[str, Any]) -> dict[str, 
     return {field: payload.get(field) for field in _REVIEW_CANONICAL_FIELDS}
 
 
+def canonical_review_recovery_v2_material(payload: Mapping[str, Any]) -> dict[str, Any]:
+    return {field: payload.get(field) for field in _REVIEW_V2_CANONICAL_FIELDS}
+
+
 def _validate_review_recovery_payload(payload: Mapping[str, Any]) -> bool:
     try:
         material = canonical_review_recovery_material(payload)
@@ -133,8 +155,41 @@ def _validate_review_recovery_payload(payload: Mapping[str, Any]) -> bool:
         return False
 
 
+def _validate_review_recovery_v2_payload(payload: Mapping[str, Any]) -> bool:
+    try:
+        material = canonical_review_recovery_v2_material(payload)
+        return (
+            material["schema_version"] == G13_REVIEW_RECOVERY_V2_SCHEMA_VERSION
+            and material["operator_reviewed"] is True
+            and material["recovery_reason"] == G13_REVIEW_RECOVERY_V2_REASON
+            and material["previous_policy_version"] == G13_REVIEW_RECOVERY_V2_PREVIOUS_POLICY_VERSION
+            and material["policy_version"] == G13_REVIEW_RECOVERY_V2_POLICY_VERSION
+            and isinstance(material["agent_identity_id"], str)
+            and bool(material["agent_identity_id"])
+            and isinstance(material["source_policy_evaluation_id"], str)
+            and bool(material["source_policy_evaluation_id"])
+            and isinstance(material["source_event_ids"], list)
+            and bool(material["source_event_ids"])
+            and material["source_event_ids"] == sorted(set(material["source_event_ids"]))
+            and isinstance(material["source_failure_episode_ids"], list)
+            and bool(material["source_failure_episode_ids"])
+            and material["source_failure_episode_ids"]
+            == sorted(set(material["source_failure_episode_ids"]))
+            and Decimal(str(material["canary_budget_usdc"])) == Decimal("0.010000")
+            and material["canary_execution_limit"] == 1
+            and material["concurrency_limit"] == 1
+            and payload.get("canonical_hash") == canonical_hash(material)
+        )
+    except (InvalidOperation, KeyError, TypeError, ValueError):
+        return False
+
+
 def validate_recovery_payload(payload: Mapping[str, Any]) -> bool:
-    return _validate_endpoint_recovery_payload(payload) or _validate_review_recovery_payload(payload)
+    return (
+        _validate_endpoint_recovery_payload(payload)
+        or _validate_review_recovery_payload(payload)
+        or _validate_review_recovery_v2_payload(payload)
+    )
 
 
 def recovery_event_id(payload: Mapping[str, Any]) -> str:
@@ -274,6 +329,95 @@ def record_review_recovery(
     return event
 
 
+def record_review_recovery_v2(
+    session: Session,
+    *,
+    agent_identity_id: str,
+    source_policy_evaluation_id: str,
+    source_event_ids: Iterable[str],
+    created_at: datetime | None = None,
+) -> UsageEvent:
+    """Authorize one bounded probe on the v0.4 -> v0.5 transition.
+
+    Precondition: the source policy evaluation is a real v0.4 REVIEW whose
+    sole_blocker is G13_EXTERNAL_ACQUISITION_RECURRENCE.  The episode ids
+    carried in the recovery payload are exactly those the source evaluation
+    `result_core.external_failure_episode_ids` already attributed to the
+    blocker, preserving the causal audit chain:
+      external episodes -> v0.4 REVIEW -> recovery v0.5 -> post-cutoff window.
+    No historical observation or event row is mutated or deleted; the cutoff
+    is applied by downstream readers filtering on `created_at`.
+    """
+
+    from app.domain.mandates import PolicyEvaluation
+
+    source_evaluation = session.get(PolicyEvaluation, source_policy_evaluation_id)
+    if (
+        source_evaluation is None
+        or source_evaluation.policy_subject_id != agent_identity_id
+        or source_evaluation.policy_version != G13_REVIEW_RECOVERY_V2_PREVIOUS_POLICY_VERSION
+        or source_evaluation.result != "REVIEW"
+    ):
+        raise ValueError("G13_REVIEW_RECOVERY_EVALUATION_INVALID")
+    result_core = dict(source_evaluation.result_core or {})
+    if result_core.get("sole_blocker") != G13_REVIEW_RECOVERY_V2_SUPPORTED_BLOCKER:
+        raise ValueError("G13_REVIEW_RECOVERY_EVALUATION_INVALID")
+    source_episode_ids = tuple(sorted({
+        str(value) for value in (result_core.get("external_failure_episode_ids") or ())
+        if value
+    }))
+    if not source_episode_ids:
+        raise ValueError("G13_REVIEW_RECOVERY_EVALUATION_INVALID")
+    source_ids = sorted(set(str(value) for value in source_event_ids))
+    source_events = session.query(UsageEvent).filter(UsageEvent.event_id.in_(source_ids)).all()
+    if (
+        not source_ids
+        or {event.event_id for event in source_events} != set(source_ids)
+        or any(
+            event.event_type != "ACQUISITION_PAYMENT_RECONCILED"
+            or (event.metadata_ or {}).get("settled") is not False
+            for event in source_events
+        )
+    ):
+        raise ValueError("G13_REVIEW_RECOVERY_SOURCE_INVALID")
+
+    instant = created_at or datetime.now(timezone.utc)
+    material = {
+        "schema_version": G13_REVIEW_RECOVERY_V2_SCHEMA_VERSION,
+        "agent_identity_id": agent_identity_id,
+        "operator_reviewed": True,
+        "recovery_reason": G13_REVIEW_RECOVERY_V2_REASON,
+        "previous_policy_version": G13_REVIEW_RECOVERY_V2_PREVIOUS_POLICY_VERSION,
+        "policy_version": G13_REVIEW_RECOVERY_V2_POLICY_VERSION,
+        "source_policy_evaluation_id": source_policy_evaluation_id,
+        "source_event_ids": source_ids,
+        "source_failure_episode_ids": sorted(set(str(v) for v in source_episode_ids)),
+        "canary_budget_usdc": "0.010000",
+        "canary_execution_limit": 1,
+        "concurrency_limit": 1,
+        "created_at": _iso(instant),
+    }
+    payload = {**material, "canonical_hash": canonical_hash(material)}
+    if not _validate_review_recovery_v2_payload(payload):
+        raise ValueError("G13_REVIEW_RECOVERY_EVENT_INVALID")
+    event_id = recovery_event_id(payload)
+    existing = session.get(UsageEvent, event_id)
+    if existing is not None:
+        if existing.event_type != G13_RECOVERY_EVENT_TYPE or existing.metadata_ != payload:
+            raise ValueError("G13_REVIEW_RECOVERY_EVENT_CONFLICT")
+        return existing
+    event = UsageEvent(
+        event_id=event_id,
+        mandate_id=None,
+        event_type=G13_RECOVERY_EVENT_TYPE,
+        metadata_=payload,
+        created_at=instant,
+    )
+    session.add(event)
+    session.flush()
+    return event
+
+
 def latest_operator_recovery(session: Session, agent_identity_id: str) -> UsageEvent | None:
     events = (
         session.query(UsageEvent)
@@ -304,11 +448,19 @@ __all__ = [
     "G13_OPERATOR_RECOVERY_PREVIOUS_POLICY_VERSION",
     "G13_REVIEW_RECOVERY_POLICY_ID",
     "G13_REVIEW_RECOVERY_POLICY_VERSION",
-    "G13_REVIEW_RECOVERY_SCHEMA_VERSION",
+    "G13_REVIEW_RECOVERY_PREVIOUS_POLICY_VERSION",
     "G13_REVIEW_RECOVERY_REASON",
+    "G13_REVIEW_RECOVERY_SCHEMA_VERSION",
+    "G13_REVIEW_RECOVERY_V2_POLICY_ID",
+    "G13_REVIEW_RECOVERY_V2_POLICY_VERSION",
+    "G13_REVIEW_RECOVERY_V2_PREVIOUS_POLICY_VERSION",
+    "G13_REVIEW_RECOVERY_V2_REASON",
+    "G13_REVIEW_RECOVERY_V2_SCHEMA_VERSION",
+    "G13_REVIEW_RECOVERY_V2_SUPPORTED_BLOCKER",
     "G13_RECOVERY_EVENT_TYPE",
     "latest_operator_recovery",
     "record_operator_recovery",
     "record_review_recovery",
+    "record_review_recovery_v2",
     "validate_recovery_payload",
 ]
