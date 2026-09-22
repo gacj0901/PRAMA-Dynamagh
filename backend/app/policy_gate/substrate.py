@@ -49,6 +49,11 @@ class PolicyEvaluationCore:
     result: str
     result_core: Mapping[str, Any]
     created_at: datetime | None = None
+    effective_policy_version: str | None = None
+    policy_binding_id: str | None = None
+    policy_binding_hash: str | None = None
+    source_transition_id: str | None = None
+    recovery_event_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.policy_type not in POLICY_TYPES:
@@ -137,6 +142,11 @@ class PolicyEvaluationCore:
             "result_core": dict(self.result_core),
             "result_hash": self.result_hash,
             "replay_identity": self.replay_identity,
+            "effective_policy_version": self.effective_policy_version,
+            "policy_binding_id": self.policy_binding_id,
+            "policy_binding_hash": self.policy_binding_hash,
+            "source_transition_id": self.source_transition_id,
+            "recovery_event_id": self.recovery_event_id,
             "created_at": self.created_at or datetime.now(timezone.utc),
         }
 
@@ -186,6 +196,11 @@ def replay_policy(
         or replayed.policy_subject_id != persisted.policy_subject_id
         or replayed.input_hash != persisted.input_hash
         or replayed.result_hash != persisted.result_hash
+        or replayed.effective_policy_version != persisted.effective_policy_version
+        or replayed.policy_binding_id != persisted.policy_binding_id
+        or replayed.policy_binding_hash != persisted.policy_binding_hash
+        or replayed.source_transition_id != persisted.source_transition_id
+        or replayed.recovery_event_id != persisted.recovery_event_id
         or tuple(sorted(replayed.triggered_rule_ids)) != tuple(sorted(persisted.triggered_rule_ids))
         or replayed.result != persisted.result
     ):

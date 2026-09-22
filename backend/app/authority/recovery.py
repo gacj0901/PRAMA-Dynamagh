@@ -75,6 +75,30 @@ _REVIEW_CANONICAL_FIELDS = (
     "created_at",
 )
 
+
+def _activate_policy_binding_for_recovery(session: Session, event: UsageEvent) -> None:
+    """Bind a real SQLAlchemy transition in the same transaction as the event.
+
+    Small in-memory test doubles intentionally do not expose ``bind`` and are
+    left as pure event-contract tests; production sessions always do.
+    """
+
+    if not hasattr(session, "bind"):
+        return
+    from app.authority.binding import activate_g13_policy_binding
+
+    payload = event.metadata_ or {}
+    activate_g13_policy_binding(
+        session,
+        agent_id=str(payload["agent_identity_id"]),
+        effective_policy_version=str(payload["policy_version"]),
+        previous_policy_version=payload.get("previous_policy_version"),
+        source_transition_type=event.event_type,
+        source_transition_id=event.event_id,
+        recovery_event_id=event.event_id,
+        activated_at=event.created_at,
+    )
+
 _REVIEW_V2_CANONICAL_FIELDS = (
     *_REVIEW_CANONICAL_FIELDS[:8],
     "source_failure_episode_ids",
@@ -247,6 +271,7 @@ def record_operator_recovery(
     if existing is not None:
         if existing.event_type != G13_RECOVERY_EVENT_TYPE or existing.metadata_ != payload:
             raise ValueError("G13_RECOVERY_EVENT_CONFLICT")
+        _activate_policy_binding_for_recovery(session, existing)
         return existing
     event = UsageEvent(
         event_id=event_id,
@@ -257,6 +282,7 @@ def record_operator_recovery(
     )
     session.add(event)
     session.flush()
+    _activate_policy_binding_for_recovery(session, event)
     return event
 
 
@@ -316,6 +342,7 @@ def record_review_recovery(
     if existing is not None:
         if existing.event_type != G13_RECOVERY_EVENT_TYPE or existing.metadata_ != payload:
             raise ValueError("G13_REVIEW_RECOVERY_EVENT_CONFLICT")
+        _activate_policy_binding_for_recovery(session, existing)
         return existing
     event = UsageEvent(
         event_id=event_id,
@@ -326,6 +353,7 @@ def record_review_recovery(
     )
     session.add(event)
     session.flush()
+    _activate_policy_binding_for_recovery(session, event)
     return event
 
 
@@ -405,6 +433,7 @@ def record_review_recovery_v2(
     if existing is not None:
         if existing.event_type != G13_RECOVERY_EVENT_TYPE or existing.metadata_ != payload:
             raise ValueError("G13_REVIEW_RECOVERY_EVENT_CONFLICT")
+        _activate_policy_binding_for_recovery(session, existing)
         return existing
     event = UsageEvent(
         event_id=event_id,
@@ -415,6 +444,7 @@ def record_review_recovery_v2(
     )
     session.add(event)
     session.flush()
+    _activate_policy_binding_for_recovery(session, event)
     return event
 
 

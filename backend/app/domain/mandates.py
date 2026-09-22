@@ -67,6 +67,25 @@ class AgentIdentity(Base):
     authority_profiles: Mapped[list[AgentAuthorityProfile]] = relationship(back_populates="agent_identity", order_by="AgentAuthorityProfile.version")
 
 
+class G13PolicyBinding(Base):
+    """Durable current binding of one agent to one effective G13 version."""
+
+    __tablename__ = "g13_policy_bindings"
+    __table_args__ = (
+        UniqueConstraint("agent_id", name="uq_g13_policy_binding_agent"),
+    )
+
+    binding_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agent_identities.agent_id"), nullable=False, index=True)
+    effective_policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    previous_policy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_transition_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_transition_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    recovery_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    activated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    canonical_hash: Mapped[str] = mapped_column(String(66), nullable=False)
+
+
 class Mandate(Base):
     __tablename__ = "mandates"
 
@@ -645,6 +664,11 @@ class PolicyEvaluation(Base):
     result_core: Mapped[dict] = mapped_column(JSONB, nullable=False)
     result_hash: Mapped[str] = mapped_column(String(66), nullable=False, index=True)
     replay_identity: Mapped[str] = mapped_column(String(66), nullable=False, unique=True)
+    effective_policy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    policy_binding_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    policy_binding_hash: Mapped[str | None] = mapped_column(String(66), nullable=True)
+    source_transition_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    recovery_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 

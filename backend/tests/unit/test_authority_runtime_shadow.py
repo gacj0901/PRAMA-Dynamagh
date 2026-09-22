@@ -135,6 +135,21 @@ def test_g13_runtime_window_counts_significant_causal_executions(monkeypatch):
     values.extend(observation(i, f"denied-{i}", "NOT_EXECUTED", True) for i in range(2, 30))
     monkeypatch.setattr(runtime, "build_o_agent_stream", lambda *args: values)
     monkeypatch.setattr(runtime, "latest_operator_recovery", lambda *args: None)
+    monkeypatch.setattr(
+        runtime,
+        "current_g13_policy_binding",
+        lambda *args: type(
+            "Binding",
+            (),
+            {
+                "effective_policy_version": "g13-d-structural-autonomy-v0.2",
+                "binding_id": "binding-runtime",
+                "canonical_hash": "0x" + "1" * 64,
+                "source_transition_id": "legacy-transition",
+                "recovery_event_id": None,
+            },
+        )(),
+    )
 
     result = runtime.evaluate_current_g13(object(), "agent-runtime")
 

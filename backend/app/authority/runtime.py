@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -14,6 +14,13 @@ from app.persistence.database import SessionLocal
 from app.agents.observation import build_o_agent_stream
 from app.authority.autonomy import G13PolicyInput, G13_RECOVERY_POLICY_VERSIONS, evaluate_g13_policy
 from app.authority.recovery import latest_operator_recovery
+from app.authority.binding import (
+    G13_POLICY_BINDING_MISSING,
+    G13_POLICY_BINDING_UNSUPPORTED,
+    binding_provenance,
+    current_g13_policy_binding,
+    policy_binding_missing_evaluation,
+)
 from app.authority.composition import (
     AuthorityCompositionInput,
     evaluate_authority_composition,
@@ -64,6 +71,15 @@ class AuthorityShadowCheckpoint:
 
 def evaluate_current_g13(session: Session, agent_id: str) -> PolicyEvaluationCore:
     """Evaluate the binding recent trajectory without persisting or mutating it."""
+    binding = current_g13_policy_binding(session, agent_id)
+    if binding is None:
+        # A missing binding is an explicit fail-closed state.  In particular,
+        # never infer the legacy v0.2 selector from the absence of a recovery.
+        return policy_binding_missing_evaluation(agent_id, reason=G13_POLICY_BINDING_MISSING)
+    policy_version = str(binding.effective_policy_version)
+    from app.authority.autonomy import G13_SUPPORTED_POLICY_VERSIONS
+    if policy_version not in G13_SUPPORTED_POLICY_VERSIONS:
+        return policy_binding_missing_evaluation(agent_id, reason=G13_POLICY_BINDING_UNSUPPORTED)
     observations = [
         item for item in build_o_agent_stream(session, agent_id)
         if item.facts.autonomy_run_state != "SKIPPED"
@@ -74,9 +90,18 @@ def evaluate_current_g13(session: Session, agent_id: str) -> PolicyEvaluationCor
     # the identity's missing downstream artifacts as a current failure.
     if not any(item.source_kind != "AGENT_IDENTITY" for item in observations):
         observations = []
-    recovery_event = latest_operator_recovery(session, agent_id)
+    # The binding selects the effective version.  The recovery event is only
+    # optional provenance/cutoff data; losing that lookup can never downgrade
+    # the effective version.
+    from app.domain.mandates import UsageEvent
+    recovery_event = None
+    if binding.recovery_event_id:
+        recovery_event = (
+            session.get(UsageEvent, binding.recovery_event_id)
+            if hasattr(session, "get")
+            else latest_operator_recovery(session, agent_id)
+        )
     recovery_payload = None
-    policy_version = None
     if recovery_event is not None:
         recovery_payload = {**recovery_event.metadata_, "recovery_event_id": recovery_event.event_id}
         cutoff = recovery_event.created_at
@@ -88,7 +113,6 @@ def evaluate_current_g13(session: Session, agent_id: str) -> PolicyEvaluationCor
             and datetime.fromisoformat(item.observed_at.replace("Z", "+00:00")) > cutoff
             and item.source_id != recovery_event.event_id
         ]
-        policy_version = str(recovery_payload["policy_version"])
     grouped: dict[str, list[Any]] = {}
     for item in observations:
         run_ids = tuple(item.source_lineage.autonomy_run_ids)
@@ -156,7 +180,6 @@ def evaluate_current_g13(session: Session, agent_id: str) -> PolicyEvaluationCor
     if policy_version in G13_RECOVERY_POLICY_VERSIONS and recovery_event is not None:
         # The recovery probe is authoritative once its durable request/event
         # exists, even if O_AGENT window compaction omits the marker.
-        from app.domain.mandates import UsageEvent
         cutoff = recovery_event.created_at
         probe_events = session.query(UsageEvent).all() if hasattr(session, "query") else []
         probe_exists = any(
@@ -173,7 +196,7 @@ def evaluate_current_g13(session: Session, agent_id: str) -> PolicyEvaluationCor
         if probe_exists:
             result.result_core["recovery_probe_attempt_count"] = 1
             result.result_core["recovery_probe_authorized"] = False
-    return result
+    return replace(result, **binding_provenance(binding))
 
 
 G13_RECOVERY_OBSERVATION_EVENT_TYPE = "G13_RECOVERY_OBSERVATION_CONSUMED"

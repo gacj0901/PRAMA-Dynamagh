@@ -287,6 +287,17 @@ def test_runtime_uses_only_post_recovery_trajectory(monkeypatch):
             created_at=RECOVERY_AT,
         ),
     )
+    monkeypatch.setattr(
+        runtime,
+        "current_g13_policy_binding",
+        lambda *args: SimpleNamespace(
+            effective_policy_version=G13_OPERATOR_RECOVERY_POLICY_VERSION,
+            binding_id="binding-recovery",
+            canonical_hash="0x" + "2" * 64,
+            source_transition_id="recovery-transition",
+            recovery_event_id="recovery-event-1",
+        ),
+    )
     result = runtime.evaluate_current_g13(object(), "autonomy-controller")
     assert result.policy_version == G13_OPERATOR_RECOVERY_POLICY_VERSION
     assert result.result == "THROTTLE"
