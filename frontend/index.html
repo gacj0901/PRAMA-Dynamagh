@@ -171,7 +171,7 @@ table.origin tr:last-child td{color:var(--blue)}
 
 footer{margin-top:2.2rem;padding-top:1rem;border-top:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:1rem;align-items:end;font-family:var(--mono);font-size:.68rem;color:var(--dim)}
 .footer-brand{display:flex;align-items:center;gap:.85rem}
-.footer-logo-placeholder{width:230px;height:58px;border:1px dashed #3b3b3e;display:grid;place-items:center;font-size:.52rem;letter-spacing:.08em;color:var(--mute);background:#101012}
+.footer-logo-placeholder{width:230px;height:58px;object-fit:contain;object-position:left center;border:1px solid #3b3b3e;padding:.45rem;background:#101012}
 .footer-note{max-width:360px;line-height:1.45}
 footer a{color:var(--dim);text-decoration:none;border-bottom:1px solid var(--line)}
 footer a:hover{color:var(--blue);border-color:var(--blue)}
@@ -410,8 +410,7 @@ footer a:hover{color:var(--blue);border-color:var(--blue)}
 
   <footer>
     <div class="footer-brand">
-      <!-- PLACEHOLDER: replace this block with the official AptadinamiK Cybernetics logo image -->
-      <div class="footer-logo-placeholder">APTADINAMIK LOGO<br>PLACEHOLDER</div>
+      <img class="footer-logo-placeholder" src="/LOGOS%20identidad/Aptadynamik%20Logo.png" alt="Aptadynamik Cybernetics" />
       <span class="footer-note">Audit layer for machine decisions, built on Telegraph.</span>
     </div>
     <span><a href="https://github.com/gacj0901/PRAMA-Dynamagh">Repository</a> · <a href="https://prama-dynamagh.up.railway.app/">Live app</a></span>
