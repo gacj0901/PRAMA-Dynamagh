@@ -216,10 +216,40 @@ export interface ActivityAggregate {
   tickets_emitted: number;
   requester_principals: string[];
   public_spend_usdc: string;
+  processed_responses: number;
+  responses_with_evidence: number;
+  unique_miners_processed: string[];
+  responses_by_intent: Record<string, number>;
+  actual_spend_usdc: string;
+  latest_miner_response: MinerResponse | null;
+}
+
+export interface MinerResponse {
+  telegraph_call_id: string;
+  mandate_id: string;
+  origin: string | null;
+  intent: string | null;
+  miner_id: string | null;
+  miner_name: string | null;
+  signal_hash: string | null;
+  cost_usdc: string;
+  duration_ms: number | null;
+  economic_state: string;
+  with_evidence: boolean;
+}
+
+export interface DemandOriginSummary {
+  total: number;
+  external_user_driven: number;
+  manual: number;
+  m2m_inbound: number;
+  user: number;
+  fixture_canary: number;
+  unattributed_legacy: number;
 }
 
 export interface OperationalLedger {
-  mandates: { total: number; ticketed: number; manual: number; m2m: number; autonomous: number };
+  mandates: { total: number; ticketed: number; manual: number; m2m: number; user: number; autonomous: number };
   autonomous_outcomes: {
     telegraph_succeeded: number;
     authority_restricted: number;
@@ -276,8 +306,16 @@ export interface PublicActivity {
   public_spend_usdc: string | number;
   inbound_m2m_requests: number;
   inbound_m2m_requester_principals: string[];
+  processed_responses: number;
+  responses_with_evidence: number;
+  unique_miners_processed: string[];
+  responses_by_intent: Record<string, number>;
+  actual_spend_usdc: string;
+  latest_miner_response: MinerResponse | null;
+  demand_origin: DemandOriginSummary;
   manual: ActivityAggregate;
   m2m: ActivityAggregate;
+  user: ActivityAggregate;
   autonomous?: ActivityAggregate;
   operational_ledger?: OperationalLedger;
 }

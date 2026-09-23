@@ -12,12 +12,12 @@ import hmac
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -51,20 +51,34 @@ class M2MAcquisitionInput(BaseModel):
 
 
 class M2MMandateCreate(BaseModel):
-    """The complete M2M command surface; unknown fields are rejected."""
+    """Bounded M2M command surface with a small request/intention shortcut.
+
+    Existing callers may continue sending ``agent_id``/``client_id``/``text``.
+    The public form may send only ``intent`` and ``request``; its authenticated
+    Bearer scope becomes the stable external identity.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1, max_length=255)
-    client_id: str = Field(min_length=1, max_length=255)
-    text: str = Field(min_length=1, max_length=20_000)
+    agent_id: str | None = Field(default=None, min_length=1, max_length=255)
+    client_id: str | None = Field(default=None, min_length=1, max_length=255)
+    text: str | None = Field(default=None, min_length=1, max_length=20_000)
+    intent: str | None = Field(default=None, min_length=1, max_length=255)
+    request: str | None = Field(default=None, min_length=1, max_length=20_000)
     mandate_type: str = Field(default="GENERAL", min_length=1, max_length=100)
     max_budget_usdc: Decimal = Field(default=Decimal("0.500000"), gt=0, max_digits=18, decimal_places=6)
     deadline: datetime | None = None
     acquisitions: list[M2MAcquisitionInput] = Field(default_factory=list, max_length=5)
 
+    @model_validator(mode="after")
+    def require_request_text(self) -> "M2MMandateCreate":
+        if not (self.text or self.request):
+            raise ValueError("M2M_REQUEST_REQUIRED")
+        return self
+
 
 class M2MMandateRead(BaseModel):
+    request_id: str
     mandate_id: str
     idempotency_key: str | None = None
     agent_id: str
@@ -81,6 +95,8 @@ class M2MMandateRead(BaseModel):
     acquisitions: list[dict[str, Any]] = Field(default_factory=list)
     lineage: dict[str, Any] = Field(default_factory=dict)
     titular_check: dict[str, Any]
+    result_endpoint: str
+    ticket_endpoint: str | None = None
 
 
 def _m2m_context_id(token: str) -> str:
@@ -136,7 +152,9 @@ def _lineage(session: Session, mandate_id: str) -> dict[str, Any]:
 def _read_mandate(session: Session, mandate: Mandate, idempotency_key: str | None = None) -> dict[str, Any]:
     tasks = session.query(AcquisitionTask).filter_by(mandate_id=mandate.mandate_id).order_by(AcquisitionTask.ordinal).all()
     ticket = session.query(Ticket).filter_by(mandate_id=mandate.mandate_id).order_by(Ticket.created_at.desc()).first()
+    request_id = idempotency_key or ""
     return {
+        "request_id": request_id,
         "titular_check": titular_check_contract(ticket),
         "mandate_id": mandate.mandate_id,
         "idempotency_key": idempotency_key,
@@ -162,6 +180,8 @@ def _read_mandate(session: Session, mandate: Mandate, idempotency_key: str | Non
             for item in tasks
         ],
         "lineage": _lineage(session, mandate.mandate_id),
+        "result_endpoint": f"/v1/m2m/mandates/{mandate.mandate_id}",
+        "ticket_endpoint": f"/v1/m2m/tickets/{ticket.ticket_id}" if ticket else None,
     }
 
 
@@ -190,9 +210,12 @@ def create_m2m_mandate(
     if not idempotency_key or len(idempotency_key) > 128:
         raise HTTPException(status_code=400, detail="M2M_IDEMPOTENCY_KEY_REQUIRED")
     request_hash = _request_hash(payload)
+    effective_agent_id = payload.agent_id or request.headers.get("x-agent-id") or f"m2m-client:{m2m_context_id[-16:]}"
+    effective_client_id = payload.client_id or request.headers.get("x-client-id") or "external-m2m"
+    effective_text = payload.text or payload.request or ""
     existing = session.query(M2MMandateRequest).filter_by(idempotency_key=idempotency_key).one_or_none()
     if existing is not None:
-        if existing.request_hash != request_hash or existing.agent_id != payload.agent_id or existing.client_id != payload.client_id:
+        if existing.request_hash != request_hash or existing.agent_id != effective_agent_id or existing.client_id != effective_client_id:
             raise HTTPException(status_code=409, detail="M2M_IDEMPOTENCY_KEY_REUSED")
         mandate = _get_m2m_mandate(session, existing.mandate_id, m2m_context_id)
         return _read_mandate(session, mandate, existing.idempotency_key)
@@ -201,26 +224,33 @@ def create_m2m_mandate(
         raise HTTPException(status_code=422, detail="M2M_WORKFLOW_BUDGET_EXCEEDED")
     if len(payload.acquisitions) > competition_max_calls_per_workflow():
         raise HTTPException(status_code=422, detail="WORKFLOW_ACQUISITION_COUNT_EXCEEDED")
-    plan = payload.acquisitions or [M2MAcquisitionInput(query=payload.text)]
+    plan = payload.acquisitions or [M2MAcquisitionInput(query=effective_text, requested_intent=payload.intent)]
     for item in plan:
         if not item.query.strip():
             raise HTTPException(status_code=422, detail="WORKFLOW_ACQUISITION_INVALID")
     try:
-        identity = get_or_create_m2m_identity(session, payload.agent_id, m2m_context_id)
+        identity = get_or_create_m2m_identity(session, effective_agent_id, m2m_context_id)
     except ValueError as error:
         session.rollback()
         code = str(error)
         raise HTTPException(status_code=403 if code == "M2M_AGENT_INACTIVE" else 409, detail=code) from error
     try:
+        authenticated_at = datetime.now(timezone.utc).isoformat()
         mandate = Mandate(
-            actor_id=f"m2m:{payload.client_id}:{payload.agent_id}",
-            agent_id=payload.agent_id,
+            actor_id=f"m2m:{effective_client_id}:{effective_agent_id}",
+            agent_id=effective_agent_id,
             agent_identity_id=identity.agent_id,
             m2m_context_id=m2m_context_id,
-            client_id=payload.client_id,
-            text=payload.text,
+            client_id=effective_client_id,
+            text=effective_text,
             mandate_type=payload.mandate_type,
-            constraints={},
+            constraints={
+                "request_id": idempotency_key,
+                "source_principal": effective_client_id,
+                "external_agent_id": effective_agent_id,
+                "authenticated_at": authenticated_at,
+                "intent": payload.intent,
+            },
             max_budget_usdc=payload.max_budget_usdc,
             deadline=payload.deadline,
             status=MandateStatus.RECEIVED.value,
@@ -246,12 +276,19 @@ def create_m2m_mandate(
             M2MMandateRequest(
                 idempotency_key=idempotency_key,
                 request_hash=request_hash,
-                agent_id=payload.agent_id,
-                client_id=payload.client_id,
+                agent_id=effective_agent_id,
+                client_id=effective_client_id,
                 mandate_id=mandate.mandate_id,
             )
         )
-        metadata = {**_attribution(mandate), "idempotency_key": idempotency_key}
+        metadata = {
+            **_attribution(mandate),
+            "request_id": idempotency_key,
+            "source_principal": effective_client_id,
+            "external_agent_id": effective_agent_id,
+            "authenticated_at": authenticated_at,
+            "intent": payload.intent,
+        }
         session.add_all(
             [
                 MandateTransition(mandate_id=mandate.mandate_id, from_status=None, to_status=MandateStatus.RECEIVED.value, reason="m2m mandate created"),
@@ -269,7 +306,7 @@ def create_m2m_mandate(
         existing = session.query(M2MMandateRequest).filter_by(idempotency_key=idempotency_key).one_or_none()
         if existing is None:
             raise HTTPException(status_code=503, detail="M2M_IDEMPOTENCY_UNAVAILABLE")
-        if existing.request_hash != request_hash or existing.agent_id != payload.agent_id or existing.client_id != payload.client_id:
+        if existing.request_hash != request_hash or existing.agent_id != effective_agent_id or existing.client_id != effective_client_id:
             raise HTTPException(status_code=409, detail="M2M_IDEMPOTENCY_KEY_REUSED")
         return _read_mandate(session, _get_m2m_mandate(session, existing.mandate_id, m2m_context_id), existing.idempotency_key)
     except Exception as error:

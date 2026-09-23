@@ -1,9 +1,17 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.api.m2m import M2MMandateCreate
 
 
 client = TestClient(app)
+
+
+def test_public_m2m_short_request_form_is_normalized():
+    payload = M2MMandateCreate(intent="CRYPTO_PRICE", request="What is the current price of ETH in USD?")
+    assert payload.intent == "CRYPTO_PRICE"
+    assert payload.request.startswith("What is")
+    assert payload.agent_id is None
 
 
 def test_m2m_auth_is_dedicated_and_fail_closed(monkeypatch):

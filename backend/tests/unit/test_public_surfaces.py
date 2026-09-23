@@ -79,6 +79,68 @@ def test_public_activity_exposes_authenticated_m2m_requester_principal():
     assert result["m2m"]["requester_principals"] == ["TELEGRAPH"]
 
 
+def test_public_activity_counts_only_processed_miner_responses_and_evidence():
+    from app.domain.mandates import AcquisitionTask, AutonomyRun, Decision, Evidence, Mandate, PublicManualSpendReservation, StructuralEvaluation, TelegraphCall, Ticket
+
+    now = datetime.now(timezone.utc)
+    mandate = SimpleNamespace(mandate_id="m1", actor_id="human", origin="MANUAL", status="TICKETED")
+    processed = SimpleNamespace(
+        mandate_id="m1", acquisition_id="a1", telegraph_call_id="c1", status="SUCCEEDED",
+        miner_id="miner-1", miner_name="Miner One", intent="CRYPTO_PRICE", signal_hash="0xsignal",
+        duration_ms=120, cost_usd=Decimal("0.010000"), created_at=now,
+    )
+    transport_only = SimpleNamespace(
+        mandate_id="m1", acquisition_id="a2", telegraph_call_id="c2", status="SUCCEEDED",
+        miner_id=None, miner_name=None, intent="GAS_PRICE", signal_hash=None,
+        duration_ms=80, cost_usd=Decimal("0.010000"), created_at=now,
+    )
+    evidence = SimpleNamespace(telegraph_call_id="c1", acquisition_id="a1")
+    reservation = SimpleNamespace(mandate_id="m1", status="SETTLED", actual_spend_usdc=Decimal("0.010000"))
+    session = Session({
+        Mandate: [mandate], AcquisitionTask: [], TelegraphCall: [processed, transport_only],
+        Evidence: [evidence], Decision: [], Ticket: [], AutonomyRun: [], StructuralEvaluation: [],
+        PublicManualSpendReservation: [reservation],
+    })
+
+    result = public_activity(session)
+
+    assert result["processed_responses"] == 1
+    assert result["responses_with_evidence"] == 1
+    assert result["unique_miners_processed"] == ["miner-1"]
+    assert result["responses_by_intent"] == {"CRYPTO_PRICE": 1}
+    assert result["actual_spend_usdc"] == "0.010000"
+    assert result["latest_miner_response"]["economic_state"] == "PAYMENT_CONFIRMED"
+    assert result["manual"]["processed_responses"] == 1
+
+
+def test_public_activity_separates_demand_origin_from_fixture_responses():
+    from app.domain.mandates import AcquisitionTask, AutonomyPolicy, AutonomyRun, Decision, Evidence, Mandate, StructuralEvaluation, TelegraphCall, Ticket
+
+    manual = SimpleNamespace(mandate_id="m1", actor_id="human", origin="MANUAL", status="TICKETED", autonomy_policy_id=None)
+    fixture_mandate = SimpleNamespace(mandate_id="a1", actor_id="internal", origin="AUTONOMOUS", status="TICKETED", autonomy_policy_id="p1")
+    manual_call = SimpleNamespace(mandate_id="m1", acquisition_id="a1", telegraph_call_id="c1", status="SUCCEEDED", miner_id="miner-1", signal_hash="0x1", intent="CRYPTO_PRICE", cost_usd=Decimal("0.010000"), duration_ms=10)
+    fixture_call = SimpleNamespace(mandate_id="a1", acquisition_id="a2", telegraph_call_id="c2", status="SUCCEEDED", miner_id="miner-2", signal_hash="0x2", intent="CRYPTO_PRICE", cost_usd=Decimal("0.010000"), duration_ms=10)
+    fixture_policy = SimpleNamespace(policy_id="p1", name="G10 Live Autonomous Telegraph Fixture")
+    session = Session({
+        Mandate: [manual, fixture_mandate],
+        AutonomyPolicy: [fixture_policy],
+        TelegraphCall: [manual_call, fixture_call],
+        AcquisitionTask: [], Evidence: [], Decision: [], Ticket: [], AutonomyRun: [], StructuralEvaluation: [],
+    })
+
+    result = public_activity(session)
+
+    assert result["demand_origin"] == {
+        "total": 2,
+        "external_user_driven": 1,
+        "manual": 1,
+        "m2m_inbound": 0,
+        "user": 0,
+        "fixture_canary": 1,
+        "unattributed_legacy": 0,
+    }
+
+
 def test_competition_budget_profile_reports_authorized_g12_cap(monkeypatch):
     from app.competition import competition_budget_profile
 

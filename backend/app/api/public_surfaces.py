@@ -21,7 +21,9 @@ from app.domain.mandates import (
     Decision,
     Evidence,
     Mandate,
+    AutonomyPolicy,
     PolicyEvaluation,
+    PublicManualSpendReservation,
     StructuralEvaluation,
     TelegraphCall,
     Ticket,
@@ -31,7 +33,13 @@ from app.persistence.database import get_session
 
 
 router = APIRouter(tags=["public-read-surfaces"])
-PUBLIC_ORIGINS = ("MANUAL", "M2M")
+PUBLIC_ORIGINS = ("MANUAL", "M2M", "USER")
+FIXTURE_POLICY_NAMES = frozenset({
+    "G10 Live Autonomous Telegraph Fixture",
+    "G10 Replay-Only Verification Fixture",
+    "G10 Autonomous Fixture",
+    "prama-bounded-telegraph-http-v1",
+})
 
 
 def _iso(value: Any) -> str | None:
@@ -40,6 +48,98 @@ def _iso(value: Any) -> str | None:
 
 def _money(value: Decimal | None) -> str:
     return f"{Decimal(value or 0):.6f}"
+
+
+def _processed_call(call: TelegraphCall) -> bool:
+    """A Miner response is a completed call with provider identity and signal."""
+    return (
+        getattr(call, "status", None) == "SUCCEEDED"
+        and bool(getattr(call, "miner_id", None))
+        and bool(getattr(call, "signal_hash", None))
+    )
+
+
+def _activity_read_model(
+    session: Session,
+    mandates: list[Mandate],
+    calls: list[TelegraphCall],
+    evidence: list[Evidence],
+) -> dict[str, Any]:
+    """Return semantic production metrics from persisted response lineage.
+
+    ``telegraph_calls`` remains available as a transport metric.  The public
+    activity surface uses ``processed_responses`` for Miner work so a request
+    that never yielded a Miner signal cannot be presented as processed work.
+    """
+    processed = [item for item in calls if _processed_call(item)]
+    evidence_call_ids = {
+        str(item.telegraph_call_id)
+        for item in evidence
+        if getattr(item, "telegraph_call_id", None)
+    }
+    evidence_acquisition_ids = {
+        str(item.acquisition_id)
+        for item in evidence
+        if getattr(item, "acquisition_id", None)
+    }
+    with_evidence = [
+        item for item in processed
+        if str(item.telegraph_call_id) in evidence_call_ids
+        or str(item.acquisition_id) in evidence_acquisition_ids
+    ]
+    by_intent = Counter(str(getattr(item, "intent", None)) for item in processed if getattr(item, "intent", None))
+    latest = max(
+        processed,
+        key=lambda item: (getattr(item, "created_at", None) or 0, str(getattr(item, "telegraph_call_id", ""))),
+        default=None,
+    )
+    mandate_by_id = {item.mandate_id: item for item in mandates}
+    reservations: dict[str, PublicManualSpendReservation] = {}
+    if mandates:
+        reservations = {
+            str(item.mandate_id): item
+            for item in session.query(PublicManualSpendReservation)
+            .filter(PublicManualSpendReservation.mandate_id.in_(list(mandate_by_id)))
+            .all()
+        }
+    actual_spend = sum(
+        (Decimal(getattr(item, "actual_spend_usdc", 0) or 0) for item in reservations.values()),
+        Decimal("0"),
+    )
+    latest_response = None
+    if latest is not None:
+        reservation = reservations.get(str(latest.mandate_id))
+        if reservation is None:
+            economic_state = "UNAVAILABLE"
+        elif str(getattr(reservation, "status", "")) == "SETTLED":
+            economic_state = "PAYMENT_CONFIRMED"
+        elif str(getattr(reservation, "status", "")) == "RELEASED":
+            economic_state = "RECONCILED_NO_PAYMENT"
+        elif str(getattr(reservation, "status", "")) == "RESERVED":
+            economic_state = "PAYMENT_UNCERTAIN"
+        else:
+            economic_state = "UNAVAILABLE"
+        latest_response = {
+            "telegraph_call_id": getattr(latest, "telegraph_call_id", None),
+            "mandate_id": getattr(latest, "mandate_id", None),
+            "origin": getattr(mandate_by_id.get(getattr(latest, "mandate_id", None)), "origin", None),
+            "intent": getattr(latest, "intent", None),
+            "miner_id": getattr(latest, "miner_id", None),
+            "miner_name": getattr(latest, "miner_name", None),
+            "signal_hash": getattr(latest, "signal_hash", None),
+            "cost_usdc": _money(getattr(latest, "cost_usd", None)),
+            "duration_ms": getattr(latest, "duration_ms", None),
+            "economic_state": economic_state,
+            "with_evidence": latest in with_evidence,
+        }
+    return {
+        "processed_responses": len(processed),
+        "responses_with_evidence": len(with_evidence),
+        "unique_miners_processed": sorted({str(item.miner_id) for item in processed if item.miner_id}),
+        "responses_by_intent": dict(sorted(by_intent.items())),
+        "actual_spend_usdc": _money(actual_spend),
+        "latest_miner_response": latest_response,
+    }
 
 
 def _public_mandates(session: Session) -> list[Mandate]:
@@ -63,6 +163,7 @@ def _activity_aggregate(session: Session, mandates: list[Mandate]) -> dict[str, 
             "evidence_created": 0, "decisions_emitted": 0, "tickets_emitted": 0,
             "requester_principals": [],
             "public_spend_usdc": "0.000000",
+            **_activity_read_model(session, mandates, [], []),
         }
     mandate_ids = [item.mandate_id for item in mandates]
     tasks = session.query(AcquisitionTask).filter(AcquisitionTask.mandate_id.in_(mandate_ids)).all()
@@ -78,6 +179,7 @@ def _activity_aggregate(session: Session, mandates: list[Mandate]) -> dict[str, 
             intents_by_mandate.setdefault(item.mandate_id, set()).add(item.intent)
     spend = sum((Decimal(item.cost_usd or 0) for item in successful_calls), Decimal("0"))
     requester_principals = sorted({str(getattr(item, "client_id", "")) for item in mandates if item.origin == "M2M" and getattr(item, "client_id", None)})
+    read_model = _activity_read_model(session, mandates, calls, evidence)
     return {
         "real_users": len(actor_counts),
         "workflows_started": len(mandates),
@@ -94,6 +196,51 @@ def _activity_aggregate(session: Session, mandates: list[Mandate]) -> dict[str, 
         # it identifies the declared requester, not a Telegraph payment payer.
         "requester_principals": requester_principals,
         "public_spend_usdc": _money(spend),
+        **read_model,
+    }
+
+
+def _is_fixture_policy(policy: AutonomyPolicy | None) -> bool:
+    """Classify only the explicitly named fixture/canary policies.
+
+    The policy table has no durable demand-classification column.  Keeping the
+    allow-list here makes the public label honest: autonomous records from an
+    unknown policy remain unattributed instead of being presented as demand.
+    """
+    if policy is None:
+        return False
+    name = str(getattr(policy, "name", ""))
+    if name in FIXTURE_POLICY_NAMES:
+        return True
+    normalized = name.lower()
+    return "fixture" in normalized or "canary" in normalized
+
+
+def _demand_origin_summary(session: Session) -> dict[str, Any]:
+    """Count processed Miner responses by their persisted causal origin."""
+    mandates = {item.mandate_id: item for item in session.query(Mandate).all()}
+    policies = {item.policy_id: item for item in session.query(AutonomyPolicy).all()}
+    calls = session.query(TelegraphCall).all()
+    processed = [item for item in calls if _processed_call(item)]
+    counts = Counter()
+    for call in processed:
+        mandate = mandates.get(getattr(call, "mandate_id", None))
+        origin = getattr(mandate, "origin", None)
+        if origin in PUBLIC_ORIGINS:
+            counts["external_user_driven"] += 1
+            counts[{"MANUAL": "manual", "M2M": "m2m_inbound", "USER": "user"}[origin]] += 1
+        elif origin == "AUTONOMOUS" and _is_fixture_policy(policies.get(getattr(mandate, "autonomy_policy_id", None))):
+            counts["fixture_canary"] += 1
+        else:
+            counts["unattributed_legacy"] += 1
+    return {
+        "total": len(processed),
+        "external_user_driven": counts["external_user_driven"],
+        "manual": counts["manual"],
+        "m2m_inbound": counts["m2m_inbound"],
+        "user": counts["user"],
+        "fixture_canary": counts["fixture_canary"],
+        "unattributed_legacy": counts["unattributed_legacy"],
     }
 
 
@@ -112,11 +259,19 @@ def public_activity(session: Session) -> dict[str, Any]:
     mandates = _public_mandates(session)
     manual = [item for item in mandates if item.origin == "MANUAL"]
     m2m = [item for item in mandates if item.origin == "M2M"]
+    user = [item for item in mandates if item.origin == "USER"]
     autonomous = [item for item in session.query(Mandate).all() if item.origin == "AUTONOMOUS"]
     autonomous_summary = _activity_aggregate(session, autonomous)
     manual_summary = _activity_aggregate(session, manual)
     m2m_summary = _activity_aggregate(session, m2m)
+    user_summary = _activity_aggregate(session, user)
     operational_ledger = _operational_ledger(session, mandates, autonomous)
+    all_mandates = [*mandates, *autonomous]
+    all_mandate_ids = [item.mandate_id for item in all_mandates]
+    all_calls = session.query(TelegraphCall).filter(TelegraphCall.mandate_id.in_(all_mandate_ids)).all() if all_mandate_ids else []
+    all_evidence = session.query(Evidence).filter(Evidence.mandate_id.in_(all_mandate_ids)).all() if all_mandate_ids else []
+    all_read_model = _activity_read_model(session, all_mandates, all_calls, all_evidence)
+    demand_origin = _demand_origin_summary(session)
 
     mandate_ids = [item.mandate_id for item in mandates]
     if not mandate_ids:
@@ -147,10 +302,13 @@ def public_activity(session: Session) -> dict[str, Any]:
             "public_spend_usdc": "0.000000",
             "inbound_m2m_requests": 0,
             "inbound_m2m_requester_principals": [],
+            **all_read_model,
+            "demand_origin": demand_origin,
         }
         base["autonomous"] = autonomous_summary
         base["manual"] = manual_summary
         base["m2m"] = m2m_summary
+        base["user"] = user_summary
         base["operational_ledger"] = operational_ledger
         return base
 
@@ -169,6 +327,7 @@ def public_activity(session: Session) -> dict[str, Any]:
             intents_by_mandate.setdefault(item.mandate_id, set()).add(item.intent)
     durations = [item.duration_ms for item in successful_calls if item.duration_ms is not None]
     public_spend = sum((Decimal(item.cost_usd or 0) for item in successful_calls), Decimal("0"))
+    read_model = all_read_model
 
     return {
         "budget_profile": competition_budget_profile(),
@@ -195,12 +354,15 @@ def public_activity(session: Session) -> dict[str, Any]:
         "average_evidence_per_workflow": round(len(evidence) / len(mandates), 6),
         "average_latency_ms": round(sum(durations) / len(durations), 3) if durations else None,
         "public_spend_usdc": _money(public_spend),
+        **read_model,
         "inbound_m2m_requests": m2m_summary["workflows_started"],
         "inbound_m2m_requester_principals": m2m_summary["requester_principals"],
         "manual": manual_summary,
         "m2m": m2m_summary,
+        "user": user_summary,
         "autonomous": autonomous_summary,
         "operational_ledger": operational_ledger,
+        "demand_origin": demand_origin,
     }
 
 
@@ -245,6 +407,7 @@ def _operational_ledger(session: Session, public_mandates: list[Mandate], autono
             "ticketed": sum(item.status == "TICKETED" for item in all_mandates),
             "manual": sum(item.origin == "MANUAL" for item in all_mandates),
             "m2m": sum(item.origin == "M2M" for item in all_mandates),
+            "user": sum(item.origin == "USER" for item in all_mandates),
             "autonomous": len(autonomous),
         },
         "autonomous_outcomes": {
