@@ -15,7 +15,7 @@ Spec constraints under test:
      authority composition (no cross-module imports touched).
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -101,7 +101,11 @@ class FakeSession:
         self.store: dict = {}
 
     def seed(self, row):
-        key = getattr(row, "event_id", None) or getattr(row, "policy_evaluation_id", None)
+        key = (
+            getattr(row, "event_id", None)
+            or getattr(row, "policy_evaluation_id", None)
+            or getattr(row, "mandate_id", None)
+        )
         self.store[key] = row
 
     def get(self, model, pk):
@@ -153,15 +157,35 @@ def _policy_evaluation(
     )
 
 
-def _reconciliation_event(event_id: str, *, settled=False, created_at=AT):
+def _reconciliation_event(event_id: str, *, settled=False, created_at=AT, mandate_id=None, transaction_hash=None, settled_usdc=None, actual_cost_usdc=None):
     from app.domain.mandates import UsageEvent
 
     return UsageEvent(
         event_id=event_id,
-        mandate_id=None,
+        mandate_id=mandate_id,
         event_type="ACQUISITION_PAYMENT_RECONCILED",
-        metadata_={"settled": settled, "failure_episode_id": "fep-a"},
+        metadata_={
+            "settled": settled,
+            "failure_episode_id": "fep-a",
+            "payment_state": "PAYMENT_CONFIRMED" if settled else "RECONCILED_NO_PAYMENT",
+            "settled_usdc": settled_usdc if settled_usdc is not None else ("0.010000" if settled else "0.000000"),
+            "actual_cost_usdc": actual_cost_usdc if actual_cost_usdc is not None else ("0.010000" if settled else "0.000000"),
+            **({"transaction_hash": transaction_hash} if transaction_hash is not None else {}),
+        },
         created_at=created_at,
+    )
+
+
+def _reservation(mandate_id: str, *, settled: bool, actual: str):
+    from app.domain.mandates import PublicManualSpendReservation
+
+    return PublicManualSpendReservation(
+        mandate_id=mandate_id,
+        spend_date=date(2026, 9, 21),
+        reserved_usdc=Decimal("0"),
+        actual_spend_usdc=Decimal(actual),
+        status="SETTLED" if settled else "RELEASED",
+        origin="AUTONOMOUS",
     )
 
 
@@ -185,7 +209,8 @@ def test_current_review_recovery_preserves_v04_binding(monkeypatch):
     evaluation.policy_binding_id = binding.binding_id
     evaluation.policy_binding_hash = binding.canonical_hash
     session.seed(evaluation)
-    session.seed(_reconciliation_event("evt-current-1"))
+    session.seed(_reconciliation_event("evt-current-1", mandate_id="mandate-a"))
+    session.seed(_reservation("mandate-a", settled=False, actual="0"))
     monkeypatch.setattr(
         "app.authority.binding.current_g13_policy_binding",
         lambda *_args, **_kwargs: binding,
@@ -210,6 +235,62 @@ def test_current_review_recovery_preserves_v04_binding(monkeypatch):
         source_event_ids=["evt-current-1"],
         created_at=AT + timedelta(minutes=7),
     ).event_id == event.event_id
+
+
+def test_current_review_recovery_accepts_confirmed_payment_with_closed_reservation(monkeypatch):
+    session = FakeSession()
+    binding = type("Binding", (), {"binding_id": "binding-v04", "canonical_hash": "0x" + "a" * 64, "effective_policy_version": G13_REVIEW_RECOVERY_CURRENT_POLICY_VERSION, "recovery_event_id": "historical-v04"})()
+    evaluation = _policy_evaluation("80000000-0000-0000-0000-000000000011", episode_ids=("fep-a", "fep-b", "fep-c"))
+    evaluation.policy_binding_id = binding.binding_id; evaluation.policy_binding_hash = binding.canonical_hash
+    session.seed(evaluation)
+    for event_id, episode, settled, mandate_id in (("evt-a", "fep-a", False, "mandate-a"), ("evt-b", "fep-b", True, "mandate-b"), ("evt-c", "fep-c", False, "mandate-c")):
+        event = _reconciliation_event(event_id, settled=settled, mandate_id=mandate_id, transaction_hash="0x" + "b" * 64 if settled else None)
+        event.metadata_["failure_episode_id"] = episode
+        session.seed(event)
+        session.seed(_reservation(mandate_id, settled=settled, actual="0.010000" if settled else "0"))
+    monkeypatch.setattr("app.authority.binding.current_g13_policy_binding", lambda *_args, **_kwargs: binding)
+    event = record_current_review_recovery(session, agent_identity_id="autonomy-controller", source_policy_evaluation_id=evaluation.policy_evaluation_id, source_event_ids=["evt-a", "evt-b", "evt-c"], created_at=AT + timedelta(minutes=8))
+    assert event.metadata_["policy_version"] == G13_REVIEW_RECOVERY_CURRENT_POLICY_VERSION
+
+
+def test_current_review_recovery_rejects_payment_uncertain(monkeypatch):
+    session = FakeSession()
+    binding = type("Binding", (), {"binding_id": "binding-v04", "canonical_hash": "0x" + "a" * 64, "effective_policy_version": G13_REVIEW_RECOVERY_CURRENT_POLICY_VERSION, "recovery_event_id": "historical-v04"})()
+    evaluation = _policy_evaluation("80000000-0000-0000-0000-000000000012", episode_ids=("fep-a",))
+    evaluation.policy_binding_id = binding.binding_id; evaluation.policy_binding_hash = binding.canonical_hash; session.seed(evaluation)
+    event = _reconciliation_event("evt-uncertain", mandate_id="mandate-a")
+    event.event_type = "ACQUISITION_PAYMENT_UNCERTAIN"
+    session.seed(event); session.seed(_reservation("mandate-a", settled=False, actual="0"))
+    monkeypatch.setattr("app.authority.binding.current_g13_policy_binding", lambda *_args, **_kwargs: binding)
+    with pytest.raises(ValueError, match="SOURCE_INVALID"):
+        record_current_review_recovery(session, agent_identity_id="autonomy-controller", source_policy_evaluation_id=evaluation.policy_evaluation_id, source_event_ids=["evt-uncertain"], created_at=AT + timedelta(minutes=9))
+
+
+def test_current_review_recovery_rejects_confirmed_payment_without_tx_or_closed_ledger(monkeypatch):
+    session = FakeSession()
+    binding = type("Binding", (), {"binding_id": "binding-v04", "canonical_hash": "0x" + "a" * 64, "effective_policy_version": G13_REVIEW_RECOVERY_CURRENT_POLICY_VERSION, "recovery_event_id": "historical-v04"})()
+    evaluation = _policy_evaluation("80000000-0000-0000-0000-000000000013", episode_ids=("fep-a",))
+    evaluation.policy_binding_id = binding.binding_id; evaluation.policy_binding_hash = binding.canonical_hash; session.seed(evaluation)
+    event = _reconciliation_event("evt-confirmed-incomplete", settled=True, mandate_id="mandate-a")
+    session.seed(event); session.seed(_reservation("mandate-a", settled=False, actual="0"))
+    monkeypatch.setattr("app.authority.binding.current_g13_policy_binding", lambda *_args, **_kwargs: binding)
+    with pytest.raises(ValueError, match="SOURCE_INVALID"):
+        record_current_review_recovery(session, agent_identity_id="autonomy-controller", source_policy_evaluation_id=evaluation.policy_evaluation_id, source_event_ids=["evt-confirmed-incomplete"], created_at=AT + timedelta(minutes=10))
+
+
+def test_consumed_current_recovery_cannot_be_reused(monkeypatch):
+    session = FakeSession()
+    binding = type("Binding", (), {"binding_id": "binding-v04", "canonical_hash": "0x" + "a" * 64, "effective_policy_version": G13_REVIEW_RECOVERY_CURRENT_POLICY_VERSION, "recovery_event_id": "historical-v04"})()
+    evaluation = _policy_evaluation("80000000-0000-0000-0000-000000000014", episode_ids=("fep-a",))
+    evaluation.policy_binding_id = binding.binding_id; evaluation.policy_binding_hash = binding.canonical_hash; session.seed(evaluation)
+    source = _reconciliation_event("evt-consume", mandate_id="mandate-a")
+    session.seed(source); session.seed(_reservation("mandate-a", settled=False, actual="0"))
+    monkeypatch.setattr("app.authority.binding.current_g13_policy_binding", lambda *_args, **_kwargs: binding)
+    event = record_current_review_recovery(session, agent_identity_id="autonomy-controller", source_policy_evaluation_id=evaluation.policy_evaluation_id, source_event_ids=["evt-consume"], created_at=AT + timedelta(minutes=11))
+    from app.domain.mandates import UsageEvent
+    session.seed(UsageEvent(event_id="probe-consumed", event_type="G13_RECOVERY_PROBE_STARTED", mandate_id="mandate-a", acquisition_id="acq-a", metadata_={"recovery_event_id": event.event_id}, created_at=AT + timedelta(minutes=12)))
+    with pytest.raises(ValueError, match="ALREADY_CONSUMED"):
+        record_current_review_recovery(session, agent_identity_id="autonomy-controller", source_policy_evaluation_id=evaluation.policy_evaluation_id, source_event_ids=["evt-consume"], created_at=AT + timedelta(minutes=11))
 
 
 # ---------------------------------------------------------------------------

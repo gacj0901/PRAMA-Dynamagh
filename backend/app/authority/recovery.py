@@ -9,7 +9,7 @@ from typing import Any, Iterable, Mapping
 
 from sqlalchemy.orm import Session
 
-from app.domain.mandates import UsageEvent
+from app.domain.mandates import PublicManualSpendReservation, UsageEvent
 from app.epistemic.contracts import canonical_hash
 
 
@@ -548,11 +548,7 @@ def record_current_review_recovery(
     if (
         not source_ids
         or {event.event_id for event in source_events} != set(source_ids)
-        or any(
-            event.event_type != "ACQUISITION_PAYMENT_RECONCILED"
-            or (event.metadata_ or {}).get("settled") is not False
-            for event in source_events
-        )
+        or any(not _economically_reconciled_terminal(session, event) for event in source_events)
     ):
         raise ValueError("G13_CURRENT_REVIEW_RECOVERY_SOURCE_INVALID")
     source_episode_ids = {
@@ -560,7 +556,7 @@ def record_current_review_recovery(
         for event in source_events
         if (event.metadata_ or {}).get("failure_episode_id")
     }
-    if not set(episode_ids).issubset(source_episode_ids):
+    if source_episode_ids != set(episode_ids):
         raise ValueError("G13_CURRENT_REVIEW_RECOVERY_SOURCE_INCOMPLETE")
 
     instant = created_at or datetime.now(timezone.utc)
@@ -589,6 +585,8 @@ def record_current_review_recovery(
     if existing is not None:
         if existing.event_type != G13_RECOVERY_EVENT_TYPE or existing.metadata_ != payload:
             raise ValueError("G13_CURRENT_REVIEW_RECOVERY_EVENT_CONFLICT")
+        if _recovery_event_consumed(session, existing):
+            raise ValueError("G13_CURRENT_REVIEW_RECOVERY_ALREADY_CONSUMED")
         return existing
     event = UsageEvent(
         event_id=event_id,
@@ -601,6 +599,66 @@ def record_current_review_recovery(
     session.flush()
     # Same-policy recovery must preserve the existing durable binding.
     return event
+
+
+def _reservation_terminal_for_reconciliation(session: Session, event: UsageEvent, *, settled: bool, amount: Decimal) -> bool:
+    """Check the durable G12 reservation state behind one reconciliation.
+
+    Reconciliation is terminal only when the economic side effect is closed:
+    no-payment events have no remaining reservation, while confirmed payments
+    have a closed reservation whose actual spend equals the settled amount.
+    """
+    if not event.mandate_id:
+        return False
+    reservation = session.get(PublicManualSpendReservation, event.mandate_id)
+    if reservation is None:
+        return False
+    reserved = Decimal(str(reservation.reserved_usdc or 0))
+    actual = Decimal(str(reservation.actual_spend_usdc or 0))
+    if reserved != Decimal("0"):
+        return False
+    if settled:
+        return reservation.status == "SETTLED" and actual == amount
+    return reservation.status in {"SETTLED", "RELEASED"} and actual == Decimal("0")
+
+
+def _economically_reconciled_terminal(session: Session, event: UsageEvent) -> bool:
+    """Return true only for a complete, terminal economic reconciliation."""
+    if event.event_type != "ACQUISITION_PAYMENT_RECONCILED":
+        return False
+    metadata = event.metadata_ or {}
+    settled = metadata.get("settled")
+    try:
+        settled_usdc = Decimal(str(metadata.get("settled_usdc", "-1")))
+        actual_cost = Decimal(str(metadata.get("actual_cost_usdc", "-1")))
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+    if not settled:
+        return (
+            settled is False
+            and settled_usdc == Decimal("0")
+            and actual_cost == Decimal("0")
+            and _reservation_terminal_for_reconciliation(session, event, settled=False, amount=Decimal("0"))
+        )
+    if settled is not True:
+        return False
+    tx_hash = metadata.get("transaction_hash") or metadata.get("tx_hash")
+    return (
+        metadata.get("payment_state") == "PAYMENT_CONFIRMED"
+        and isinstance(tx_hash, str)
+        and bool(tx_hash.strip())
+        and settled_usdc > Decimal("0")
+        and actual_cost == settled_usdc
+        and _reservation_terminal_for_reconciliation(session, event, settled=True, amount=settled_usdc)
+    )
+
+
+def _recovery_event_consumed(session: Session, event: UsageEvent) -> bool:
+    """A recovery event is single-use once its probe has been started."""
+    if not hasattr(session, "query"):
+        return False
+    rows = session.query(UsageEvent).filter_by(event_type="G13_RECOVERY_PROBE_STARTED").all()
+    return any((row.metadata_ or {}).get("recovery_event_id") == event.event_id for row in rows)
 
 
 def latest_operator_recovery(session: Session, agent_identity_id: str) -> UsageEvent | None:
