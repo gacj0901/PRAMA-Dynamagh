@@ -1,21 +1,501 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" href="/LOGOS%20identidad/AptadinamiK%20Cybernetic%20Isotipo.ico" sizes="any" />
-    <title>PRAMA-Dynamagh | Structural Epistemic Layer</title>
-    <meta name="description" content="PRAMA-Dynamagh turns Telegraph intelligence into evidence-bound, structurally evaluated and reconstructible machine decisions." />
-    <meta property="og:type" content="website" />
-    <meta property="og:title" content="PRAMA-Dynamagh" />
-    <meta property="og:description" content="Mandate → Telegraph/x402 → Evidence → PRAMAgraph → Decision → Verifiable Ticket" />
-    <meta property="og:url" content="https://prama-dynamagh.up.railway.app/" />
-    <meta property="og:image" content="https://prama-dynamagh.up.railway.app/LOGOS%20identidad/PRAMA-Dynamagh%20logo.png" />
-    <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content="PRAMA-Dynamagh" />
-    <meta name="twitter:description" content="Mandate → Telegraph/x402 → Evidence → PRAMAgraph → Decision → Verifiable Ticket" />
-    <meta name="twitter:image" content="https://prama-dynamagh.up.railway.app/LOGOS%20identidad/PRAMA-Dynamagh%20logo.png" />
-    <link rel="canonical" href="https://prama-dynamagh.up.railway.app/" />
-  </head>
-  <body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>PRAMA / Dynamagh — Knowledge Viability Layer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sometype+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0d0d0f;
+  --panel:#141416;
+  --line:#2a2a2c;
+  --cream:#f7ece6;
+  --gold:#caa07d;
+  --blue:#89b1ca;
+  --dim:#8a8580;
+  --mute:#5c5854;
+  --alert:#ff3d48;
+  --mono:'Sometype Mono',ui-monospace,'JetBrains Mono',Consolas,monospace;
+  --sans:'Sometype Mono',ui-monospace,'JetBrains Mono',Consolas,monospace;
+  --serif:'Sometype Mono',Georgia,serif;
+}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--cream);
+  font-family:var(--sans);
+  -webkit-font-smoothing:antialiased;
+}
+button,a{font:inherit}
+.wrap{max-width:1240px;margin:0 auto;padding:1.4rem 1.35rem 2.4rem}
+
+header{
+  display:grid;
+  grid-template-columns:minmax(230px,.75fr) minmax(390px,1.55fr) auto;
+  align-items:end;
+  gap:1.6rem;
+  border-bottom:1px solid var(--line);
+  padding-bottom:1.15rem;
+  margin-bottom:1.45rem;
+}
+.brand-lockup{display:flex;align-items:flex-end;min-width:0}
+.logo-placeholder{
+  width:235px;height:88px;border:1px dashed #3b3b3e;color:var(--dim);
+  display:grid;place-items:center;font-family:var(--mono);font-size:.6rem;letter-spacing:.09em;
+  text-align:center;line-height:1.5;background:#101012;
+}
+.tagline-wrap{padding-bottom:.18rem}
+.tagline-main{font-family:var(--sans);font-weight:500;font-size:1.02rem;line-height:1.3;color:var(--cream);letter-spacing:.01em}
+.tagline-main strong{font-weight:500}
+.header-actions{display:flex;flex-direction:column;align-items:flex-end;gap:.8rem}
+.about-trigger{
+  appearance:none;background:transparent;cursor:pointer;
+  font-family:var(--mono);font-size:.72rem;font-weight:600;letter-spacing:.025em;
+  color:var(--alert);border:1px solid #666;padding:.28rem .5rem;
+}
+.about-trigger:hover,.about-trigger.active{border-color:var(--alert);background:rgba(255,61,72,.05)}
+.status{display:flex;gap:.45rem;flex-wrap:wrap;justify-content:flex-end}
+.pill{font-family:var(--mono);font-size:.63rem;letter-spacing:.06em;border:1px solid var(--line);color:var(--dim);padding:.27rem .55rem;border-radius:2px;white-space:nowrap}
+.pill.on{color:var(--gold);border-color:#4a3d2e}
+
+.main-grid{display:grid;grid-template-columns:1.38fr 1fr;gap:2.7rem;align-items:start}
+@media (max-width:980px){
+  header{grid-template-columns:1fr;align-items:start}
+  .header-actions{align-items:flex-start}
+  .status{justify-content:flex-start}
+  .main-grid{grid-template-columns:1fr}
+  .logo-placeholder{width:min(290px,100%)}
+}
+
+h2{font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;color:var(--dim);margin:0 0 .95rem;font-weight:500}
+h2 span{color:var(--cream)}
+.section-label{font-family:var(--mono);font-size:.64rem;letter-spacing:.14em;color:var(--dim);margin:1.35rem 0 .65rem}
+
+.pipeline-panel{min-width:0}
+.pipe{position:relative;padding-left:3.2rem}
+.pipe::before{content:"";position:absolute;left:1rem;top:.45rem;bottom:.45rem;width:1px;background:var(--line)}
+.step{position:relative;padding:.78rem 0;border-bottom:1px solid var(--line);display:grid;grid-template-columns:auto 1fr auto;gap:.8rem;align-items:center}
+.step:last-child{border-bottom:none}
+.step .n{position:absolute;left:-3.15rem;top:1.02rem;width:1.25rem;font-family:var(--mono);font-size:.65rem;color:var(--dim)}
+.icon-placeholder{
+  position:absolute;left:-2.28rem;top:.45rem;width:1.9rem;height:1.9rem;border:1px dashed #3b3b3e;
+  color:var(--mute);display:grid;place-items:center;font-family:var(--mono);font-size:.42rem;background:#111113;
+}
+.step .label{font-size:.98rem}
+.step .id{font-family:var(--mono);font-size:.7rem;color:var(--dim);margin-top:.17rem}
+.step .state{font-family:var(--mono);font-size:.66rem;letter-spacing:.05em;text-align:right;white-space:nowrap}
+.state.go{color:var(--gold)}
+.state.wait{color:var(--dim)}
+.state.mute{color:var(--mute)}
+
+.runtime-inline{margin-top:1.8rem;padding-top:1rem;border-top:1px solid var(--line)}
+.runtime-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 1.6rem}
+@media (max-width:640px){.runtime-grid{grid-template-columns:1fr}}
+.trow{display:flex;justify-content:space-between;gap:1rem;font-family:var(--mono);font-size:.73rem;padding:.36rem 0;border-bottom:1px solid var(--line)}
+.trow span:first-child{color:var(--dim)}
+.trow span:last-child{color:var(--blue);text-align:right}
+.trow span.dash{color:var(--mute)}
+.capability-note{margin-top:.5rem;padding:.45rem 0;border-bottom:none;border-top:1px dashed var(--line)}
+.capability-note span:first-child{color:var(--mute)}
+.capability-note span.dash{color:var(--mute)}
+
+.miner-panel{min-width:0}
+.metric-hero{border-bottom:1px solid var(--line);padding-bottom:1.15rem;margin-bottom:1rem}
+.metric-hero .num{font-family:var(--mono);font-size:4rem;line-height:.92;color:var(--gold);font-weight:600}
+.metric-hero .cap{font-family:var(--mono);font-size:.68rem;color:var(--dim);letter-spacing:.1em;margin-top:.4rem}
+.metric-hero .subcap{font-family:var(--mono);font-size:.62rem;color:var(--blue);letter-spacing:.06em;margin-top:.3rem}
+
+table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:.74rem}
+table.origin td,table.origin th{padding:.42rem 0;border-bottom:1px solid var(--line);text-align:right}
+table.origin th{color:var(--dim);font-weight:500;letter-spacing:.04em}
+table.origin td:first-child,table.origin th:first-child{text-align:left;color:var(--cream)}
+table.origin tr:last-child td{color:var(--blue)}
+
+.intent-list{margin-top:.25rem}
+.intent-row{display:flex;justify-content:space-between;font-family:var(--mono);font-size:.74rem;padding:.36rem 0;border-bottom:1px solid var(--line)}
+.intent-row:last-child{border-bottom:none}
+.intent-row span:first-child{color:var(--dim)}
+.intent-row span:last-child{color:var(--cream)}
+
+.latest-card{margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--line)}
+.latest-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 1.5rem}
+@media (max-width:640px){.latest-grid{grid-template-columns:1fr}}
+
+.secondary{margin-top:2.2rem;padding-top:1.2rem;border-top:1px solid var(--line);display:grid;grid-template-columns:1fr 1fr;gap:2.2rem}
+@media (max-width:860px){.secondary{grid-template-columns:1fr}}
+.secondary h3{font-family:var(--mono);font-size:.68rem;letter-spacing:.12em;color:var(--dim);margin:0 0 .7rem;font-weight:500}
+
+/* About view — same interaction logic as the current frontend: header remains,
+   dashboard is replaced by a dedicated information stage, with an explicit close control. */
+.about-stage{display:none;position:relative;min-height:540px}
+.about-stage.open{display:block}
+.dashboard-stage.hidden{display:none}
+.about-close{
+  position:absolute;right:0;top:-.25rem;width:34px;height:34px;background:transparent;border:1px solid var(--line);
+  color:var(--dim);cursor:pointer;font-family:var(--mono);font-size:1.25rem;line-height:1;z-index:2;
+}
+.about-close:hover{color:var(--cream);border-color:var(--cream)}
+.about-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
+.about-block{background:var(--bg);padding:1.55rem 1.6rem;min-height:190px}
+.about-block.lead{grid-column:1 / -1;min-height:auto;padding-right:4rem}
+.about-block h2{font-family:var(--sans);font-size:1.05rem;letter-spacing:.02em;color:var(--cream);margin:.35rem 0 .75rem;font-weight:600}
+.about-block p,.about-block li{font-size:.86rem;line-height:1.65;color:#b9b2ad}
+.about-block p{margin:.45rem 0}
+.about-block ul{margin:.7rem 0 0;padding-left:1.15rem}
+.about-block li+li{margin-top:.4rem}
+.eyebrow{font-family:var(--mono);font-size:.65rem;letter-spacing:.14em;color:var(--blue)}
+.method-line{font-family:var(--mono);font-size:.73rem;line-height:1.7;color:var(--cream);padding:.65rem 0;border-bottom:1px solid var(--line)}
+.method-line.alt{color:var(--dim)}
+.method-line b{color:var(--gold);font-weight:500}
+.about-guard{border-left:1px solid #4a3d2e;padding-left:.8rem;color:var(--gold)!important;margin-top:1rem!important}
+.principles{display:grid;gap:.45rem;margin-top:1rem}
+.principles b{font-family:var(--mono);font-size:.7rem;font-weight:500;color:var(--blue)}
+.about-block.why small{display:block;margin-top:1.2rem;font-family:var(--mono);font-size:.66rem;letter-spacing:.06em;color:var(--dim)}
+@media(max-width:760px){.about-grid{grid-template-columns:1fr}.about-block.lead{grid-column:auto}}
+.public-read-model{margin-top:1.25rem;border-top:1px solid var(--line);padding-top:1rem}
+.public-read-model .trow{font-size:.7rem}
+.m2m-appendix{position:relative;display:inline-block;margin-left:1rem}
+.m2m-appendix-trigger{appearance:none;border:1px solid #1a9b43;background:#07120b;color:#50ef78;padding:.48rem .7rem;cursor:pointer;font-size:.64rem;letter-spacing:.04em}
+.m2m-appendix-trigger:hover,.m2m-appendix-trigger.active{background:#10351d;border-color:#50ef78;color:#b8ffc8}
+.m2m-contract-panel{position:fixed;z-index:80;left:50%;bottom:68px;width:min(430px,calc(100vw - 32px));transform:translateX(-50%);padding:1.35rem 1.5rem 1.5rem;border:1px solid #123a46;border-radius:22px;background:rgba(2,7,9,.98);box-shadow:0 18px 60px rgba(0,0,0,.65),0 0 0 1px rgba(0,166,220,.08)}
+.m2m-contract-close{position:absolute;top:.5rem;right:.65rem;border:0;background:transparent;color:#91a5ab;font-size:1.35rem;cursor:pointer}
+.m2m-contract-heading{display:flex;justify-content:space-between;gap:.75rem;padding-right:1.6rem;border-bottom:1px solid #164454;color:#35d7ff;font-size:.62rem;letter-spacing:.12em;text-transform:uppercase}
+.m2m-contract-heading strong{color:#b8c8cd;font-size:.55rem;font-weight:400;letter-spacing:.04em}
+.m2m-contract-panel pre{margin:1rem 0 0;overflow-x:auto;color:#d6f4ff;font:13px/1.65 var(--mono);white-space:pre}
+@media(max-width:640px){.m2m-appendix{display:block;margin:1rem 0 0}.m2m-appendix-trigger{width:100%}.m2m-contract-panel{bottom:18px}}
+
+footer{margin-top:2.2rem;padding-top:1rem;border-top:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:1rem;align-items:end;font-family:var(--mono);font-size:.68rem;color:var(--dim)}
+.footer-brand{display:flex;align-items:center;gap:.85rem}
+.footer-logo-placeholder{width:230px;height:58px;border:1px dashed #3b3b3e;display:grid;place-items:center;font-size:.52rem;letter-spacing:.08em;color:var(--mute);background:#101012}
+.footer-note{max-width:360px;line-height:1.45}
+footer a{color:var(--dim);text-decoration:none;border-bottom:1px solid var(--line)}
+footer a:hover{color:var(--blue);border-color:var(--blue)}
+@media (max-width:640px){footer{grid-template-columns:1fr}.footer-brand{align-items:flex-start;flex-direction:column}.footer-logo-placeholder{width:min(290px,100%)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand-lockup">
+      <!-- PLACEHOLDER: replace this block with the official PRAMA-Dynamagh logo image -->
+      <img class="logo-placeholder" src="/LOGOS%20identidad/PRAMA-Dynamagh%20logo.png" alt="PRAMA-Dynamagh" />
+    </div>
+
+    <div class="tagline-wrap">
+      <div class="tagline-main">
+        <strong>Structural layer of knowledge viability</strong><br>
+        <strong>for autonomous agents.</strong>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <button id="aboutTrigger" type="button" class="about-trigger" aria-expanded="false" aria-controls="aboutStage">About PRAMA Dynamagh</button>
+      <div class="status">
+        <span class="pill on">API UP</span>
+        <span class="pill">WORKER · INTERNAL</span>
+        <span class="pill">GATEWAY · PROTECTED</span>
+        <span class="pill">CHAIN · NOT EXPOSED</span>
+        <span class="pill on">MODE · AUTONOMOUS</span>
+      </div>
+    </div>
+  </header>
+
+  <div id="dashboardStage" class="dashboard-stage">
+    <main class="main-grid">
+      <section class="pipeline-panel">
+        <h2>Decision Pipeline — <span id="pipelineMandate">live production read model</span></h2>
+
+        <div class="pipe">
+          <div class="step">
+            <span class="n">01</span><span class="icon-placeholder">ICON</span>
+            <div><div class="label">Mandate</div><div class="id">b9f38d1e_09ed · AUTONOMOUS</div></div>
+            <div class="state go">TICKETED</div>
+          </div>
+          <div class="step">
+            <span class="n">02</span><span class="icon-placeholder">ICON</span>
+            <div><div class="label">Acquisition</div><div class="id">1139e565_d898 · CRYPTO_PRICE</div></div>
+            <div class="state go">SUCCEEDED</div>
+          </div>
+          <div class="step">
+            <span class="n">03</span><span class="icon-placeholder">ICON</span>
+            <div><div class="label">Evidence</div><div class="id" title="Artifact origin and integrity checked. Content correctness is not asserted.">acd24b04_6934 · ORIGIN &amp; INTEGRITY CHECKED</div></div>
+            <div class="state go">ADMITTED</div>
+          </div>
+          <div class="step">
+            <span class="n">04</span><span class="icon-placeholder">ICON</span>
+            <div><div class="label">PRAMAgraph Evaluation</div><div class="id">7b620d2e_9a57</div></div>
+            <div class="state go">STRUCTURALLY_ADMISSIBLE</div>
+          </div>
+          <div class="step">
+            <span class="n">05</span><span class="icon-placeholder">ICON</span>
+            <div><div class="label">Decision</div><div class="id">47e7c701_f9a6 · prama-gate-v0</div></div>
+            <div class="state go">PERMIT</div>
+          </div>
+          <div class="step">
+            <span class="n">06</span><span class="icon-placeholder">ICON</span>
+            <div><div class="label">Ticket</div><div class="id">9d58787f_1153</div></div>
+            <div class="state wait">LOCAL ONLY</div>
+          </div>
+        </div>
+        <div class="trow capability-note"><span>ERC-8183 callback (optional on-chain anchor)</span><span class="dash">CAPABILITY NOT AVAILABLE</span></div>
+
+        <div class="runtime-inline">
+          <h2>Runtime — <span>read only</span></h2>
+          <div class="runtime-grid">
+            <div class="trow"><span>Autonomy global</span><span>ENABLED</span></div>
+            <div class="trow"><span>Authority mode</span><span>BINDING</span></div>
+            <div class="trow"><span>Active policies</span><span>1</span></div>
+            <div class="trow"><span>G13 policy</span><span>v0.4</span></div>
+            <div class="trow"><span>Active runs</span><span>0</span></div>
+            <div class="trow"><span>Scheduler</span><span>ACTIVE</span></div>
+            <div class="trow"><span>Today spend</span><span>0.030000 USDC</span></div>
+            <div class="trow"><span>Next due</span><span class="dash">—</span></div>
+            <!-- INVARIANT: AUTHORITY — BINDING ≠ G13 state ≠ recovery state.
+                 `Authority mode` reflects the durable policy binding (design-time).
+                 `G13 policy` reflects longitudinal state. `recovery-state-row`
+                 renders ONLY while an episode requires recovery intervention. -->
+            <div class="trow" id="recoveryStateRow" hidden><span>Recovery</span><span id="recoveryStateValue">—</span></div>
+          </div>
+        </div>
+
+        <!-- INVARIANT: PAYMENT_UNCERTAIN is a separate economic state, NOT a Miner response.
+             This block renders ONLY if there is an episode with payment_state in
+             (UNCERTAIN, PENDING_RECONCILIATION). Otherwise it stays hidden.
+             Data contract (must come from API, never computed client-side):
+             - payment_reconciliation: PENDING | BLOCKED | RECONCILED
+             - held_budget_usdc: reserved amount
+             - settlement_state: UNCERTAIN | CONFIRMED | FAILED -->
+        <div class="runtime-inline" id="economicStateBlock" hidden>
+          <h2>Economic State — <span>read only</span></h2>
+          <div class="runtime-grid">
+            <div class="trow"><span>Payment reconciliation</span><span id="econReconciliation">—</span></div>
+            <div class="trow"><span>Held budget</span><span id="econHeldBudget">—</span></div>
+            <div class="trow"><span>Settlement</span><span id="econSettlement">—</span></div>
+            <div class="trow"><span>Episode</span><span id="econEpisodeId" class="dash">—</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="miner-panel">
+        <h2>Miner Responses</h2>
+
+        <div class="metric-hero">
+          <div class="num">—</div>
+          <div class="cap" title="DISTINCT responses with valid Evidence artifact. Only SUCCEEDED with miner_id and signal_hash.">RESPONSES PROCESSED · — WITH EVIDENCE</div>
+          <div class="subcap" title="Never computed as COUNT(*) from telegraph_calls. Must come from read-model API.">REAL MINER OUTPUTS RECEIVED AND PROCESSED</div>
+        </div>
+
+        <div class="section-label">BY ORIGIN</div>
+        <table class="origin">
+          <tr><th>Origin</th><th>Responses</th><th>W/ Evidence</th></tr>
+          <tr><td>AUTONOMOUS · INTERNAL</td><td>—</td><td>—</td></tr>
+          <tr><td>MANUAL</td><td>—</td><td>—</td></tr>
+          <tr><td>M2M · INBOUND</td><td>—</td><td>—</td></tr>
+          <tr><td>USER</td><td>—</td><td>—</td></tr>
+          <tr><td>TOTAL</td><td>—</td><td>—</td></tr>
+        </table>
+
+        <div class="public-read-model">
+          <div class="section-label">PUBLIC READ MODEL · REAL RECORDS</div>
+          <div class="trow"><span>ALL HISTORY</span><span id="publicTotal">—</span></div>
+          <div class="trow"><span>MINER RESPONSES PROCESSED</span><span id="publicResponses">—</span></div>
+          <div class="trow"><span>WITH EVIDENCE</span><span id="publicEvidence">—</span></div>
+          <div class="section-label">DEMAND ORIGIN</div>
+          <div class="trow"><span>EXTERNAL / USER-DRIVEN</span><span id="publicExternal">—</span></div>
+          <div class="trow"><span>MANUAL</span><span id="publicManual">—</span></div>
+          <div class="trow"><span>M2M · INBOUND</span><span id="publicM2M">—</span></div>
+          <div class="trow"><span>FIXTURE / CANARY</span><span id="publicFixture">—</span></div>
+          <div class="trow"><span>UNATTRIBUTED / LEGACY</span><span id="publicLegacy">—</span></div>
+          <div class="trow"><span>ACTUAL SPEND USDC</span><span id="publicSpend">—</span></div>
+        </div>
+
+        <div class="section-label">RESPONSES BY INTENT</div>
+        <div class="intent-list">
+          <div class="intent-row"><span>CRYPTO_PRICE</span><span>601</span></div>
+          <div class="intent-row"><span>GAS_PRICE</span><span>2</span></div>
+          <div class="intent-row"><span>FINANCIAL_DATA</span><span>1</span></div>
+          <div class="intent-row"><span>TELEGRAPH_KNOWLEDGE</span><span>1</span></div>
+          <div class="intent-row"><span>TOKEN_HOLDER_COUNT</span><span>1</span></div>
+        </div>
+
+        <div class="latest-card">
+          <h2>Latest Miner Response</h2>
+          <div class="latest-grid">
+            <div class="trow"><span>Intent</span><span>CRYPTO_PRICE</span></div>
+            <div class="trow"><span>Miner</span><span>CoinGecko Crypto</span></div>
+            <div class="trow"><span>Signal</span><span>0x8fd0f34c_b4df</span></div>
+            <div class="trow"><span>Cost</span><span>0.010000 USDC</span></div>
+            <div class="trow"><span>Duration</span><span>24 ms</span></div>
+            <div class="trow"><span>Evidence</span><span>ADMITTED</span></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <section class="secondary">
+      <div>
+        <h3>CHAIN · PERSISTED</h3>
+        <div class="trow"><span>Network</span><span>NOT EXPOSED</span></div>
+        <div class="trow"><span>Anchor</span><span>LOCAL_ONLY</span></div>
+        <div class="trow"><span>Contract</span><span class="dash">—</span></div>
+        <div class="trow"><span>On-chain tx</span><span class="dash">—</span></div>
+      </div>
+      <div>
+        <h3>PRODUCTION STATE</h3>
+        <div class="trow"><span>API</span><span>HEALTHY</span></div>
+        <div class="trow"><span>Worker</span><span>READY</span></div>
+        <div class="trow"><span>Authority</span><span>BINDING</span></div>
+        <div class="trow"><span>G13</span><span>CONTINUE</span></div>
+      </div>
+    </section>
+  </div>
+
+  <section id="aboutStage" class="about-stage" aria-hidden="true">
+    <button id="aboutClose" type="button" class="about-close" aria-label="Close About">×</button>
+    <section class="about-grid">
+      <article class="about-block lead">
+        <span class="eyebrow">ABOUT PRAMA-DYNAMAGH</span>
+        <h2>What PRAMA-Dynamagh does</h2>
+        <p>PRAMA-Dynamagh converts mandates into evidence-bound machine decisions. It acquires intelligence through Telegraph, preserves provenance, evaluates structural admissibility through PRAMAgraph, and issues deterministic Decision Tickets that remain traceable to the evidence that produced them.</p>
+      </article>
+
+      <article class="about-block">
+        <h2>How it works</h2>
+        <div class="method-line">Mandate <b>→</b> Telegraph <b>→</b> Miner <b>→</b> Evidence <b>→</b> PRAMAgraph <b>→</b> Decision <b>→</b> Ticket</div>
+        <div class="method-line alt">Authority <b>→</b> Acquisition <b>→</b> Provenance <b>→</b> Structural evaluation <b>→</b> Actionability</div>
+        <p class="about-guard">Before an autonomous action continues, PRAMA-Dynamagh tests whether the acquired evidence is structurally admissible for the decision being made.</p>
+      </article>
+
+      <article class="about-block">
+        <h2>What has been demonstrated</h2>
+        <ul>
+          <li>Telegraph/x402 acquisitions with real Miner responses.</li>
+          <li>Persisted provenance from acquisition through Evidence.</li>
+          <li>Deterministic structural evaluation and PERMIT / REVIEW / BLOCK decisions.</li>
+          <li>Verifiable Tickets with replayable lineage.</li>
+          <li>Budgeted autonomous execution with economic and longitudinal authority gates.</li>
+        </ul>
+      </article>
+
+      <article class="about-block discipline">
+        <h2>Epistemic discipline</h2>
+        <p>PRAMA does not equate a response with knowledge. Acquisition establishes access; provenance establishes origin; Evidence establishes an attributable object; structural evaluation tests whether that object can support a decision.</p>
+        <p>A Decision Ticket records not merely an answer, but the chain by which that answer became actionable.</p>
+        <div class="principles">
+          <b>Provenance is not truth.</b>
+          <b>Verification is not evaluation.</b>
+          <b>A decision must remain reconstructible from its evidence.</b>
+        </div>
+      </article>
+
+      <article class="about-block why">
+        <h2>Why it matters</h2>
+        <p>Autonomous agents increasingly act on machine-generated intelligence. PRAMA-Dynamagh introduces a structural layer between acquisition and action: one that preserves provenance, evaluates viability, constrains autonomy and leaves a verifiable decision artifact.</p>
+        <small>Acquire → Trace → Evaluate → Decide → Verify</small>
+      </article>
+
+      <article class="about-block why">
+        <h2>Built on Telegraph</h2>
+        <p>Telegraph provides machine-native access to Miners and intelligence. PRAMA-Dynamagh receives and structures those outputs so an autonomous system can reason over evidence without confusing provider response, provenance, evaluation and authority.</p>
+        <small>Telegraph intelligence → PRAMAgraph evaluation → governed action</small>
+      </article>
+    </section>
+  </section>
+
+  <footer>
+    <div class="footer-brand">
+      <!-- PLACEHOLDER: replace this block with the official AptadinamiK Cybernetics logo image -->
+      <div class="footer-logo-placeholder">APTADINAMIK LOGO<br>PLACEHOLDER</div>
+      <span class="footer-note">Audit layer for machine decisions, built on Telegraph.</span>
+    </div>
+    <span><a href="https://github.com/gacj0901/PRAMA-Dynamagh">Repository</a> · <a href="https://prama-dynamagh.up.railway.app/">Live app</a></span>
+    <div class="m2m-appendix">
+      <button type="button" class="m2m-appendix-trigger" id="m2mAppendixTrigger" aria-expanded="false">01010111 01000101 01001100 01000011 01001111 01001101 01000101 M2M</button>
+      <section class="m2m-contract-panel" id="m2mContractPanel" role="dialog" aria-label="M2M integration contract" hidden>
+        <button type="button" class="m2m-contract-close" id="m2mAppendixClose" aria-label="Close M2M contract">×</button>
+        <div class="m2m-contract-heading"><span>M2M APPENDIX</span><strong>autonomous agent interface</strong></div>
+        <pre>{
+  "name": "prama-dynamagh",
+  "capability": "evidence_bound_intelligence_acquisition",
+  "accepts": [
+    "intent",
+    "request"
+  ],
+  "returns": [
+    "evidence",
+    "evaluation",
+    "decision",
+    "ticket"
+  ],
+  "designed_for": "autonomous_agents"
+}</pre>
+      </section>
+    </div>
+  </footer>
+
+  <!-- SEMANTIC CONTRACT v3 — invariants enforced in this revision:
+       1. EVIDENCE: ORIGIN & INTEGRITY CHECKED (provenance/integrity ≠ truth)
+       2. AUTHORITY: BINDING ≠ G13 state ≠ recovery state (recovery conditional)
+       3. MINER RESPONSES PROCESSED: never COUNT(*); DISTINCT with filters; must come from read-model API
+       4. LATEST MINER RESPONSE: only SUCCEEDED + miner_id + signal_hash; PAYMENT_UNCERTAIN belongs to ECONOMIC STATE
+       5. PAYMENT_UNCERTAIN: separate economic state block, rendered only when relevant
+       6. AUTONOMOUS·INTERNAL ≠ M2M·INBOUND; INBOUND M2M ≠ OUTBOUND TELEGRAPH ACQUISITION
+       7. ERC-8183 callback: optional capability, not a mandatory pipeline step
+       All fonts: Sometype Mono -->
+
+</div>
+
+<script src="/v3-runtime.js"></script>
+
+<script>
+(() => {
+  const trigger = document.getElementById('aboutTrigger');
+  const close = document.getElementById('aboutClose');
+  const dashboard = document.getElementById('dashboardStage');
+  const about = document.getElementById('aboutStage');
+
+  function setAbout(open) {
+    dashboard.classList.toggle('hidden', open);
+    about.classList.toggle('open', open);
+    about.setAttribute('aria-hidden', String(!open));
+    trigger.setAttribute('aria-expanded', String(open));
+    trigger.classList.toggle('active', open);
+    trigger.textContent = open ? 'Back to live view' : 'About PRAMA Dynamagh';
+    if (open) {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      close.focus({ preventScroll: true });
+    } else {
+      trigger.focus({ preventScroll: true });
+    }
+  }
+
+  trigger.addEventListener('click', () => setAbout(!about.classList.contains('open')));
+  close.addEventListener('click', () => setAbout(false));
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && about.classList.contains('open')) setAbout(false);
+  });
+})();
+
+(() => {
+  const trigger = document.getElementById('m2mAppendixTrigger');
+  const panel = document.getElementById('m2mContractPanel');
+  const close = document.getElementById('m2mAppendixClose');
+  if (!trigger || !panel || !close) return;
+  const setOpen = (open) => {
+    panel.hidden = !open;
+    trigger.setAttribute('aria-expanded', String(open));
+    trigger.classList.toggle('active', open);
+  };
+  trigger.addEventListener('click', () => setOpen(panel.hidden));
+  close.addEventListener('click', () => setOpen(false));
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') setOpen(false); });
+})();
+</script>
+</body>
 </html>
