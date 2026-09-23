@@ -164,13 +164,28 @@
   letter-spacing: .01em;
 }
 
-.ledger-title {
+.ledger-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 24px;
   margin-bottom: 16px;
-  padding-bottom: 8px;
   border-bottom: 1px solid #0b7184;
+}
+
+.ledger-title {
+  padding-bottom: 8px;
   color: #13b6cf;
   font-size: 12px;
   letter-spacing: .08em;
+}
+
+.ledger-header > strong {
+  padding-bottom: 8px;
+  color: #b9e6f8;
+  font-size: 16px;
+  letter-spacing: .02em;
+  white-space: nowrap;
 }
 
 .operational-ledger-console section {
@@ -202,6 +217,16 @@
 .ledger-row-indent {
   padding-left: 15px;
   color: #72b6c7;
+}
+
+.ledger-utc {
+  display: block;
+  margin-top: 7px;
+  color: #b9e6f8;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .ledger-empty {

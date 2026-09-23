@@ -110,14 +110,30 @@ function LedgerRow({ label, value, indent = false }: { label: string; value: num
 }
 
 function OperationalLedgerView({ ledger }: { ledger?: OperationalLedger }) {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
   if (!ledger) return <p className="ledger-empty">Operational ledger unavailable.</p>;
   const { mandates, autonomous_outcomes: outcomes, telegraph_call_state: calls, authority } = ledger;
+  const utcLabel = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "UTC",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(now).replace(",", "");
   return <div className="operational-ledger-console" aria-label="Operational ledger">
-    <div className="ledger-title">OPERATIONAL LEDGER</div>
+    <div className="ledger-header"><div className="ledger-title">OPERATIONAL LEDGER</div><strong>PRAMA Dynamagh</strong></div>
     <section><h3>MANDATES</h3><LedgerRow label="Total" value={mandates.total} /><LedgerRow label="Ticketed" value={mandates.ticketed} /><LedgerRow label="Manual" value={mandates.manual} /><LedgerRow label="M2M" value={mandates.m2m} /><LedgerRow label="Autonomous" value={mandates.autonomous} /></section>
     <section><h3>AUTONOMOUS OUTCOMES</h3><LedgerRow label="Telegraph succeeded" value={outcomes.telegraph_succeeded} /><LedgerRow label="Authority restricted" value={outcomes.authority_restricted} /><LedgerRow label="Composition restricted" value={outcomes.composition_restricted} indent /><LedgerRow label="G13 review" value={outcomes.g13_review} indent /><LedgerRow label="External / worker failures" value={outcomes.external_worker_failures} /><LedgerRow label="Running" value={outcomes.running} /></section>
     <section><h3>TELEGRAPH CALL STATE</h3><LedgerRow label="Succeeded" value={calls.succeeded} /><LedgerRow label="Reconciled / no payment" value={calls.reconciled_no_payment} /><LedgerRow label="Payment uncertain" value={calls.payment_uncertain} /><LedgerRow label="Requested" value={calls.requested} /><LedgerRow label="Not executed" value={calls.not_executed} /><LedgerRow label="No TelegraphCall" value={calls.no_telegraph_call} /></section>
     <section><h3>AUTHORITY</h3><LedgerRow label="Next action authorized" value={authority.next_action_authorized} /><LedgerRow label="G13 review" value={authority.g13_review} /><LedgerRow label="G13 throttle" value={authority.g13_throttle} /></section>
+    <time className="ledger-utc" dateTime={now.toISOString()}>{utcLabel} UTC</time>
   </div>;
 }
 
