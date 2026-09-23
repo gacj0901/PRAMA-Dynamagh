@@ -3,7 +3,7 @@
 from alembic import op
 
 
-revision = "0030_policy_evaluation_binding_identity"
+revision = "0030_eval_binding_identity"
 down_revision = "0029_g13_policy_binding"
 branch_labels = None
 depends_on = None
