@@ -110,16 +110,28 @@ class PolicyEvaluationCore:
 
     @property
     def replay_identity(self) -> str:
-        return canonical_hash(
-            {
-                "policy_id": self.policy_id,
-                "policy_version": self.policy_version,
-                "policy_type": self.policy_type,
-                "policy_subject_type": self.policy_subject_type,
-                "policy_subject_id": self.policy_subject_id,
-                "input_hash": self.input_hash,
-            }
-        )
+        material = {
+            "policy_id": self.policy_id,
+            "policy_version": self.policy_version,
+            "policy_type": self.policy_type,
+            "policy_subject_type": self.policy_subject_type,
+            "policy_subject_id": self.policy_subject_id,
+            "input_hash": self.input_hash,
+        }
+        # Binding provenance is part of the identity of a newly persisted
+        # evaluation.  Legacy evaluations with no binding retain their exact
+        # historical replay identity; a later evaluation of the same input
+        # under a durable binding gets a distinct append-only row.
+        provenance = {
+            "effective_policy_version": self.effective_policy_version,
+            "policy_binding_id": self.policy_binding_id,
+            "policy_binding_hash": self.policy_binding_hash,
+            "source_transition_id": self.source_transition_id,
+            "recovery_event_id": self.recovery_event_id,
+        }
+        if any(value is not None for value in provenance.values()):
+            material["binding_provenance"] = provenance
+        return canonical_hash(material)
 
     @property
     def policy_evaluation_id(self) -> str:

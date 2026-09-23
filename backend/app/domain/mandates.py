@@ -645,7 +645,8 @@ class PolicyEvaluation(Base):
             "policy_subject_type",
             "policy_subject_id",
             "input_hash",
-            name="uq_policy_evaluations_input_identity",
+            "policy_binding_id",
+            name="uq_policy_evaluations_input_binding_identity",
         ),
     )
 

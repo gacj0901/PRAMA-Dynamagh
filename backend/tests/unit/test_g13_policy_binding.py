@@ -149,3 +149,22 @@ def test_policy_replay_preserves_binding_provenance():
     assert replayed.effective_policy_version == "g13-d-structural-autonomy-v0.4"
     with pytest.raises(ValueError, match="POLICY_REPLAY_MISMATCH"):
         replay_policy(bound, lambda: first)
+
+
+def test_bound_evaluation_gets_append_only_identity_distinct_from_legacy():
+    observations = []
+    legacy = evaluate_g13_policy(
+        G13PolicyInput.from_observations("autonomy-controller", observations, allow_sparse_window=True)
+    )
+    bound = legacy.__class__(
+        **{
+            **legacy.__dict__,
+            "effective_policy_version": "g13-d-structural-autonomy-v0.4",
+            "policy_binding_id": "binding-v04",
+            "policy_binding_hash": "0x" + "d" * 64,
+            "source_transition_id": "transition-v04",
+            "recovery_event_id": "recovery-v04",
+        }
+    )
+    assert bound.replay_identity != legacy.replay_identity
+    assert bound.orm_values()["policy_binding_id"] == "binding-v04"

@@ -37,6 +37,12 @@ G13_REVIEW_RECOVERY_V2_PREVIOUS_POLICY_VERSION = G13_REVIEW_RECOVERY_POLICY_VERS
 # recovery only had to satisfy REVIEW shape; for the v2 transition we bind the
 # admitted blocker explicitly so only the external-recurrence case clears.
 G13_REVIEW_RECOVERY_V2_SUPPORTED_BLOCKER = "G13_EXTERNAL_ACQUISITION_RECURRENCE"
+# Same-policy recovery contract: operational recovery under v0.4 does not
+# create or select a new normative G13 policy version.
+G13_REVIEW_RECOVERY_CURRENT_SCHEMA_VERSION = "g13-review-recovery-current-v0.1"
+G13_REVIEW_RECOVERY_CURRENT_CONTRACT_VERSION = "g13-review-recovery-contract-v0.1"
+G13_REVIEW_RECOVERY_CURRENT_REASON = "RECONCILED_EXTERNAL_FAILURES"
+G13_REVIEW_RECOVERY_CURRENT_POLICY_VERSION = G13_REVIEW_RECOVERY_POLICY_VERSION
 G13_OPERATOR_RECOVERY_FAILURE_RULES = (
     "G13_REPEATED_EXECUTION_FAILURE",
     "G13_REPEATED_LOCAL_BLOCK",
@@ -86,8 +92,15 @@ def _activate_policy_binding_for_recovery(session: Session, event: UsageEvent) -
     if not hasattr(session, "bind"):
         return
     from app.authority.binding import activate_g13_policy_binding
+    from app.authority.binding import current_g13_policy_binding
 
     payload = event.metadata_ or {}
+    # A same-policy recovery is an operational event, not a policy transition.
+    # Keep the durable binding (and its identity/hash) unchanged while the
+    # recovery remains attributable through its own event payload.
+    current = current_g13_policy_binding(session, str(payload["agent_identity_id"]))
+    if current is not None and current.effective_policy_version == str(payload["policy_version"]):
+        return
     activate_g13_policy_binding(
         session,
         agent_id=str(payload["agent_identity_id"]),
@@ -208,11 +221,56 @@ def _validate_review_recovery_v2_payload(payload: Mapping[str, Any]) -> bool:
         return False
 
 
+def _validate_current_review_recovery_payload(payload: Mapping[str, Any]) -> bool:
+    try:
+        material = {
+            "schema_version": payload.get("schema_version"),
+            "recovery_contract_version": payload.get("recovery_contract_version"),
+            "agent_identity_id": payload.get("agent_identity_id"),
+            "operator_reviewed": payload.get("operator_reviewed"),
+            "recovery_reason": payload.get("recovery_reason"),
+            "policy_version": payload.get("policy_version"),
+            "source_policy_evaluation_id": payload.get("source_policy_evaluation_id"),
+            "source_policy_binding_id": payload.get("source_policy_binding_id"),
+            "source_policy_binding_hash": payload.get("source_policy_binding_hash"),
+            "source_event_ids": payload.get("source_event_ids"),
+            "source_failure_episode_ids": payload.get("source_failure_episode_ids"),
+            "canary_budget_usdc": payload.get("canary_budget_usdc"),
+            "canary_execution_limit": payload.get("canary_execution_limit"),
+            "concurrency_limit": payload.get("concurrency_limit"),
+            "created_at": payload.get("created_at"),
+        }
+        return (
+            material["schema_version"] == G13_REVIEW_RECOVERY_CURRENT_SCHEMA_VERSION
+            and material["recovery_contract_version"] == G13_REVIEW_RECOVERY_CURRENT_CONTRACT_VERSION
+            and material["agent_identity_id"]
+            and material["operator_reviewed"] is True
+            and material["recovery_reason"] == G13_REVIEW_RECOVERY_CURRENT_REASON
+            and material["policy_version"] == G13_REVIEW_RECOVERY_CURRENT_POLICY_VERSION
+            and material["source_policy_evaluation_id"]
+            and material["source_policy_binding_id"]
+            and material["source_policy_binding_hash"]
+            and isinstance(material["source_event_ids"], list)
+            and material["source_event_ids"] == sorted(set(material["source_event_ids"]))
+            and material["source_event_ids"]
+            and isinstance(material["source_failure_episode_ids"], list)
+            and material["source_failure_episode_ids"] == sorted(set(material["source_failure_episode_ids"]))
+            and material["source_failure_episode_ids"]
+            and Decimal(str(material["canary_budget_usdc"])) == Decimal("0.010000")
+            and material["canary_execution_limit"] == 1
+            and material["concurrency_limit"] == 1
+            and payload.get("canonical_hash") == canonical_hash(material)
+        )
+    except (InvalidOperation, KeyError, TypeError, ValueError):
+        return False
+
+
 def validate_recovery_payload(payload: Mapping[str, Any]) -> bool:
     return (
         _validate_endpoint_recovery_payload(payload)
         or _validate_review_recovery_payload(payload)
         or _validate_review_recovery_v2_payload(payload)
+        or _validate_current_review_recovery_payload(payload)
     )
 
 
@@ -448,6 +506,96 @@ def record_review_recovery_v2(
     return event
 
 
+def record_current_review_recovery(
+    session: Session,
+    *,
+    agent_identity_id: str,
+    source_policy_evaluation_id: str,
+    source_event_ids: Iterable[str],
+    created_at: datetime | None = None,
+) -> UsageEvent:
+    """Authorize one bounded probe while retaining G13 v0.4.
+
+    The source evaluation and durable binding are checked canonically. This
+    records a recovery contract event, but deliberately does not transition
+    the policy binding or alter any historical observation/failure row.
+    """
+
+    from app.domain.mandates import PolicyEvaluation
+    from app.authority.binding import current_g13_policy_binding
+
+    source_evaluation = session.get(PolicyEvaluation, source_policy_evaluation_id)
+    binding = current_g13_policy_binding(session, agent_identity_id)
+    if (
+        source_evaluation is None
+        or binding is None
+        or source_evaluation.policy_subject_id != agent_identity_id
+        or source_evaluation.policy_version != G13_REVIEW_RECOVERY_CURRENT_POLICY_VERSION
+        or source_evaluation.result != "REVIEW"
+        or source_evaluation.policy_binding_id != binding.binding_id
+        or source_evaluation.policy_binding_hash != binding.canonical_hash
+        or binding.effective_policy_version != G13_REVIEW_RECOVERY_CURRENT_POLICY_VERSION
+    ):
+        raise ValueError("G13_CURRENT_REVIEW_RECOVERY_EVALUATION_INVALID")
+    result_core = dict(source_evaluation.result_core or {})
+    if result_core.get("sole_blocker") != G13_REVIEW_RECOVERY_V2_SUPPORTED_BLOCKER:
+        raise ValueError("G13_CURRENT_REVIEW_RECOVERY_EVALUATION_INVALID")
+    episode_ids = sorted({str(value) for value in (result_core.get("external_failure_episode_ids") or ()) if value})
+    if not episode_ids:
+        raise ValueError("G13_CURRENT_REVIEW_RECOVERY_EVALUATION_INVALID")
+    source_ids = sorted(set(str(value) for value in source_event_ids))
+    source_events = session.query(UsageEvent).filter(UsageEvent.event_id.in_(source_ids)).all()
+    if (
+        not source_ids
+        or {event.event_id for event in source_events} != set(source_ids)
+        or any(
+            event.event_type != "ACQUISITION_PAYMENT_RECONCILED"
+            or (event.metadata_ or {}).get("settled") is not False
+            for event in source_events
+        )
+    ):
+        raise ValueError("G13_CURRENT_REVIEW_RECOVERY_SOURCE_INVALID")
+
+    instant = created_at or datetime.now(timezone.utc)
+    material = {
+        "schema_version": G13_REVIEW_RECOVERY_CURRENT_SCHEMA_VERSION,
+        "recovery_contract_version": G13_REVIEW_RECOVERY_CURRENT_CONTRACT_VERSION,
+        "agent_identity_id": agent_identity_id,
+        "operator_reviewed": True,
+        "recovery_reason": G13_REVIEW_RECOVERY_CURRENT_REASON,
+        "policy_version": G13_REVIEW_RECOVERY_CURRENT_POLICY_VERSION,
+        "source_policy_evaluation_id": source_policy_evaluation_id,
+        "source_policy_binding_id": binding.binding_id,
+        "source_policy_binding_hash": binding.canonical_hash,
+        "source_event_ids": source_ids,
+        "source_failure_episode_ids": episode_ids,
+        "canary_budget_usdc": "0.010000",
+        "canary_execution_limit": 1,
+        "concurrency_limit": 1,
+        "created_at": _iso(instant),
+    }
+    payload = {**material, "canonical_hash": canonical_hash(material)}
+    if not _validate_current_review_recovery_payload(payload):
+        raise ValueError("G13_CURRENT_REVIEW_RECOVERY_EVENT_INVALID")
+    event_id = recovery_event_id(payload)
+    existing = session.get(UsageEvent, event_id)
+    if existing is not None:
+        if existing.event_type != G13_RECOVERY_EVENT_TYPE or existing.metadata_ != payload:
+            raise ValueError("G13_CURRENT_REVIEW_RECOVERY_EVENT_CONFLICT")
+        return existing
+    event = UsageEvent(
+        event_id=event_id,
+        mandate_id=None,
+        event_type=G13_RECOVERY_EVENT_TYPE,
+        metadata_=payload,
+        created_at=instant,
+    )
+    session.add(event)
+    session.flush()
+    # Same-policy recovery must preserve the existing durable binding.
+    return event
+
+
 def latest_operator_recovery(session: Session, agent_identity_id: str) -> UsageEvent | None:
     events = (
         session.query(UsageEvent)
@@ -470,6 +618,28 @@ def latest_operator_recovery(session: Session, agent_identity_id: str) -> UsageE
     return None
 
 
+def latest_recovery_for_binding(session: Session, agent_identity_id: str, binding: Any) -> UsageEvent | None:
+    """Find recovery context without using it to select the policy version."""
+
+    events = (
+        session.query(UsageEvent)
+        .filter_by(event_type=G13_RECOVERY_EVENT_TYPE)
+        .order_by(UsageEvent.created_at.desc(), UsageEvent.event_id.desc())
+        .all()
+    )
+    for event in events:
+        payload = event.metadata_ or {}
+        if payload.get("agent_identity_id") != agent_identity_id:
+            continue
+        if not validate_recovery_payload(payload) or recovery_event_id(payload) != event.event_id:
+            continue
+        if payload.get("source_policy_binding_id") == binding.binding_id and payload.get("policy_version") == binding.effective_policy_version:
+            return event
+        if event.event_id == binding.recovery_event_id:
+            return event
+    return None
+
+
 __all__ = [
     "G13_OPERATOR_RECOVERY_POLICY_ID",
     "G13_OPERATOR_RECOVERY_POLICY_VERSION",
@@ -487,10 +657,16 @@ __all__ = [
     "G13_REVIEW_RECOVERY_V2_REASON",
     "G13_REVIEW_RECOVERY_V2_SCHEMA_VERSION",
     "G13_REVIEW_RECOVERY_V2_SUPPORTED_BLOCKER",
+    "G13_REVIEW_RECOVERY_CURRENT_SCHEMA_VERSION",
+    "G13_REVIEW_RECOVERY_CURRENT_CONTRACT_VERSION",
+    "G13_REVIEW_RECOVERY_CURRENT_REASON",
+    "G13_REVIEW_RECOVERY_CURRENT_POLICY_VERSION",
     "G13_RECOVERY_EVENT_TYPE",
     "latest_operator_recovery",
     "record_operator_recovery",
     "record_review_recovery",
     "record_review_recovery_v2",
+    "record_current_review_recovery",
+    "latest_recovery_for_binding",
     "validate_recovery_payload",
 ]

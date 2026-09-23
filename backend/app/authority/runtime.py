@@ -13,7 +13,7 @@ from app.persistence.database import SessionLocal
 
 from app.agents.observation import build_o_agent_stream
 from app.authority.autonomy import G13PolicyInput, G13_RECOVERY_POLICY_VERSIONS, evaluate_g13_policy
-from app.authority.recovery import latest_operator_recovery
+from app.authority.recovery import latest_operator_recovery, latest_recovery_for_binding
 from app.authority.binding import (
     G13_POLICY_BINDING_MISSING,
     G13_POLICY_BINDING_UNSUPPORTED,
@@ -96,11 +96,10 @@ def evaluate_current_g13(session: Session, agent_id: str) -> PolicyEvaluationCor
     from app.domain.mandates import UsageEvent
     recovery_event = None
     if binding.recovery_event_id:
-        recovery_event = (
-            session.get(UsageEvent, binding.recovery_event_id)
-            if hasattr(session, "get")
-            else latest_operator_recovery(session, agent_id)
-        )
+        if hasattr(session, "query"):
+            recovery_event = latest_recovery_for_binding(session, agent_id, binding)
+        else:
+            recovery_event = latest_operator_recovery(session, agent_id)
     recovery_payload = None
     if recovery_event is not None:
         recovery_payload = {**recovery_event.metadata_, "recovery_event_id": recovery_event.event_id}

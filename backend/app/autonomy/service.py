@@ -192,6 +192,12 @@ def schedule_due(session, policy: AutonomyPolicy, instant: datetime | None = Non
             recovery_observation_available,
         )
         longitudinal = evaluate_current_g13(session, identity.agent_id)
+        # Persist the canonical longitudinal evaluation even when the current
+        # slot is skipped by G13. This closes the recovery deadlock: the next
+        # operator-reviewed recovery must reference a real persisted source
+        # evaluation, while the action gate remains unchanged.
+        from app.policy_gate.substrate import persist_policy_evaluation
+        persist_policy_evaluation(session, longitudinal)
         recovery_probe_authorized = (
             longitudinal.policy_version == "g13-d-structural-autonomy-v0.4"
             and longitudinal.result_core.get("recovery_probe_authorized") is True

@@ -39,6 +39,10 @@ from app.authority.recovery import (
     canonical_hash,
     record_review_recovery,
     record_review_recovery_v2,
+    record_current_review_recovery,
+    G13_REVIEW_RECOVERY_CURRENT_CONTRACT_VERSION,
+    G13_REVIEW_RECOVERY_CURRENT_POLICY_VERSION,
+    G13_REVIEW_RECOVERY_CURRENT_SCHEMA_VERSION,
     validate_recovery_payload,
 )
 
@@ -159,6 +163,52 @@ def _reconciliation_event(event_id: str, *, settled=False, created_at=AT):
         metadata_={"settled": settled, "failure_episode_id": "fep-a"},
         created_at=created_at,
     )
+
+
+def test_current_review_recovery_preserves_v04_binding(monkeypatch):
+    session = FakeSession()
+    binding = type(
+        "Binding",
+        (),
+        {
+            "binding_id": "binding-v04",
+            "canonical_hash": "0x" + "a" * 64,
+            "effective_policy_version": G13_REVIEW_RECOVERY_CURRENT_POLICY_VERSION,
+            "recovery_event_id": "historical-v04",
+        },
+    )()
+    evaluation = _policy_evaluation(
+        "80000000-0000-0000-0000-000000000010",
+        policy_version=G13_REVIEW_RECOVERY_CURRENT_POLICY_VERSION,
+    )
+    evaluation.policy_binding_id = binding.binding_id
+    evaluation.policy_binding_hash = binding.canonical_hash
+    session.seed(evaluation)
+    session.seed(_reconciliation_event("evt-current-1"))
+    monkeypatch.setattr(
+        "app.authority.binding.current_g13_policy_binding",
+        lambda *_args, **_kwargs: binding,
+    )
+
+    event = record_current_review_recovery(
+        session,
+        agent_identity_id="autonomy-controller",
+        source_policy_evaluation_id=evaluation.policy_evaluation_id,
+        source_event_ids=["evt-current-1"],
+        created_at=AT + timedelta(minutes=7),
+    )
+    assert event.metadata_["schema_version"] == G13_REVIEW_RECOVERY_CURRENT_SCHEMA_VERSION
+    assert event.metadata_["recovery_contract_version"] == G13_REVIEW_RECOVERY_CURRENT_CONTRACT_VERSION
+    assert event.metadata_["policy_version"] == G13_REVIEW_RECOVERY_CURRENT_POLICY_VERSION
+    assert event.metadata_["source_policy_binding_id"] == binding.binding_id
+    assert validate_recovery_payload(event.metadata_) is True
+    assert record_current_review_recovery(
+        session,
+        agent_identity_id="autonomy-controller",
+        source_policy_evaluation_id=evaluation.policy_evaluation_id,
+        source_event_ids=["evt-current-1"],
+        created_at=AT + timedelta(minutes=7),
+    ).event_id == event.event_id
 
 
 # ---------------------------------------------------------------------------
