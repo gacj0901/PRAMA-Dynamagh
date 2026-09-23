@@ -180,6 +180,7 @@ def test_current_review_recovery_preserves_v04_binding(monkeypatch):
     evaluation = _policy_evaluation(
         "80000000-0000-0000-0000-000000000010",
         policy_version=G13_REVIEW_RECOVERY_CURRENT_POLICY_VERSION,
+        episode_ids=("fep-a",),
     )
     evaluation.policy_binding_id = binding.binding_id
     evaluation.policy_binding_hash = binding.canonical_hash

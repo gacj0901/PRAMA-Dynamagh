@@ -555,6 +555,13 @@ def record_current_review_recovery(
         )
     ):
         raise ValueError("G13_CURRENT_REVIEW_RECOVERY_SOURCE_INVALID")
+    source_episode_ids = {
+        str((event.metadata_ or {}).get("failure_episode_id"))
+        for event in source_events
+        if (event.metadata_ or {}).get("failure_episode_id")
+    }
+    if not set(episode_ids).issubset(source_episode_ids):
+        raise ValueError("G13_CURRENT_REVIEW_RECOVERY_SOURCE_INCOMPLETE")
 
     instant = created_at or datetime.now(timezone.utc)
     material = {
