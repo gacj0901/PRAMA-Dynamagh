@@ -230,6 +230,17 @@
   white-space: nowrap;
 }
 
+.production-activity-group {
+  margin: 0 0 14px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid rgba(41, 65, 75, .7);
+}
+
+.production-activity-group:last-of-type {
+  border-bottom: 0;
+  margin-bottom: 4px;
+}
+
 .ledger-empty {
   color: #d6aa7b;
   font-size: 12px;
