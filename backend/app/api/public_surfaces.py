@@ -61,6 +61,7 @@ def _activity_aggregate(session: Session, mandates: list[Mandate]) -> dict[str, 
             "telegraph_calls": 0, "telegraph_successful_calls": 0,
             "real_miners_used": [], "intents_used": [], "multi_intent_workflows": 0,
             "evidence_created": 0, "decisions_emitted": 0, "tickets_emitted": 0,
+            "requester_principals": [],
             "public_spend_usdc": "0.000000",
         }
     mandate_ids = [item.mandate_id for item in mandates]
@@ -76,6 +77,7 @@ def _activity_aggregate(session: Session, mandates: list[Mandate]) -> dict[str, 
         if item.intent:
             intents_by_mandate.setdefault(item.mandate_id, set()).add(item.intent)
     spend = sum((Decimal(item.cost_usd or 0) for item in successful_calls), Decimal("0"))
+    requester_principals = sorted({str(getattr(item, "client_id", "")) for item in mandates if item.origin == "M2M" and getattr(item, "client_id", None)})
     return {
         "real_users": len(actor_counts),
         "workflows_started": len(mandates),
@@ -88,6 +90,9 @@ def _activity_aggregate(session: Session, mandates: list[Mandate]) -> dict[str, 
         "evidence_created": len(evidence),
         "decisions_emitted": len(decisions),
         "tickets_emitted": len(tickets),
+        # client_id is bound to the authenticated M2M token context at intake;
+        # it identifies the declared requester, not a Telegraph payment payer.
+        "requester_principals": requester_principals,
         "public_spend_usdc": _money(spend),
     }
 
@@ -140,6 +145,8 @@ def public_activity(session: Session) -> dict[str, Any]:
             "average_evidence_per_workflow": 0.0,
             "average_latency_ms": None,
             "public_spend_usdc": "0.000000",
+            "inbound_m2m_requests": 0,
+            "inbound_m2m_requester_principals": [],
         }
         base["autonomous"] = autonomous_summary
         base["manual"] = manual_summary
@@ -188,6 +195,8 @@ def public_activity(session: Session) -> dict[str, Any]:
         "average_evidence_per_workflow": round(len(evidence) / len(mandates), 6),
         "average_latency_ms": round(sum(durations) / len(durations), 3) if durations else None,
         "public_spend_usdc": _money(public_spend),
+        "inbound_m2m_requests": m2m_summary["workflows_started"],
+        "inbound_m2m_requester_principals": m2m_summary["requester_principals"],
         "manual": manual_summary,
         "m2m": m2m_summary,
         "autonomous": autonomous_summary,

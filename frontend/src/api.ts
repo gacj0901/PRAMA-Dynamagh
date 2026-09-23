@@ -214,6 +214,7 @@ export interface ActivityAggregate {
   evidence_created: number;
   decisions_emitted: number;
   tickets_emitted: number;
+  requester_principals: string[];
   public_spend_usdc: string;
 }
 
@@ -273,6 +274,8 @@ export interface PublicActivity {
   average_evidence_per_workflow: number;
   average_latency_ms: number | null;
   public_spend_usdc: string | number;
+  inbound_m2m_requests: number;
+  inbound_m2m_requester_principals: string[];
   manual: ActivityAggregate;
   m2m: ActivityAggregate;
   autonomous?: ActivityAggregate;

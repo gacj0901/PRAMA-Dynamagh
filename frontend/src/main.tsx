@@ -95,14 +95,14 @@ function ActivityScope({ aggregate, users }: { aggregate?: ActivityAggregate; us
 
 function ActivityPanel({ activity }: { activity: PublicActivity | null }) {
   const autonomous = activity?.autonomous;
-  const manual = activity?.manual ?? (activity ? { ...activity, public_spend_usdc: String(activity.public_spend_usdc) } : undefined);
+  const manual = activity?.manual ?? (activity ? { ...activity, requester_principals: [], public_spend_usdc: String(activity.public_spend_usdc) } : undefined);
   const m2m = activity?.m2m;
   const scopes = [manual, m2m, autonomous].filter((item): item is ActivityAggregate => Boolean(item));
   const totalStarted = scopes.reduce((sum, item) => sum + item.workflows_started, 0);
   const totalCompleted = scopes.reduce((sum, item) => sum + item.workflows_completed, 0);
   const totalTelegraph = scopes.reduce((sum, item) => sum + item.telegraph_successful_calls, 0);
   const allIntents = Array.from(new Set(scopes.flatMap((item) => item.intents_used)));
-  return <section className="panel activity-panel"><PanelHeading eyebrow="ACTIVITY" badge="REAL RECORDS · LIVE" /><Signal label="ALL HISTORY" value={`${totalCompleted}/${totalStarted} complete`} /><Signal label="ALL TELEGRAPH" value={totalTelegraph} /><Signal label="ALL INTENTS" value={allIntents.join(", ") || null} /><div className="activity-scope-heading">MANUAL</div><ActivityScope aggregate={manual} users /><div className="activity-scope-heading">M2M</div><ActivityScope aggregate={m2m} /><div className="activity-scope-heading">AUTONOMOUS</div><ActivityScope aggregate={autonomous} /><p className="log-caption">Each block is separated by persisted origin. This panel refreshes every 10 seconds.</p></section>;
+  return <section className="panel activity-panel"><PanelHeading eyebrow="ACTIVITY" badge="REAL RECORDS · LIVE" /><Signal label="ALL HISTORY" value={`${totalCompleted}/${totalStarted} complete`} /><Signal label="ALL TELEGRAPH" value={totalTelegraph} /><Signal label="ALL INTENTS" value={allIntents.join(", ") || null} /><div className="activity-scope-heading">MANUAL</div><ActivityScope aggregate={manual} users /><div className="activity-scope-heading">M2M · INBOUND</div><Signal label="REQUESTS" value={activity?.inbound_m2m_requests} /><Signal label="REQUESTERS" value={activity?.inbound_m2m_requester_principals?.join(", ") || null} /><ActivityScope aggregate={m2m} /><div className="activity-scope-heading">AUTONOMOUS · INTERNAL</div><ActivityScope aggregate={autonomous} /><p className="log-caption">M2M requests are authenticated inbound mandates. Autonomous activity is scheduler-originated and is not counted as external demand.</p></section>;
 }
 
 function LedgerRow({ label, value, indent = false }: { label: string; value: number; indent?: boolean }) {

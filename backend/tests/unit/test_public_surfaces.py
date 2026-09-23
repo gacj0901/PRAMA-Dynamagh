@@ -62,6 +62,23 @@ def test_public_activity_is_aggregate_only_and_origin_scoped():
     assert result["budget_profile"]["multi_intent_enabled"] is True
 
 
+def test_public_activity_exposes_authenticated_m2m_requester_principal():
+    from app.domain.mandates import AcquisitionTask, AutonomyRun, Decision, Evidence, Mandate, StructuralEvaluation, TelegraphCall, Ticket
+
+    m2m = SimpleNamespace(mandate_id="m2m-1", actor_id="m2m:telegraph:agent", origin="M2M", status="RECEIVED", client_id="TELEGRAPH")
+    session = Session({
+        Mandate: [m2m],
+        AcquisitionTask: [], TelegraphCall: [], Evidence: [], Decision: [], Ticket: [],
+        AutonomyRun: [], StructuralEvaluation: [],
+    })
+
+    result = public_activity(session)
+
+    assert result["inbound_m2m_requests"] == 1
+    assert result["inbound_m2m_requester_principals"] == ["TELEGRAPH"]
+    assert result["m2m"]["requester_principals"] == ["TELEGRAPH"]
+
+
 def test_competition_budget_profile_reports_authorized_g12_cap(monkeypatch):
     from app.competition import competition_budget_profile
 
