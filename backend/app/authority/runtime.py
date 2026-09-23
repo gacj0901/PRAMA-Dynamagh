@@ -101,6 +101,7 @@ def evaluate_current_g13(session: Session, agent_id: str) -> PolicyEvaluationCor
         else:
             recovery_event = latest_operator_recovery(session, agent_id)
     recovery_payload = None
+    recovery_probe_attempt_count = 0
     if recovery_event is not None:
         recovery_payload = {**recovery_event.metadata_, "recovery_event_id": recovery_event.event_id}
         cutoff = recovery_event.created_at
@@ -112,6 +113,25 @@ def evaluate_current_g13(session: Session, agent_id: str) -> PolicyEvaluationCor
             and datetime.fromisoformat(item.observed_at.replace("Z", "+00:00")) > cutoff
             and item.source_id != recovery_event.event_id
         ]
+        # A recovery probe request is durable before network I/O, but its
+        # marker may not yet be represented in the compacted O_AGENT window.
+        # Include that state in the policy input itself so the post-request
+        # evaluation gets a distinct deterministic identity instead of
+        # colliding with the pre-request evaluation.
+        probe_events = session.query(UsageEvent).all() if hasattr(session, "query") else []
+        probe_exists = any(
+            event.created_at > cutoff
+            and (
+                event.event_type == "G13_RECOVERY_PROBE_STARTED"
+                or (
+                    event.event_type == "TELEGRAPH_REQUEST"
+                    and (event.metadata_ or {}).get("recovery_probe_authorized") is True
+                )
+            )
+            for event in probe_events
+        )
+        if probe_exists:
+            recovery_probe_attempt_count = 1
     grouped: dict[str, list[Any]] = {}
     for item in observations:
         run_ids = tuple(item.source_lineage.autonomy_run_ids)
@@ -173,28 +193,10 @@ def evaluate_current_g13(session: Session, agent_id: str) -> PolicyEvaluationCor
         trajectory_lineage_id=f"o-agent-v0:{agent_id}",
         allow_sparse_window=True,
         expected_current_missing_codes=G13_PRE_ACTION_EXPECTED_MISSING,
+        recovery_probe_attempt_count=recovery_probe_attempt_count,
         **input_kwargs,
     )
     result = evaluate_g13_policy(longitudinal_input)
-    if policy_version in G13_RECOVERY_POLICY_VERSIONS and recovery_event is not None:
-        # The recovery probe is authoritative once its durable request/event
-        # exists, even if O_AGENT window compaction omits the marker.
-        cutoff = recovery_event.created_at
-        probe_events = session.query(UsageEvent).all() if hasattr(session, "query") else []
-        probe_exists = any(
-            event.created_at > cutoff
-            and (
-                event.event_type == "G13_RECOVERY_PROBE_STARTED"
-                or (
-                    event.event_type == "TELEGRAPH_REQUEST"
-                    and (event.metadata_ or {}).get("recovery_probe_authorized") is True
-                )
-            )
-            for event in probe_events
-        )
-        if probe_exists:
-            result.result_core["recovery_probe_attempt_count"] = 1
-            result.result_core["recovery_probe_authorized"] = False
     return replace(result, **binding_provenance(binding))
 
 

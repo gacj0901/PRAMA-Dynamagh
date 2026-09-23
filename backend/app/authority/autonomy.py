@@ -196,6 +196,7 @@ class G13PolicyInput:
     missing_data: tuple[str, ...] = ()
     integrity_violations: tuple[str, ...] = ()
     operator_recovery: Mapping[str, Any] | None = None
+    recovery_probe_attempt_count: int = 0
 
     @classmethod
     def from_observations(
@@ -208,6 +209,7 @@ class G13PolicyInput:
         expected_current_missing_codes: Iterable[str] = (),
         policy_version: str = G13_STRUCTURAL_AUTONOMY_POLICY_VERSION,
         operator_recovery: Mapping[str, Any] | None = None,
+        recovery_probe_attempt_count: int = 0,
     ) -> "G13PolicyInput":
         ordered = sorted(list(observations), key=lambda item: (item.sequence, item.observation_id))
         seen: dict[str, str] = {}
@@ -255,6 +257,7 @@ class G13PolicyInput:
             missing_data=missing,
             integrity_violations=tuple(sorted(integrity)),
             operator_recovery=dict(operator_recovery) if operator_recovery else None,
+            recovery_probe_attempt_count=int(recovery_probe_attempt_count),
         )
 
     def canonical_core(self) -> dict[str, Any]:
@@ -282,6 +285,7 @@ class G13PolicyInput:
         }
         if self.policy_version in G13_RECOVERY_POLICY_VERSIONS:
             core["operator_recovery"] = dict(self.operator_recovery or {})
+            core["recovery_probe_attempt_count"] = self.recovery_probe_attempt_count
         return core
 
 
@@ -388,6 +392,21 @@ def _distinct_recovery_probe_count(policy_input: G13PolicyInput) -> int:
         run_ids = tuple(lineage.get("autonomy_run_ids") or ())
         units.add(run_ids[0] if run_ids else str(item.get("observation_id")))
     return len(units)
+
+
+def _recovery_probe_attempt_count(policy_input: G13PolicyInput) -> int:
+    """Return the canonical single-use probe count.
+
+    A probe can be durably visible through its append-only request event before
+    O_AGENT has compacted that event into the observation window.  The runtime
+    therefore carries that fact as part of the typed policy input.  Taking the maximum
+    preserves the historical observation-derived count while making the state
+    part of the canonical input identity.
+    """
+    return max(
+        _distinct_recovery_probe_count(policy_input),
+        int(policy_input.recovery_probe_attempt_count),
+    )
 
 
 def _external_dependency_episode_stats(policy_input: G13PolicyInput) -> tuple[int, tuple[str, ...], int]:
@@ -519,7 +538,7 @@ def evaluate_g13_policy(policy_input: G13PolicyInput) -> PolicyEvaluationCore:
             )
         )
     recovery_probe_attempt_count = (
-        _distinct_recovery_probe_count(policy_input)
+        _recovery_probe_attempt_count(policy_input)
         if policy_input.policy_version in (G13_REVIEW_RECOVERY_POLICY_VERSION, G13_REVIEW_RECOVERY_V2_POLICY_VERSION)
         else 0
     )

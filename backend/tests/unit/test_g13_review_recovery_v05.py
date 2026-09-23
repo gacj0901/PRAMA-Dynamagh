@@ -15,6 +15,7 @@ Spec constraints under test:
      authority composition (no cross-module imports touched).
 """
 
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -532,6 +533,31 @@ def test_post_recovery_clean_observations_do_not_review():
     assert "G13_EXTERNAL_ACQUISITION_RECURRENCE" not in result.triggered_rule_ids
     assert result.result_core.get("recovery_probe_authorized") in (True, False)
     assert result.policy_id == G13_REVIEW_RECOVERY_V2_POLICY_ID
+
+
+def test_recovery_probe_consumption_is_part_of_policy_identity():
+    """A durable pre-network probe marker must not collide with its predecessor."""
+    payload = _minimal_recovery_payload()
+    before = _v05_policy_input(
+        observations=[],
+        recovery_payload=payload,
+    )
+    after = _v05_policy_input(
+        observations=[],
+        recovery_payload=payload,
+    )
+    after = replace(after, recovery_probe_attempt_count=1)
+
+    first = evaluate_g13_policy(before)
+    consumed = evaluate_g13_policy(after)
+    replay = evaluate_g13_policy(after)
+
+    assert first.policy_evaluation_id != consumed.policy_evaluation_id
+    assert consumed.policy_evaluation_id == replay.policy_evaluation_id
+    assert consumed.input_hash == replay.input_hash
+    assert consumed.result_hash == replay.result_hash
+    assert consumed.result_core["recovery_probe_attempt_count"] == 1
+    assert consumed.result_core["recovery_probe_authorized"] is False
 
 
 def test_new_external_episode_after_recovery_blocks_again():
