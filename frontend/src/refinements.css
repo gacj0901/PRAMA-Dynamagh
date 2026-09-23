@@ -390,6 +390,93 @@
   max-width: 360px;
 }
 
+/* Small, read-only entry point for autonomous M2M clients. */
+footer {
+  position: relative;
+}
+
+.m2m-appendix {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  flex: 0 0 auto;
+}
+
+.m2m-appendix-trigger {
+  border: 1px solid #1a9b43;
+  background: #07120b;
+  color: #50ef78;
+  padding: 8px 12px;
+  font: 11px "Sometype Mono", "Courier New", monospace;
+  letter-spacing: .04em;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+
+.m2m-appendix-trigger:hover,
+.m2m-appendix-trigger.active {
+  background: #10351d;
+  border-color: #50ef78;
+  color: #b8ffc8;
+}
+
+.m2m-contract-panel {
+  position: fixed;
+  z-index: 80;
+  left: 50%;
+  bottom: 68px;
+  width: min(430px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  padding: 22px 24px 24px;
+  border: 1px solid #123a46;
+  border-radius: 22px;
+  background: rgba(2, 7, 9, .98);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, .65), 0 0 0 1px rgba(0, 166, 220, .08);
+}
+
+.m2m-contract-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  border: 0;
+  background: transparent;
+  color: #91a5ab;
+  font: 22px/1 Arial, sans-serif;
+  cursor: pointer;
+}
+
+.m2m-contract-close:hover {
+  color: #fff;
+}
+
+.m2m-contract-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-right: 24px;
+  border-bottom: 1px solid #164454;
+  color: #35d7ff;
+  font: 10px "Sometype Mono", "Courier New", monospace;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.m2m-contract-heading strong {
+  color: #b8c8cd;
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: .04em;
+}
+
+.m2m-contract-panel pre {
+  margin: 18px 0 0;
+  overflow-x: auto;
+  color: #d6f4ff;
+  font: 13px/1.65 "Sometype Mono", "Courier New", monospace;
+  white-space: pre;
+}
+
 @media (max-width: 1240px) {
   .tabs button {
     padding: 12px 8px;
@@ -434,5 +521,26 @@
   .tabs button {
     padding: 10px 7px;
     font-size: 10px;
+  }
+
+  footer {
+    flex-wrap: wrap;
+  }
+
+  .m2m-appendix {
+    position: static;
+    order: 3;
+    width: 100%;
+    margin-left: 0;
+    transform: none;
+  }
+
+  .m2m-appendix-trigger {
+    width: 100%;
+    font-size: 10px;
+  }
+
+  .m2m-contract-panel {
+    bottom: 18px;
   }
 }
