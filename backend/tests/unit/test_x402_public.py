@@ -20,7 +20,15 @@ def test_x402_manifest_is_public_json_and_points_to_post_seller():
     assert response.headers["content-type"].startswith("application/json")
     body = response.json()
     assert body["x402"] == "1.0"
-    assert body["capabilities"] == ["evidence_bound_intelligence_acquisition"]
+    assert set(body) == {"x402", "name", "description", "capabilities", "pricing", "payment", "endpoint"}
+    assert body["capabilities"] == [
+        "evidence_bound_intelligence_acquisition",
+        "principle:paid_miner_output_is_not_authorization",
+        "epistemic_coverage:framework=E1/E2;e1_targets=[CRYPTO_PRICE]",
+    ]
+    assert "paid_miner_output_is_not_authorization" in body["description"]
+    assert "framework=E1/E2" in body["description"]
+    assert 'e1_targets=["CRYPTO_PRICE"]' in body["description"]
     assert body["pricing"] == {"currency": "USDC", "base": "0.010000", "unit": "request"}
     assert body["payment"]["address"].startswith("0x")
     assert body["payment"]["chain"] == "base-sepolia"

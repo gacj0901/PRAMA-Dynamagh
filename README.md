@@ -118,13 +118,13 @@ A Telegraph result is never promoted directly into a decision. The worker persis
 
 `PRAMAgraph.replay` recomputes evidence hashes, structural state and decision independently from persisted artifacts and reports whether they still match what was stored (§7).
 
-This gate is an admissibility map over persisted artifacts, not a semantic judgement of the answer's content. Everything richer — whether evidence stands in the right *relation* to the question — lives in the epistemic layer below, evaluated separately (§6).
+This gate classifies admissibility and maps the resulting structural state to the mandate `Decision`; it makes no claim about answer meaning. `ADMITTED` means provenance-verified, non-empty and warning-free; it does not mean that evidence satisfies an E1 requirement or that an E1 target is `COMPLETE`.
 
 ---
 
 ## 5. Authority model
 
-Three independent authorities are evaluated at the pre-next-action boundary, composed explicitly, and persisted as policy evaluations with canonical hashes.
+The current mandate path is `Evidence → PRAMAgraph → prama-gate-v0 → Decision`. E1 does not replace this mandate Decision Gate. At the pre-next-action boundary, authority checkpoints are composed explicitly and persisted as policy evaluations with canonical hashes; CD can inform authority at that boundary when an E1 evaluation exists.
 
 | Authority | Question it answers | Vocabulary |
 | --- | --- | --- |
@@ -145,19 +145,37 @@ G13 recovery is deliberately narrow: a `REVIEW` caused *solely* by a missing cri
 
 ## 6. Epistemic layer (O_EPISTEMIC)
 
-The epistemic layer is the part of the system that asks whether evidence stands in the right *relation* to the question, rather than whether a response arrived.
+O_EPISTEMIC defines a relational evaluation framework, separate from acquisition and the mandate Decision Gate. The Intent Registry defines what PRAMA-Dynamagh can acquire. A registered intent may follow `Intent → AcquisitionTask → Telegraph / Miner → Evidence → ADMITTED → PRAMAgraph` even when it has no intent-specific E1 realization. Admission and E1 completion are distinct states.
 
 - **E1 contracts** (`app/epistemic/contracts.py`) — canonical, float-free, timezone-explicit target and requirement bodies under `e1-canonical-v0.1`.
-- **E1-C2 evaluator** (`app/epistemic/evaluator.py`) — pure relational evaluation over admitted evidence. Relations are `SATISFIES` / `CONTRADICTS` / `UNRESOLVED` / `NOT_APPLICABLE`; requirement states are `SATISFIED` / `UNRESOLVED` / `CONTRADICTED`; structural states are `COMPLETE` / `INCOMPLETE` / `CONTRADICTED`. Contradiction is preserved, never averaged away; stale evidence becomes `NOT_APPLICABLE` and leaves the requirement `UNRESOLVED` instead of forcing a resolution. `UNSPECIFIED_CONTRACT_CASE` is a separate, non-epistemic axis for evaluator limitation.
+- **E1-C2 evaluator** (`app/epistemic/evaluator.py`) — evaluates `EpistemicTarget → Requirements → EvidenceRelations → EpistemicEvaluation`. Relations are `SATISFIES` / `CONTRADICTS` / `UNRESOLVED` / `NOT_APPLICABLE`; derived structural states are `COMPLETE` / `INCOMPLETE` / `CONTRADICTED`. `ADMITTED` evidence is an admissible input, not a claim of `COMPLETE`. Contradiction is preserved; stale evidence becomes `NOT_APPLICABLE` and leaves the requirement `UNRESOLVED`. `UNSPECIFIED_CONTRACT_CASE` is a separate, non-epistemic axis for evaluator limitation.
 - **E2-B trajectory** (`app/epistemic/trajectory.py`) — append-only transitions indexed by `(trajectory_lineage_id, event_index, requirement_id)`. Lineage identity is derived ex ante from the E1/E2 semantic version tuple, so a contract change opens a new lineage instead of rewriting an old one.
 - **Reference projection** (`app/epistemic/reference_projection.py`) — an offline projection of an epistemic observable, kept outside the application runtime and used only to compare exact `Fraction` sources against the float64 values an adapter actually emits.
 
-Current wiring, stated precisely:
+Canonical coverage state:
 
-- E1 evaluations **are** produced and persisted by the worker for acquisitions carrying a registered target schema, and they **do** feed CD at the autonomous action boundary.
-- E1 evaluations **do not** alter the mandate `Decision`; that remains PRAMAgraph's `prama-gate-v0`.
-- Nothing in the epistemic layer is a semantic judgement of the answer's content. E1 states a relation between persisted artifacts and a declared requirement; it does not score plausibility or rank sources.
-- One typed contract family is registered today (`CRYPTO_PRICE`, `value_feed` engine). New intents are registry configuration, not new modules.
+- E1/E2 framework: **implemented**. The `value_feed` engine: **implemented**. `CRYPTO_PRICE`: the reference realization whose E1 target, requirements and relation contract is currently closed and validated.
+- **71 registered intents ≠ 71 E1-evaluable targets.** The registry makes other intents acquirable; E1 coverage has not yet been extended to them.
+- `601 CRYPTO_PRICE ≠ “PRAMA only understands crypto”.` It identifies the intent with the currently closed and validated E1 target / requirement / relation contract.
+- **Current mandate authority:** `Evidence → PRAMAgraph → prama-gate-v0 → Decision`.
+- **E1 authority:** `Evidence → EpistemicTarget → Requirements / Relations → E1 Evaluation → CD → authority at the boundary of the next autonomous action`. E1 evaluation is not the mandate Decision Gate.
+- Claims and scores are intentionally outside the `value_feed` engine. `claim_verification` requires a separate relation engine and is not covered by `value_feed`.
+
+Coverage roadmap:
+
+```text
+value_feed
+├── CRYPTO_PRICE          VALIDATED
+├── GAS_PRICE             NEXT
+├── TOKEN_HOLDER_COUNT    NEXT
+├── MARKET_CAP            CANDIDATE
+└── TVL                   CANDIDATE
+
+claim_verification
+└── requires a separate relation engine
+```
+
+Extending E1 increases relational coverage; it does not expand semantic authority.
 
 ---
 
@@ -170,6 +188,8 @@ Persisted artifacts → deterministic replay → reconstructed lineage → ticke
 ```
 
 Replay reads persisted artifacts only; it never issues a new paid Telegraph request. `PRAMAgraph.replay` recomputes the same commitment independently, and the same artifacts must reproduce it.
+
+The local fixture proof that paid miner output is not authorization is documented in [`docs/PAID_OUTPUT_NOT_AUTHORIZATION.md`](docs/PAID_OUTPUT_NOT_AUTHORIZATION.md). It uses only the closed and validated `CRYPTO_PRICE` E1 target and does not alter the mandate gate or call production services.
 
 ```
 GET /v1/mandates/{mandate_id}/replay      # reconstruct evaluation and decision
@@ -311,7 +331,7 @@ Stated plainly, because the value of the system is that it does not overclaim.
 
 - The mandate `Decision` is produced by PRAMAgraph's `prama-gate-v0`, a deterministic admissibility map over persisted artifacts. The epistemic layer informs the autonomous action boundary, not that decision.
 - Authority composition is binding for autonomous execution; other origins are observed in shadow.
-- Only `CRYPTO_PRICE` is registered as a typed epistemic contract. Confidence/score-based intents would require a `ScoreThresholdEngine` that is intentionally undesigned.
+- Only the `CRYPTO_PRICE` E1 realization is currently closed and validated. Other registered intents remain acquirable without an E1-evaluable target. Claims and scores remain outside this engine; confidence/score-based intents would require a `ScoreThresholdEngine` that is intentionally undesigned.
 - Longitudinal *intervention* (acting on trajectory rather than observing it) is specified in the G13 policy vocabulary but the surrounding governance loop remains partial.
 - `docs/ARCHITECTURE.md` still describes the Phase 0 topology and lags the current authority and epistemic layers.
 
@@ -330,6 +350,7 @@ Operational observations, deployment checks and runtime evidence are appended �
 | [`docs/O_EPISTEMIC_E2B.md`](docs/O_EPISTEMIC_E2B.md) | Trajectory contract and lineage rules |
 | [`docs/O_EPISTEMIC_PRAMA_PARTIAL_CORRESPONDENCE_V0_1.md`](docs/O_EPISTEMIC_PRAMA_PARTIAL_CORRESPONDENCE_V0_1.md) | What does and does not correspond to PRAMA today |
 | [`docs/authority-runtime-shadow.md`](docs/authority-runtime-shadow.md) | Shadow checkpoint semantics |
+| [`docs/PAID_OUTPUT_NOT_AUTHORIZATION.md`](docs/PAID_OUTPUT_NOT_AUTHORIZATION.md) | Persisted fixture proof and replay invariants |
 | [`docs/TITULAR_CHECK.md`](docs/TITULAR_CHECK.md) | Public hash-addressed ticket check |
 | [`docs/competition-workflows.md`](docs/competition-workflows.md) | Multi-intent fan-out workflows |
 | [`docs/PRODUCTION-LOG.md`](docs/PRODUCTION-LOG.md) | Append-only operational record |

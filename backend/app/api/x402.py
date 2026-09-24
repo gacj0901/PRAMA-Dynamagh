@@ -73,8 +73,16 @@ def seller_manifest() -> dict:
         # payment challenge returned by /v1/public/ask remains x402 v2.
         "x402": "1.0",
         "name": "prama-dynamagh",
-        "description": "Evidence-bound intelligence acquisition for autonomous agents.",
-        "capabilities": ["evidence_bound_intelligence_acquisition"],
+        "description": (
+            "Evidence-bound intelligence acquisition for autonomous agents. "
+            "Principle: paid_miner_output_is_not_authorization. "
+            'Epistemic coverage: framework=E1/E2; e1_targets=["CRYPTO_PRICE"].'
+        ),
+        "capabilities": [
+            "evidence_bound_intelligence_acquisition",
+            "principle:paid_miner_output_is_not_authorization",
+            "epistemic_coverage:framework=E1/E2;e1_targets=[CRYPTO_PRICE]",
+        ],
         "pricing": {
             "currency": "USDC",
             "base": f"{X402_AMOUNT_USDC:.6f}",
