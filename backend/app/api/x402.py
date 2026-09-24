@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import os
+import secrets
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -19,6 +21,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import APIRouter, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -26,10 +29,14 @@ from sqlalchemy.orm import Session
 from app.agents.identity import get_or_create_m2m_identity
 from app.domain.mandates import (
     AcquisitionTask,
+    Decision,
+    Evidence,
     InboundX402Payment,
     Mandate,
     MandateStatus,
     MandateTransition,
+    StructuralEvaluation,
+    Ticket,
     UsageEvent,
 )
 from app.persistence.database import SessionLocal
@@ -154,6 +161,130 @@ def _stable_context(payer: str, external_agent_id: str | None) -> str:
     return "m2m-x402-sha256:" + hashlib.sha256(material).hexdigest()
 
 
+RESULT_CAPABILITY_HEADER = "X-PRAMA-Result-Capability"
+
+
+def _result_endpoint(mandate_id: str) -> str:
+    return f"{PUBLIC_ORIGIN}/v1/public/ask/{mandate_id}/result"
+
+
+def _new_result_capability() -> tuple[str, str]:
+    """Issue a high-entropy, mandate-scoped secret and its persisted digest."""
+
+    capability = secrets.token_urlsafe(32)
+    digest = hashlib.sha256(capability.encode("utf-8")).hexdigest()
+    return capability, digest
+
+
+def _accepted_response(
+    *, request_id: str, mandate_id: str, capability: str | None, replay: bool = False
+) -> JSONResponse:
+    endpoint = _result_endpoint(mandate_id)
+    return JSONResponse(
+        {
+            "request_id": request_id,
+            "mandate_id": mandate_id,
+            "status": "RECEIVED",
+            "result_endpoint": endpoint,
+            "status_url": endpoint,
+            "result_capability": capability,
+            "result_capability_header": RESULT_CAPABILITY_HEADER,
+            "result_capability_replay": replay,
+        },
+        status_code=status.HTTP_202_ACCEPTED,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _x402_result_payload(session, mandate: Mandate, request_id: str) -> dict:
+    """Build only the persisted read result for the authorized mandate."""
+
+    tasks = (
+        session.query(AcquisitionTask)
+        .filter_by(mandate_id=mandate.mandate_id)
+        .order_by(AcquisitionTask.ordinal)
+        .all()
+    )
+    evidence_rows = (
+        session.query(Evidence)
+        .filter_by(mandate_id=mandate.mandate_id)
+        .order_by(Evidence.created_at)
+        .all()
+    )
+    evaluation = (
+        session.query(StructuralEvaluation)
+        .filter_by(mandate_id=mandate.mandate_id)
+        .order_by(StructuralEvaluation.created_at.desc())
+        .first()
+    )
+    decision = (
+        session.query(Decision)
+        .filter_by(mandate_id=mandate.mandate_id)
+        .order_by(Decision.created_at.desc())
+        .first()
+    )
+    ticket = (
+        session.query(Ticket)
+        .filter_by(mandate_id=mandate.mandate_id)
+        .order_by(Ticket.created_at.desc())
+        .first()
+    )
+    return {
+        "request_id": request_id,
+        "mandate_id": mandate.mandate_id,
+        "origin": mandate.origin,
+        "status": mandate.status,
+        "text": mandate.text,
+        "created_at": mandate.created_at,
+        "updated_at": mandate.updated_at,
+        "result_endpoint": _result_endpoint(mandate.mandate_id),
+        "acquisitions": [
+            {
+                "acquisition_id": task.acquisition_id,
+                "status": task.status,
+                "requested_intent": task.requested_intent,
+                "attempt_count": task.attempt_count,
+                "failure_code": task.failure_code,
+            }
+            for task in tasks
+        ],
+        "evidence": [
+            {
+                "evidence_id": item.evidence_id,
+                "content_hash": item.content_hash,
+                "admissibility": item.admissibility,
+                "provenance_status": item.provenance_status,
+            }
+            for item in evidence_rows
+        ],
+        "evaluation": None
+        if evaluation is None
+        else {
+            "evaluation_id": evaluation.evaluation_id,
+            "structural_state": evaluation.structural_state,
+            "limitation_codes": evaluation.limitation_codes,
+            "contradiction_codes": evaluation.contradiction_codes,
+        },
+        "decision": None
+        if decision is None
+        else {
+            "decision_id": decision.decision_id,
+            "state": decision.state,
+            "policy_version": decision.policy_version,
+            "reason_codes": decision.reason_codes,
+        },
+        "ticket": None
+        if ticket is None
+        else {
+            "ticket_id": ticket.ticket_id,
+            "ticket_hash": ticket.ticket_hash,
+            "schema_version": ticket.schema_version,
+            "hash_algorithm": ticket.hash_algorithm,
+            "anchor_status": ticket.anchor_status,
+        },
+    }
+
+
 def _request_fingerprint(intent: str | None, query: str) -> str:
     material = json.dumps({"intent": intent, "request": query}, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(material).hexdigest()
@@ -203,6 +334,7 @@ def _create_settled_mandate(
     payer: str,
     external_agent_id: str | None,
     payment_row: InboundX402Payment,
+    result_capability_hash: str,
 ) -> tuple[Mandate, AcquisitionTask]:
     """Create M2M work only after the inbound payment is settled."""
     context_id = _stable_context(payer, external_agent_id)
@@ -229,6 +361,7 @@ def _create_settled_mandate(
     )
     session.add(mandate)
     session.flush()
+    payment_row.result_capability_hash = result_capability_hash
     reserve_m2m_spend(session, mandate.mandate_id, X402_AMOUNT_USDC)
     task = AcquisitionTask(
         mandate_id=mandate.mandate_id,
@@ -305,7 +438,12 @@ async def public_x402_ask(request: Request):
         if existing is not None and existing.payment_status == "SETTLED":
             if _stored_request_fingerprint(existing) != request_fingerprint:
                 return JSONResponse({"code": "X402_IDEMPOTENCY_KEY_REUSED"}, status_code=409)
-            return JSONResponse({"request_id": existing.request_id, "mandate_id": existing.mandate_id, "status": "RECEIVED", "result_endpoint": f"/v1/m2m/mandates/{existing.mandate_id}"}, status_code=202)
+            return _accepted_response(
+                request_id=existing.request_id,
+                mandate_id=existing.mandate_id,
+                capability=None,
+                replay=True,
+            )
         if existing is not None:
             return JSONResponse({"code": "X402_PAYMENT_IN_PROGRESS", "request_id": existing.request_id}, status_code=409)
         request_id = str(uuid.uuid4())
@@ -358,6 +496,7 @@ async def public_x402_ask(request: Request):
             session.close()
         return JSONResponse({"code": "X402_SETTLE_FAILED", "detail": settled.get("errorReason")}, status_code=402)
     tx_hash = settled.get("transaction") or settled.get("txHash")
+    result_capability, result_capability_hash = _new_result_capability()
     session = SessionLocal()
     try:
         row = session.get(InboundX402Payment, payment_row.payment_id)
@@ -377,6 +516,7 @@ async def public_x402_ask(request: Request):
                 payer=payer,
                 external_agent_id=external_agent_id,
                 payment_row=row,
+                result_capability_hash=result_capability_hash,
             )
         session.commit()
     except Exception:
@@ -388,4 +528,46 @@ async def public_x402_ask(request: Request):
         execute_acquisition.delay(mandate.mandate_id, task.acquisition_id)
     except Exception:
         pass
-    return JSONResponse({"request_id": request_id, "mandate_id": mandate.mandate_id, "status": "RECEIVED", "result_endpoint": f"/v1/m2m/mandates/{mandate.mandate_id}"}, status_code=202)
+    return _accepted_response(
+        request_id=request_id,
+        mandate_id=mandate.mandate_id,
+        capability=result_capability,
+    )
+
+
+@router.get("/v1/public/ask/{mandate_id}/result", include_in_schema=False)
+def get_x402_result(mandate_id: str, request: Request):
+    """Read one inbound x402 mandate using only its result capability.
+
+    Invalid, missing, and cross-mandate capabilities all produce the same
+    not-found response.  The capability is accepted only in a header and is
+    never placed in a URL or logged.
+    """
+
+    supplied = request.headers.get(RESULT_CAPABILITY_HEADER.lower(), "")
+    session = SessionLocal()
+    try:
+        payment = (
+            session.query(InboundX402Payment)
+            .filter_by(mandate_id=mandate_id, payment_status="SETTLED")
+            .one_or_none()
+        )
+        if (
+            payment is None
+            or not payment.result_capability_hash
+            or not supplied
+            or not hmac.compare_digest(
+                payment.result_capability_hash,
+                hashlib.sha256(supplied.encode("utf-8")).hexdigest(),
+            )
+        ):
+            return JSONResponse({"code": "X402_RESULT_NOT_FOUND"}, status_code=404)
+        mandate = session.get(Mandate, mandate_id)
+        if mandate is None or mandate.origin != "M2M":
+            return JSONResponse({"code": "X402_RESULT_NOT_FOUND"}, status_code=404)
+        return JSONResponse(
+            jsonable_encoder(_x402_result_payload(session, mandate, payment.request_id)),
+            headers={"Cache-Control": "no-store"},
+        )
+    finally:
+        session.close()

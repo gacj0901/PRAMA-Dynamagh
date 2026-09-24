@@ -364,7 +364,8 @@ class InboundX402Payment(Base):
     payer_wallet_address: Mapped[str] = mapped_column(String(64), nullable=False)
     recipient_wallet_address: Mapped[str] = mapped_column(String(64), nullable=False)
     network: Mapped[str] = mapped_column(String(32), nullable=False)
-    asset: Mapped[str] = mapped_column(String(32), nullable=False)
+    # CAIP-19 asset identifiers and EVM contract addresses can exceed 32 chars.
+    asset: Mapped[str] = mapped_column(String(255), nullable=False)
     amount_usdc: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
     facilitator: Mapped[str] = mapped_column(String(128), nullable=False)
     payment_status: Mapped[str] = mapped_column(String(32), nullable=False, default="PRESENTED")
@@ -373,6 +374,9 @@ class InboundX402Payment(Base):
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    # Only the SHA-256 digest is persisted; the random bearer capability is
+    # returned to the payer once and is scoped to this payment's mandate.
+    result_capability_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 
