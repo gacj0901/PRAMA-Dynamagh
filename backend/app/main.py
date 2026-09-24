@@ -11,6 +11,7 @@ from app.api.public_surfaces import router as public_surfaces_router
 from app.api.titular_check import router as titular_check_router
 from app.api.disclosure import router as disclosure_router
 from app.api.authority import router as authority_router
+from app.api.x402 import router as x402_router
 from app.tickets.delivery import DisclosureMiddleware
 
 app = FastAPI(title="PRAMA-Dynamagh API", version="0.0.1", dependencies=[Depends(protect_user_artifact)])
@@ -24,6 +25,7 @@ app.include_router(public_surfaces_router)
 app.include_router(titular_check_router)
 app.include_router(disclosure_router)
 app.include_router(authority_router)
+app.include_router(x402_router)
 app.add_middleware(DisclosureMiddleware)
 
 

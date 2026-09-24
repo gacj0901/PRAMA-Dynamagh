@@ -342,6 +342,41 @@ class PublicManualSpendReservation(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 
 
+class InboundX402Payment(Base):
+    """Durable record for Leg 1: external agent -> PRAMA-Dynamagh x402 payment.
+
+    Separate from both the Mandate row (identity/authority) and the outbound
+    payment leg (PRAMA -> Telegraph, recorded by the Gateway x402 store).
+
+    The `payer_wallet_address` is the economic principal, NOT the agent
+    identity.  `external_agent_id` (declared via the X-Agent-Id header) is
+    persisted on the Mandate itself; we never derive identity from the wallet.
+    """
+
+    __tablename__ = "inbound_x402_payments"
+
+    payment_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    request_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    mandate_id: Mapped[str | None] = mapped_column(
+        ForeignKey("mandates.mandate_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    payer_wallet_address: Mapped[str] = mapped_column(String(64), nullable=False)
+    recipient_wallet_address: Mapped[str] = mapped_column(String(64), nullable=False)
+    network: Mapped[str] = mapped_column(String(32), nullable=False)
+    asset: Mapped[str] = mapped_column(String(32), nullable=False)
+    amount_usdc: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    facilitator: Mapped[str] = mapped_column(String(128), nullable=False)
+    payment_status: Mapped[str] = mapped_column(String(32), nullable=False, default="PRESENTED")
+    tx_hash: Mapped[str | None] = mapped_column(String(66), nullable=True)
+    settlement_reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
 class M2MMandateRequest(Base):
     """Durable M2M idempotency record bound to one mandate and request hash."""
 
