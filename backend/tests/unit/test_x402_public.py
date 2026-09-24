@@ -75,8 +75,69 @@ def test_x402_seller_returns_payment_challenge_without_payment():
     assert encoded["x402Version"] == 2
     assert encoded["accepts"][0]["resource"].endswith("/v1/public/ask")
     assert encoded["accepts"][0]["network"] == "eip155:84532"
+    assert encoded["accepts"][0]["scheme"] == "exact"
+    assert encoded["accepts"][0]["asset"] == "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
     assert len(encoded["accepts"][0]["asset"]) == 42
     assert encoded["accepts"][0]["amount"] == "10000"
+    import app.api.x402 as x402_module
+
+    assert encoded["accepts"][0]["payTo"] == x402_module.X402_RECIPIENT
+    assert encoded["accepts"][0]["extra"] == {"name": "USDC", "version": "2"}
+
+
+def test_x402_exact_evm_rejects_missing_domain_for_unconfigured_asset(monkeypatch):
+    import app.api.x402 as x402_module
+
+    monkeypatch.setattr(x402_module, "X402_NETWORK", "eip155:84532")
+    monkeypatch.setattr(x402_module, "X402_ASSET", "0x0000000000000000000000000000000000000001")
+    monkeypatch.setattr(x402_module, "X402_ASSET_NAME", None)
+    monkeypatch.setattr(x402_module, "X402_ASSET_VERSION", None)
+
+    with pytest.raises(RuntimeError, match="X402_EIP712_DOMAIN_REQUIRED"):
+        x402_module._requirements()
+
+
+def test_x402_facilitator_verify_wire_payload_preserves_requirements_extra(monkeypatch):
+    import app.api.x402 as x402_module
+
+    requirements = x402_module._requirements()
+    payment_payload = {
+        "x402Version": 2,
+        "accepted": dict(requirements),
+        "payload": {"signature": "0xfake-test-only", "authorization": {"from": "0x" + "1" * 40}},
+    }
+    captured = {}
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @staticmethod
+        def read():
+            return b'{"isValid":true}'
+
+    def _capture(request, timeout):
+        captured["url"] = request.full_url
+        captured["method"] = request.method
+        captured["body"] = json.loads(request.data.decode())
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr(x402_module, "urlopen", _capture)
+    result = x402_module._facilitator("verify", payment_payload, requirements)
+
+    assert result == {"isValid": True}
+    assert captured["method"] == "POST"
+    assert captured["url"].endswith("/verify")
+    assert captured["body"] == {
+        "x402Version": 2,
+        "paymentPayload": payment_payload,
+        "paymentRequirements": requirements,
+    }
+    assert captured["body"]["paymentRequirements"]["extra"] == {"name": "USDC", "version": "2"}
 
 
 # ---------------------------------------------------------------------------
@@ -213,10 +274,14 @@ def facilitator_stub(monkeypatch):
             self.settle_behavior = {"success": True, "transaction": f"0x{uuid.uuid4().hex}"}
             self.verify_calls = 0
             self.settle_calls = 0
+            self.verify_payload = None
+            self.verify_requirements = None
 
         def __call__(self, operation: str, payload: dict, requirements: dict) -> dict:
             if operation == "verify":
                 self.verify_calls += 1
+                self.verify_payload = payload
+                self.verify_requirements = requirements
                 return dict(self.verify_behavior)
             if operation == "settle":
                 self.settle_calls += 1
@@ -228,7 +293,10 @@ def facilitator_stub(monkeypatch):
     return stub
 
 
-def _valid_payment_header(payer: str = "0xABCD1234ABCD1234ABCD1234ABCD1234ABCD1234") -> str:
+def _valid_payment_header(
+    payer: str = "0xABCD1234ABCD1234ABCD1234ABCD1234ABCD1234",
+    accepted: dict | None = None,
+) -> str:
     """Construct a syntactically valid x402 payment header.
 
     The payload does NOT need a real signature — the facilitator stub
@@ -239,13 +307,14 @@ def _valid_payment_header(payer: str = "0xABCD1234ABCD1234ABCD1234ABCD1234ABCD12
     payload = {
         "x402Version": 2,
         "resource": "https://prama-dynamagh.up.railway.app/v1/public/ask",
-        "accepted": {
+        "accepted": accepted or {
             "scheme": "exact",
             "network": x402_module.X402_NETWORK,
             "asset": x402_module.X402_ASSET,
             "amount": x402_module.X402_AMOUNT_ATOMIC,
             "payTo": x402_module.X402_RECIPIENT,
             "maxTimeoutSeconds": 300,
+            "extra": x402_module._eip712_domain(),
         },
         "payload": {
             "signature": "0xfake",
@@ -253,6 +322,40 @@ def _valid_payment_header(payer: str = "0xABCD1234ABCD1234ABCD1234ABCD1234ABCD12
         },
     }
     return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+
+
+def test_x402_requirements_roundtrip_from_challenge_through_signed_payload_to_verify(
+    db_session, facilitator_stub, monkeypatch
+):
+    _no_worker_execute(monkeypatch)
+    facilitator_stub.verify_behavior = {"isValid": False, "invalidReason": "TEST_ONLY_STOP_BEFORE_SETTLE"}
+
+    challenge = client.post(
+        "/v1/public/ask",
+        json={"intent": "CRYPTO_PRICE", "request": "What is the current price of BTC in USD?"},
+    )
+    assert challenge.status_code == 402
+    requirements_from_challenge = _decode_header(challenge.headers["payment-required"])["accepts"][0]
+
+    response = client.post(
+        "/v1/public/ask",
+        headers={
+            "payment-signature": _valid_payment_header(accepted=requirements_from_challenge),
+            "idempotency-key": f"test-domain-roundtrip-{uuid.uuid4().hex[:12]}",
+        },
+        json={"intent": "CRYPTO_PRICE", "request": "What is the current price of BTC in USD?"},
+    )
+
+    assert response.status_code == 402
+    assert response.json()["error"] == "TEST_ONLY_STOP_BEFORE_SETTLE"
+    assert facilitator_stub.verify_calls == 1
+    assert facilitator_stub.verify_payload["accepted"] == requirements_from_challenge
+    assert facilitator_stub.verify_payload["accepted"]["extra"] == {"name": "USDC", "version": "2"}
+    assert facilitator_stub.verify_requirements == requirements_from_challenge
+    assert facilitator_stub.verify_requirements["extra"] == {"name": "USDC", "version": "2"}
+    assert facilitator_stub.settle_calls == 0
+    assert db_session.query(Mandate).count() == 0
+    assert db_session.query(AcquisitionTask).count() == 0
 
 
 def _no_worker_execute(monkeypatch):

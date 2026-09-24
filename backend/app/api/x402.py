@@ -49,6 +49,10 @@ router = APIRouter(tags=["x402"])
 PUBLIC_ORIGIN = os.environ.get("PUBLIC_BASE_URL", "https://prama-dynamagh.up.railway.app").rstrip("/")
 X402_NETWORK = os.environ.get("X402_NETWORK", "eip155:84532")
 X402_ASSET = os.environ.get("X402_ASSET", "0x036CbD53842c5426634e7929541eC2318f3dCF7e")
+_BASE_SEPOLIA_USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+_BASE_SEPOLIA_USDC_DOMAIN = {"name": "USDC", "version": "2"}
+X402_ASSET_NAME = os.environ.get("X402_ASSET_NAME")
+X402_ASSET_VERSION = os.environ.get("X402_ASSET_VERSION")
 X402_RECIPIENT = os.environ.get(
     "PRAMA_X402_RECIPIENT_ADDRESS",
     "0xC92b5ec74dca3EeE0A615dE026C3F3756cd18FB6",
@@ -56,6 +60,21 @@ X402_RECIPIENT = os.environ.get(
 X402_FACILITATOR = os.environ.get("X402_FACILITATOR_URL", "https://facilitator.payai.network").rstrip("/")
 X402_AMOUNT_ATOMIC = os.environ.get("X402_PRICE_ATOMIC", "10000")
 X402_AMOUNT_USDC = Decimal(X402_AMOUNT_ATOMIC) / Decimal("1000000")
+
+
+def _eip712_domain() -> dict[str, str]:
+    """Return the configured EIP-712 token domain for the exact EVM scheme.
+
+    Base Sepolia USDC has a known protocol domain. Other assets must configure
+    both values explicitly instead of inheriting USDC metadata by assumption.
+    """
+    if X402_ASSET_NAME and X402_ASSET_VERSION:
+        return {"name": X402_ASSET_NAME, "version": X402_ASSET_VERSION}
+    if bool(X402_ASSET_NAME) != bool(X402_ASSET_VERSION):
+        raise RuntimeError("X402_EIP712_DOMAIN_INCOMPLETE")
+    if X402_NETWORK == "eip155:84532" and X402_ASSET.lower() == _BASE_SEPOLIA_USDC.lower():
+        return dict(_BASE_SEPOLIA_USDC_DOMAIN)
+    raise RuntimeError("X402_EIP712_DOMAIN_REQUIRED")
 
 
 def _requirements(resource: str | None = None) -> dict:
@@ -66,6 +85,7 @@ def _requirements(resource: str | None = None) -> dict:
         "amount": X402_AMOUNT_ATOMIC,
         "payTo": X402_RECIPIENT,
         "maxTimeoutSeconds": 300,
+        "extra": _eip712_domain(),
         "resource": resource or f"{PUBLIC_ORIGIN}/v1/public/ask",
         "description": "Evidence-bound intelligence acquisition for autonomous agents.",
         "mimeType": "application/json",
