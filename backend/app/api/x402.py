@@ -69,16 +69,25 @@ def seller_manifest() -> dict:
     """Return the public x402 service document without querying a provider."""
 
     return {
-        "x402Version": 2,
+        # true402 consumes the seller manifest schema (x402 1.0).  The
+        # payment challenge returned by /v1/public/ask remains x402 v2.
+        "x402": "1.0",
         "name": "prama-dynamagh",
         "description": "Evidence-bound intelligence acquisition for autonomous agents.",
-        "capability": "evidence_bound_intelligence_acquisition",
-        "returns": ["evidence", "evaluation", "decision", "ticket"],
-        "accepts": [_requirements()],
-        "url": f"{PUBLIC_ORIGIN}/v1/public/ask",
+        "capabilities": ["evidence_bound_intelligence_acquisition"],
+        "pricing": {
+            "currency": "USDC",
+            "base": f"{X402_AMOUNT_USDC:.6f}",
+            "unit": "request",
+        },
+        "payment": {
+            "address": X402_RECIPIENT,
+            # Keep the manifest truthful to the seller challenge.  This
+            # deployment settles on Base Sepolia (eip155:84532).
+            "chain": "base-sepolia" if X402_NETWORK == "eip155:84532" else X402_NETWORK,
+            "facilitator": X402_FACILITATOR,
+        },
         "endpoint": f"{PUBLIC_ORIGIN}/v1/public/ask",
-        "method": "POST",
-        "capabilities": ["evidence", "evaluation", "decision", "ticket"],
     }
 
 

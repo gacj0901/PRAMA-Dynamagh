@@ -19,15 +19,13 @@ def test_x402_manifest_is_public_json_and_points_to_post_seller():
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
     body = response.json()
-    assert body["x402Version"] == 2
-    assert body["method"] == "POST"
-    assert body["url"].endswith("/v1/public/ask")
-    requirement = body["accepts"][0]
-    assert requirement["scheme"] == "exact"
-    assert requirement["network"]
-    assert requirement["asset"].startswith("0x")
-    assert requirement["payTo"].startswith("0x")
-    assert requirement["amount"] == "10000"
+    assert body["x402"] == "1.0"
+    assert body["capabilities"] == ["evidence_bound_intelligence_acquisition"]
+    assert body["pricing"] == {"currency": "USDC", "base": "0.010000", "unit": "request"}
+    assert body["payment"]["address"].startswith("0x")
+    assert body["payment"]["chain"] == "base-sepolia"
+    assert body["payment"]["facilitator"]
+    assert body["endpoint"].endswith("/v1/public/ask")
 
 
 def test_x402_seller_returns_payment_challenge_without_payment():
