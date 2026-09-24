@@ -50,7 +50,7 @@ header{
   text-align:center;line-height:1.5;background:#101012;
 }
 .tagline-wrap{padding-bottom:.18rem}
-.tagline-main{font-family:var(--sans);font-weight:500;font-size:1.02rem;line-height:1.3;color:var(--cream);letter-spacing:.01em}
+.tagline-main{font-family:var(--sans);font-weight:500;font-size:.78rem;line-height:1.3;color:#99D8FF;letter-spacing:.01em;white-space:nowrap}
 .tagline-main strong{font-weight:500}
 .header-actions{display:flex;flex-direction:column;align-items:flex-end;gap:.8rem}
 .about-trigger{
@@ -70,6 +70,7 @@ header{
   .status{justify-content:flex-start}
   .main-grid{grid-template-columns:1fr}
   .logo-placeholder{width:min(290px,100%)}
+  .tagline-main{white-space:normal}
 }
 
 h2{font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;color:var(--dim);margin:0 0 .95rem;font-weight:500}
@@ -86,6 +87,7 @@ h2 span{color:var(--cream)}
   position:absolute;left:-2.28rem;top:.45rem;width:1.9rem;height:1.9rem;border:1px dashed #3b3b3e;
   color:var(--mute);display:grid;place-items:center;font-family:var(--mono);font-size:.42rem;background:#111113;
 }
+.pipeline-icon{position:absolute;left:-2.28rem;top:.45rem;width:1.9rem;height:1.9rem;object-fit:contain;border:0;background:#111113}
 .step .label{font-size:.98rem}
 .step .id{font-family:var(--mono);font-size:.7rem;color:var(--dim);margin-top:.17rem}
 .step .state{font-family:var(--mono);font-size:.66rem;letter-spacing:.05em;text-align:right;white-space:nowrap}
@@ -189,8 +191,7 @@ footer a:hover{color:var(--blue);border-color:var(--blue)}
 
     <div class="tagline-wrap">
       <div class="tagline-main">
-        <strong>Structural layer of knowledge viability</strong><br>
-        <strong>for autonomous agents.</strong>
+        <strong>Structural layer of knowledge viability for autonomous agents.</strong>
       </div>
     </div>
 
@@ -213,32 +214,32 @@ footer a:hover{color:var(--blue);border-color:var(--blue)}
 
         <div class="pipe">
           <div class="step">
-            <span class="n">01</span><span class="icon-placeholder">ICON</span>
+            <span class="n">01</span><img class="pipeline-icon" src="/icons/01-MANDATE.png" alt="Mandate" />
             <div><div class="label">Mandate</div><div class="id">b9f38d1e_09ed · AUTONOMOUS</div></div>
             <div class="state go">TICKETED</div>
           </div>
           <div class="step">
-            <span class="n">02</span><span class="icon-placeholder">ICON</span>
+            <span class="n">02</span><img class="pipeline-icon" src="/icons/02-ACQUISITION.png" alt="Acquisition" />
             <div><div class="label">Acquisition</div><div class="id">1139e565_d898 · CRYPTO_PRICE</div></div>
             <div class="state go">SUCCEEDED</div>
           </div>
           <div class="step">
-            <span class="n">03</span><span class="icon-placeholder">ICON</span>
+            <span class="n">03</span><img class="pipeline-icon" src="/icons/03-EVIDENCE.png" alt="Evidence" />
             <div><div class="label">Evidence</div><div class="id" title="Artifact origin and integrity checked. Content correctness is not asserted.">acd24b04_6934 · ORIGIN &amp; INTEGRITY CHECKED</div></div>
             <div class="state go">ADMITTED</div>
           </div>
           <div class="step">
-            <span class="n">04</span><span class="icon-placeholder">ICON</span>
+            <span class="n">04</span><img class="pipeline-icon" src="/icons/04-EVALUATION.png" alt="Evaluation" />
             <div><div class="label">PRAMAgraph Evaluation</div><div class="id">7b620d2e_9a57</div></div>
             <div class="state go">STRUCTURALLY_ADMISSIBLE</div>
           </div>
           <div class="step">
-            <span class="n">05</span><span class="icon-placeholder">ICON</span>
+            <span class="n">05</span><img class="pipeline-icon" src="/icons/05-DESICION.png" alt="Decision" />
             <div><div class="label">Decision</div><div class="id">47e7c701_f9a6 · prama-gate-v0</div></div>
             <div class="state go">PERMIT</div>
           </div>
           <div class="step">
-            <span class="n">06</span><span class="icon-placeholder">ICON</span>
+            <span class="n">06</span><img class="pipeline-icon" src="/icons/06-TICKET.png" alt="Ticket" />
             <div><div class="label">Ticket</div><div class="id">9d58787f_1153</div></div>
             <div class="state wait">LOCAL ONLY</div>
           </div>
