@@ -275,3 +275,368 @@ def test_shadow_g13_is_persisted_for_real_run_artifacts(pipeline, monkeypatch, c
             assert lineages <= {"o-agent-v0:" + identity.agent_id, "o-agent-v0:" + identity.agent_id + ":run:" + run.run_id}
             assert any(lineage.endswith(":run:" + run.run_id) for lineage in lineages)
             assert all(not row.input_core["integrity_violations"] for row in longitudinal)
+
+
+def test_execution_permit_concurrent_consumption_is_postgres_one_shot(track3_database, monkeypatch):
+    """Two independent PostgreSQL sessions authorize at most one dispatch."""
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import datetime, timedelta, timezone
+    from threading import Barrier, Lock
+
+    from app.authority.delegated import (
+        build_execution_action_material,
+        consume_execution_permit,
+        issue_execution_permit,
+    )
+    from app.authority.profiles import AuthorityProfileSpec, create_authority_profile
+    from app.domain.mandates import AgentIdentity, AutonomyPolicy, Mandate
+
+    monkeypatch.setenv("FULL_AUTONOMY_ENABLED", "true")
+    monkeypatch.delenv("FULL_AUTONOMY_AGENT_ALLOWLIST", raising=False)
+    session = track3_database()
+    suffix = uuid.uuid4().hex
+    agent_id = "permit-race-" + suffix
+    mandate_id = str(uuid.uuid4())
+    action_id = str(uuid.uuid4())
+    policy = AutonomyPolicy(
+        name="permit-race-" + suffix, enabled=False, version="autonomy-policy-v0",
+        mandate_template={}, acquisition_mode="TELEGRAPH_HTTP", allow_telegraph_http=True,
+        allow_erc8183=False, allow_anchor=False, strict_verification=True,
+        read_only_replay=False, cadence_seconds=900, dedupe_window_seconds=900,
+        max_usdc_per_run=Decimal("0.05"), max_usdc_per_day=Decimal("0.20"),
+        max_runs_per_day=4, max_concurrent_runs=1, state="DRAFT",
+    )
+    try:
+        session.add(policy)
+        session.flush()
+        identity = AgentIdentity(
+            agent_id=agent_id, name="synthetic permit race", origin="INTERNAL_AUTONOMY",
+            status="ACTIVE", autonomy_state="ACTIVE", policy_id=policy.policy_id,
+        )
+        session.add(identity)
+        session.flush()
+        profile = create_authority_profile(
+            session,
+            agent_id,
+            AuthorityProfileSpec(
+                valid_from=datetime.now(timezone.utc) - timedelta(seconds=1),
+                total_budget_usdc=Decimal("0.05"),
+                per_action_budget_usdc=Decimal("0.05"),
+                allowed_action_kinds=["TELEGRAPH_HTTP_ACQUISITION"],
+                external_execution_allowed=True,
+                telegraph_allowed=True,
+            ),
+            created_by="pytest",
+            principal_id="permit-race-principal",
+        )
+        mandate = Mandate(
+            mandate_id=mandate_id, actor_id="permit-race-test", text="offline replay fixture",
+            mandate_type="AUTONOMOUS", constraints={}, max_budget_usdc=Decimal("0.05"),
+            status="ACQUIRING", origin="AUTONOMOUS", agent_identity_id=agent_id,
+            autonomy_policy_id=policy.policy_id,
+        )
+        session.add(mandate)
+        session.flush()
+        action = build_execution_action_material(
+            mandate_id=mandate_id,
+            agent_identity_id=agent_id,
+            action_id=action_id,
+            action_kind="TELEGRAPH_HTTP_ACQUISITION",
+            query="Synthetic no-network PostgreSQL permit race",
+            requested_intent="RESEARCH_QUERY",
+            causal_request_id=mandate_id,
+            amount=Decimal("0.01"),
+            adapter_target={
+                "provider": "TEST_PROVIDER", "access_mechanism": "TEST",
+                "adapter_kind": "tests.NoNetworkAdapter",
+                "execution_target_fingerprint": "0x" + "1" * 64,
+            },
+            reservation={
+                "mandate_id": mandate_id, "spend_date": "2026-09-24",
+                "reserved_usdc": Decimal("0.05"), "status": "RESERVED", "origin": "AUTONOMOUS",
+            },
+        )
+        permit = issue_execution_permit(
+            session, mandate=mandate, action_id=action_id,
+            action_kind="TELEGRAPH_HTTP_ACQUISITION", amount=Decimal("0.01"),
+            g13_result="CONTINUE", action_material=action,
+            constraints={"g12_reservation_verified": True},
+        )
+        permit_id = permit.permit_id
+        session.commit()
+
+        barrier = Barrier(2)
+        dispatch_lock = Lock()
+        authorized_dispatches = []
+
+        def consume_once():
+            own = track3_database()
+            try:
+                barrier.wait(timeout=10)
+                def validate_identity(_permit):
+                    current = own.query(AgentIdentity).filter_by(agent_id=agent_id).with_for_update().one()
+                    if current.status != "ACTIVE" or current.autonomy_state != "ACTIVE":
+                        raise ValueError("EXECUTION_PERMIT_AUTHORITY_STALE")
+                consume_execution_permit(
+                    own,
+                    permit_id,
+                    expected_action_material=action,
+                    authority_validator=validate_identity,
+                )
+                own.commit()
+                with dispatch_lock:
+                    authorized_dispatches.append("authorized")
+                return "CONSUMED"
+            except ValueError as error:
+                own.rollback()
+                return str(error)
+            finally:
+                own.close()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes = list(pool.map(lambda _index: consume_once(), range(2)))
+        assert outcomes.count("CONSUMED") == 1
+        assert outcomes.count("EXECUTION_PERMIT_ALREADY_CONSUMED") == 1
+        assert len(authorized_dispatches) == 1
+        with track3_database() as audit:
+            from app.epistemic.contracts import canonical_hash
+            commitments = audit.query(UsageEvent).filter_by(
+                mandate_id=mandate_id,
+                event_type="EXECUTION_DISPATCH_COMMITTED",
+            ).all()
+            assert len(commitments) == 1
+            assert commitments[0].metadata_["commitment_state"] == "COMMITTED_FOR_DISPATCH"
+            assert commitments[0].metadata_["action_envelope_hash"] == canonical_hash(action)
+    finally:
+        session.rollback()
+        session.close()
+
+
+@pytest.mark.parametrize("authority_change", ["G13_HALT", "PROFILE_REVOKED", "G12_RELEASED"])
+@pytest.mark.parametrize("change_order", ["BEFORE_COMMITMENT", "AFTER_COMMITMENT"])
+def test_execution_commitment_orders_authority_changes_with_dispatch(
+    track3_database, monkeypatch, authority_change, change_order,
+):
+    """PostgreSQL row locks order authority mutation against one-shot commitment."""
+    from datetime import datetime, timedelta, timezone
+    from threading import Event, Thread
+
+    from app.authority.delegated import (
+        build_execution_action_material,
+        consume_execution_permit,
+        issue_execution_permit,
+        resolve_profile,
+    )
+    from app.authority.profiles import (
+        AuthorityProfileSpec,
+        create_authority_profile,
+        set_authority_profile_status,
+    )
+    from app.domain.mandates import (
+        AgentAuthorityProfile,
+        AgentIdentity,
+        AutonomyPolicy,
+        Mandate,
+        PublicManualSpendReservation,
+    )
+    from app.epistemic.contracts import canonical_hash
+    from app.public_safety import release_spend_reservation
+
+    monkeypatch.setenv("FULL_AUTONOMY_ENABLED", "true")
+    monkeypatch.delenv("FULL_AUTONOMY_AGENT_ALLOWLIST", raising=False)
+    session = track3_database()
+    suffix = uuid.uuid4().hex
+    agent_id = "commitment-race-" + suffix
+    mandate_id = str(uuid.uuid4())
+    action_id = str(uuid.uuid4())
+    # Unique historical dates keep the daily-ledger primary key isolated per
+    # race case without changing any runtime spend policy.
+    spend_date = datetime(2000 + int(suffix[:2], 16), 1 + int(suffix[2:4], 16) % 12,
+                          1 + int(suffix[4:6], 16) % 27, tzinfo=timezone.utc).date()
+    policy = AutonomyPolicy(
+        name="commitment-race-" + suffix, enabled=False, version="autonomy-policy-v0",
+        mandate_template={}, acquisition_mode="TELEGRAPH_HTTP", allow_telegraph_http=True,
+        allow_erc8183=False, allow_anchor=False, strict_verification=True,
+        read_only_replay=False, cadence_seconds=900, dedupe_window_seconds=900,
+        max_usdc_per_run=Decimal("0.05"), max_usdc_per_day=Decimal("0.20"),
+        max_runs_per_day=4, max_concurrent_runs=1, state="DRAFT",
+    )
+    try:
+        session.add(policy)
+        session.flush()
+        identity = AgentIdentity(
+            agent_id=agent_id, name="synthetic commitment race", origin="INTERNAL_AUTONOMY",
+            status="ACTIVE", autonomy_state="ACTIVE", policy_id=policy.policy_id,
+        )
+        session.add(identity)
+        session.flush()
+        profile = create_authority_profile(
+            session, agent_id,
+            AuthorityProfileSpec(
+                valid_from=datetime.now(timezone.utc) - timedelta(seconds=1),
+                total_budget_usdc=Decimal("0.05"), per_action_budget_usdc=Decimal("0.05"),
+                allowed_action_kinds=["TELEGRAPH_HTTP_ACQUISITION"],
+                external_execution_allowed=True, telegraph_allowed=True,
+            ),
+            created_by="pytest", principal_id="commitment-race-principal",
+        )
+        mandate = Mandate(
+            mandate_id=mandate_id, actor_id="commitment-race-test", text="offline commitment fixture",
+            mandate_type="AUTONOMOUS", constraints={}, max_budget_usdc=Decimal("0.05"),
+            status="ACQUIRING", origin="AUTONOMOUS", agent_identity_id=agent_id,
+            autonomy_policy_id=policy.policy_id,
+        )
+        session.add(mandate)
+        session.flush()
+        session.add(PublicManualSpendLedger(
+            spend_date=spend_date, reserved_usdc=Decimal("0.05"), spent_usdc=Decimal("0"),
+        ))
+        session.add(PublicManualSpendReservation(
+            mandate_id=mandate_id, spend_date=spend_date, reserved_usdc=Decimal("0.05"),
+            actual_spend_usdc=Decimal("0"), status="RESERVED", origin="AUTONOMOUS",
+        ))
+        action = build_execution_action_material(
+            mandate_id=mandate_id, agent_identity_id=agent_id, action_id=action_id,
+            action_kind="TELEGRAPH_HTTP_ACQUISITION", query="No-network commitment race",
+            requested_intent="RESEARCH_QUERY", causal_request_id=mandate_id,
+            amount=Decimal("0.01"), adapter_target={
+                "provider": "TEST_PROVIDER", "access_mechanism": "TEST",
+                "adapter_kind": "tests.NoNetworkAdapter", "execution_target_fingerprint": "0x" + "2" * 64,
+            },
+            reservation={
+                "mandate_id": mandate_id, "spend_date": spend_date.isoformat(),
+                "reserved_usdc": Decimal("0.05"), "status": "RESERVED", "origin": "AUTONOMOUS",
+            },
+        )
+        permit = issue_execution_permit(
+            session, mandate=mandate, action_id=action_id,
+            action_kind="TELEGRAPH_HTTP_ACQUISITION", amount=Decimal("0.01"),
+            g13_result="CONTINUE", action_material=action,
+            constraints={"g12_reservation_verified": True},
+        )
+        permit_id, profile_id = permit.permit_id, profile.authority_profile_id
+        session.commit()
+
+        def mutate_authority(own):
+            if authority_change == "G13_HALT":
+                current = own.query(AgentIdentity).filter_by(agent_id=agent_id).with_for_update().one()
+                current.autonomy_state = "HALTED"
+            elif authority_change == "PROFILE_REVOKED":
+                set_authority_profile_status(
+                    own, agent_id, profile_id, "REVOKED", created_by="pytest",
+                    reason="ordered commitment race test",
+                )
+            else:
+                release_spend_reservation(own, mandate_id, "AUTONOMOUS")
+
+        def validate_fresh(own, _permit, started=None):
+            if started is not None:
+                started.set()
+            current_identity = own.query(AgentIdentity).filter_by(agent_id=agent_id).with_for_update().one()
+            current_profile = own.query(AgentAuthorityProfile).filter_by(
+                authority_profile_id=profile_id,
+            ).with_for_update().one()
+            current_reservation = own.query(PublicManualSpendReservation).filter_by(
+                mandate_id=mandate_id,
+            ).with_for_update().one()
+            try:
+                effective = resolve_profile(own, agent_id)
+            except ValueError as error:
+                raise ValueError("EXECUTION_PERMIT_AUTHORITY_STALE") from error
+            if (
+                current_identity.status != "ACTIVE" or current_identity.autonomy_state != "ACTIVE"
+                or effective.authority_profile_id != profile_id or current_profile.status != "ACTIVE"
+                or current_reservation.status != "RESERVED"
+            ):
+                raise ValueError("EXECUTION_PERMIT_AUTHORITY_STALE")
+
+        dispatches = []
+        commitment_results = []
+        if change_order == "BEFORE_COMMITMENT":
+            mutation_held, release_mutation = Event(), Event()
+            validation_started = Event()
+            mutation_result = []
+
+            def mutate_then_wait():
+                own = track3_database()
+                try:
+                    mutate_authority(own)
+                    mutation_held.set()
+                    assert release_mutation.wait(timeout=10)
+                    own.commit()
+                    mutation_result.append("COMMITTED")
+                finally:
+                    own.close()
+
+            def attempt_commit():
+                own = track3_database()
+                try:
+                    consume_execution_permit(
+                        own, permit_id, expected_action_material=action,
+                        authority_validator=lambda row: validate_fresh(own, row, validation_started),
+                    )
+                    own.commit()
+                    dispatches.append("AUTHORIZED")
+                except ValueError as error:
+                    own.rollback()
+                    commitment_results.append(str(error))
+                finally:
+                    own.close()
+
+            mutator = Thread(target=mutate_then_wait)
+            worker = Thread(target=attempt_commit)
+            mutator.start()
+            assert mutation_held.wait(timeout=10)
+            worker.start()
+            assert validation_started.wait(timeout=10)
+            release_mutation.set()
+            mutator.join(timeout=10)
+            worker.join(timeout=10)
+            assert not mutator.is_alive() and not worker.is_alive()
+            assert mutation_result == ["COMMITTED"]
+            assert dispatches == []
+            assert commitment_results == ["EXECUTION_PERMIT_AUTHORITY_STALE"]
+        else:
+            commitment_persisted, authority_changed = Event(), Event()
+
+            def commit_then_dispatch():
+                own = track3_database()
+                try:
+                    consume_execution_permit(
+                        own, permit_id, expected_action_material=action,
+                        authority_validator=lambda row: validate_fresh(own, row),
+                    )
+                    own.commit()
+                    commitment_persisted.set()
+                    assert authority_changed.wait(timeout=10)
+                    dispatches.append("AUTHORIZED_BEST_EFFORT_DISPATCH")
+                finally:
+                    own.close()
+
+            def mutate_after_commitment():
+                own = track3_database()
+                try:
+                    assert commitment_persisted.wait(timeout=10)
+                    mutate_authority(own)
+                    own.commit()
+                    authority_changed.set()
+                finally:
+                    own.close()
+
+            worker = Thread(target=commit_then_dispatch)
+            mutator = Thread(target=mutate_after_commitment)
+            worker.start()
+            mutator.start()
+            worker.join(timeout=10)
+            mutator.join(timeout=10)
+            assert not worker.is_alive() and not mutator.is_alive()
+            assert dispatches == ["AUTHORIZED_BEST_EFFORT_DISPATCH"]
+            with track3_database() as audit:
+                event = audit.query(UsageEvent).filter_by(
+                    mandate_id=mandate_id, event_type="EXECUTION_DISPATCH_COMMITTED",
+                ).one()
+                assert event.metadata_["commitment_state"] == "COMMITTED_FOR_DISPATCH"
+                assert event.metadata_["action_envelope_hash"] == canonical_hash(action)
+    finally:
+        session.rollback()
+        session.close()

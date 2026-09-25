@@ -25,6 +25,7 @@ from app.authority.failure_episode import (
 from app.acquisition.gateway import AcquisitionAdapterError
 from app.acquisition.provider import configured_acquisition_adapter
 from app.autonomy.service import finalize_http_run
+from app.epistemic.contracts import canonical_hash
 
 logger = logging.getLogger(__name__)
 now = lambda: datetime.now(timezone.utc)
@@ -69,6 +70,11 @@ WORKER_FAILURE_CODES = {
     "FULL_AUTONOMY_DISABLED", "AMBIGUOUS_AGENT_AUTHORITY", "AGENT_AUTONOMY_HALTED",
     "AGENT_AUTONOMY_REVIEW_REQUIRED", "EXECUTION_PERMIT_INVALID",
     "EXECUTION_PERMIT_EXPIRED", "EXECUTION_PERMIT_CONSUMED",
+    "EXECUTION_PERMIT_MISSING", "EXECUTION_PERMIT_ALREADY_CONSUMED",
+    "EXECUTION_PERMIT_PAYLOAD_MISMATCH", "EXECUTION_PERMIT_TARGET_MISMATCH",
+    "EXECUTION_PERMIT_ECONOMIC_MISMATCH", "EXECUTION_PERMIT_ACTION_MISMATCH",
+    "EXECUTION_PERMIT_AUTHORITY_STALE", "EXECUTION_PERMIT_PROFILE_INVALID",
+    "EXECUTION_PERMIT_G12_INVALID", "EXECUTION_PERMIT_G13_INVALID",
     "GATEWAY_UNAVAILABLE", "GATEWAY_UNCLASSIFIED_RESPONSE",
 }
 KNOWN_FAILURE_CODES = GATEWAY_FAILURE_CODES | WORKER_FAILURE_CODES
@@ -87,6 +93,218 @@ def uncertain_hold(session, mandate_id):
         (Decimal(event.metadata_["held_budget_usdc"]) for event in events if event.acquisition_id not in reconciled),
         Decimal("0"),
     )
+
+
+def _adapter_target_material(adapter):
+    """Return secret-free, provider-neutral adapter/target identity material."""
+    adapter_kind = f"{type(adapter).__module__}.{type(adapter).__qualname__}"
+    target_config = {"adapter_kind": adapter_kind}
+    if hasattr(adapter, "base_url"):
+        target_config.update(target_kind="http_base_url", target=getattr(adapter, "base_url"))
+    elif hasattr(adapter, "command"):
+        environment = getattr(adapter, "environment", {}) or {}
+        target_config.update(
+            target_kind="mcp_stdio",
+            command=getattr(adapter, "command"),
+            engine=environment.get("TELEGRAPH_ENGINE_URL"),
+        )
+    elif hasattr(adapter, "execution_target"):
+        target_config.update(target_kind="declared", target=getattr(adapter, "execution_target"))
+    else:
+        target_config.update(target_kind="adapter_identity_only")
+    return {
+        "provider": getattr(adapter, "provider", None),
+        "access_mechanism": getattr(adapter, "access_mechanism", None),
+        "adapter_kind": adapter_kind,
+        # Store only the fingerprint: configured targets/commands can contain
+        # private routing or credential-bearing values.
+        "execution_target_fingerprint": canonical_hash(target_config),
+    }
+
+
+def _reservation_action_material(reservation):
+    return {
+        "mandate_id": reservation.mandate_id,
+        "spend_date": reservation.spend_date.isoformat(),
+        "reserved_usdc": Decimal(reservation.reserved_usdc),
+        "status": reservation.status,
+        "origin": reservation.origin,
+    }
+
+
+def _build_action_material(*, mandate, task, adapter, amount, reservation):
+    from app.authority.delegated import build_execution_action_material
+    return build_execution_action_material(
+        mandate_id=mandate.mandate_id,
+        agent_identity_id=mandate.agent_identity_id,
+        action_id=task.acquisition_id,
+        action_kind="TELEGRAPH_HTTP_ACQUISITION",
+        query=task.query,
+        requested_intent=task.requested_intent,
+        causal_request_id=mandate.mandate_id,
+        amount=Decimal(amount),
+        adapter_target=_adapter_target_material(adapter),
+        reservation=_reservation_action_material(reservation),
+    )
+
+
+def _validate_fresh_autonomous_authority(
+    session, *, permit, mandate_id, acquisition_id, run, adapter,
+    action_material, budget, throttle_ok,
+):
+    """Re-read revocable authority and exact action while permit row is locked."""
+    from app.authority.delegated import (
+        _allowed,
+        g12_check,
+        resolve_profile,
+    )
+    from app.authority.runtime import evaluate_current_g13, run_pre_next_action_authority_check
+
+    mandate = session.query(Mandate).populate_existing().filter_by(mandate_id=mandate_id).with_for_update().one_or_none()
+    task = session.query(AcquisitionTask).populate_existing().filter_by(acquisition_id=acquisition_id).with_for_update().one_or_none()
+    if (
+        mandate is None or task is None or task.mandate_id != mandate_id
+        or mandate.origin != "AUTONOMOUS"
+        or mandate.status != "ACQUIRING"
+        or task.status != "RUNNING"
+        or mandate.agent_identity_id != permit.agent_identity_id
+    ):
+        raise ValueError("EXECUTION_PERMIT_AUTHORITY_STALE")
+    identity = session.query(AgentIdentity).populate_existing().filter_by(agent_id=mandate.agent_identity_id).with_for_update().one_or_none()
+    if identity is None or identity.status != "ACTIVE":
+        raise ValueError("EXECUTION_PERMIT_AUTHORITY_STALE")
+    if identity.autonomy_state == "HALTED":
+        raise ValueError("EXECUTION_PERMIT_G13_INVALID")
+    if identity.autonomy_state != (permit.constraints or {}).get("agent_autonomy_state"):
+        raise ValueError("EXECUTION_PERMIT_G13_INVALID")
+    from app.authority.delegated import full_autonomy_enabled
+    if not full_autonomy_enabled(identity.agent_id):
+        raise ValueError("EXECUTION_PERMIT_AUTHORITY_STALE")
+
+    reservation = session.query(PublicManualSpendReservation).filter_by(
+        mandate_id=mandate_id,
+    ).populate_existing().with_for_update().one_or_none()
+    if (
+        reservation is None or reservation.status != "RESERVED"
+        or reservation.origin != "AUTONOMOUS"
+        or reservation.reserved_usdc <= 0
+    ):
+        raise ValueError("EXECUTION_PERMIT_G12_INVALID")
+    current_action = _build_action_material(
+        mandate=mandate, task=task, adapter=adapter,
+        amount=budget, reservation=reservation,
+    )
+    from app.authority.delegated import _validate_action_match
+    _validate_action_match(action_material, current_action)
+
+    try:
+        profile = resolve_profile(session, identity.agent_id)
+    except ValueError as error:
+        raise ValueError("EXECUTION_PERMIT_PROFILE_INVALID") from error
+    if (
+        profile.authority_profile_id != permit.authority_profile_id
+        or profile.status != "ACTIVE"
+        or not _allowed(profile, permit.action_kind, task.requested_intent)
+    ):
+        raise ValueError("EXECUTION_PERMIT_PROFILE_INVALID")
+    # Profile lifecycle mutations take the same row lock in profiles.py.
+    # Lock it now and resolve once more so a concurrent revoke/version switch
+    # cannot slip between freshness resolution and permit consumption.
+    locked_profile = session.query(type(profile)).filter_by(
+        authority_profile_id=profile.authority_profile_id,
+    ).with_for_update().one_or_none()
+    if locked_profile is None:
+        raise ValueError("EXECUTION_PERMIT_PROFILE_INVALID")
+    try:
+        profile = resolve_profile(session, identity.agent_id)
+    except ValueError as error:
+        raise ValueError("EXECUTION_PERMIT_PROFILE_INVALID") from error
+    if profile.authority_profile_id != permit.authority_profile_id:
+        raise ValueError("EXECUTION_PERMIT_PROFILE_INVALID")
+
+    try:
+        cap = maximum(mandate, session)
+        reservation = verify_spend_reservation(session, mandate_id, cap, "AUTONOMOUS")
+        available = reservation.reserved_usdc - uncertain_hold(session, mandate_id)
+        allowed, _reason = g12_check(profile, Decimal(budget), reservation_verified=True)
+        if (
+            not allowed or reservation.reserved_usdc > cap
+            or Decimal(budget) <= 0 or Decimal(budget) > available
+        ):
+            raise ValueError("EXECUTION_PERMIT_G12_INVALID")
+        user_credit.verify_reserved(session, mandate, Decimal(budget))
+    except ValueError:
+        raise
+    except Exception as error:
+        raise ValueError("EXECUTION_PERMIT_G12_INVALID") from error
+
+    try:
+        longitudinal = evaluate_current_g13(session, identity.agent_id)
+        current_throttle_ok = throttle_ok
+        if longitudinal.result == "THROTTLE":
+            ceiling = cap if profile.unlimited_budget else Decimal(profile.per_action_budget or profile.economic_budget or cap)
+            configured = (profile.human_review_thresholds or {}).get("throttle_max_usdc")
+            limit = Decimal(str(configured)) if configured is not None else ceiling / Decimal("2")
+            if longitudinal.result_core.get("operator_recovery_canary"):
+                recovery = longitudinal.input_core.get("operator_recovery") or {}
+                limit = min(ceiling, Decimal(str(recovery.get("canary_budget_usdc", "0"))))
+            current_throttle_ok = Decimal(budget) <= limit
+        stored_constraints = permit.constraints or {}
+        recovery_probe = bool(stored_constraints.get("recovery_probe_authorized")) and bool(
+            longitudinal.result_core.get("recovery_probe_authorized")
+        )
+        bootstrap_authorized = bool(stored_constraints.get("bootstrap_authorized"))
+        if (
+            longitudinal.result == "REVIEW"
+            and not recovery_probe
+            and not bootstrap_authorized
+            and not stored_constraints.get("recovery_observation_permitted")
+        ):
+            raise ValueError("EXECUTION_PERMIT_G13_INVALID")
+        bootstrap_grant = None
+        if bootstrap_authorized:
+            from app.authority.bootstrap import bootstrap_eligibility
+            policy = session.get(AutonomyPolicy, run.policy_id)
+            eligible, _reason, bootstrap_grant = bootstrap_eligibility(
+                session, identity=identity, policy=policy, profile=profile,
+                g13_core=longitudinal, action_kind=permit.action_kind,
+                amount=Decimal(budget),
+            )
+            if not eligible or bootstrap_grant is None or bootstrap_grant.bootstrap_authority_id != stored_constraints.get("bootstrap_authority_id"):
+                raise ValueError("EXECUTION_PERMIT_G13_INVALID")
+        checkpoint = run_pre_next_action_authority_check(
+            session,
+            mandate=mandate,
+            acquisition=task,
+            run=run,
+            g12_authorized=True,
+            g12_reservation=reservation,
+            current_runtime_action="CONTINUE_TO_GATEWAY",
+            throttled_constraints_satisfied=current_throttle_ok,
+            recovery_probe_authorized=recovery_probe,
+            bootstrap_authorized=bootstrap_authorized,
+            enforce=True,
+            longitudinal_core=longitudinal,
+        )
+        if checkpoint.composition.result != "ALLOW":
+            raise ValueError("EXECUTION_PERMIT_G13_INVALID")
+        if bootstrap_authorized and bootstrap_grant is not None:
+            from app.authority.bootstrap import consume_bootstrap_authority
+            consume_bootstrap_authority(
+                session,
+                grant_id=bootstrap_grant.bootstrap_authority_id,
+                action_id=acquisition_id,
+                action_kind=permit.action_kind,
+                amount=Decimal(budget),
+                mandate_id=mandate_id,
+                run_id=run.run_id,
+            )
+    except ValueError as error:
+        if str(error).startswith("EXECUTION_PERMIT_"):
+            raise
+        raise ValueError("EXECUTION_PERMIT_G13_INVALID") from error
+    except Exception as error:
+        raise ValueError("EXECUTION_PERMIT_G13_INVALID") from error
 
 
 def _gateway_reconciled_without_payment(code: str, call: TelegraphCall | None, gateway_http_status: int | None = None) -> bool:
@@ -296,6 +514,10 @@ def execute_one(mandate_id, acquisition_id):
                     "AUTHORITY_COMPOSITION_RESTRICTED:"
                     + str(checkpoint.composition.result_core.get("authority_reason", "G13_RESTRICTED"))
                 )
+            action_material = _build_action_material(
+                mandate=mandate, task=task, adapter=adapter,
+                amount=budget, reservation=reservation,
+            )
             permit = issue_execution_permit(
                 session,
                 mandate=mandate,
@@ -303,6 +525,7 @@ def execute_one(mandate_id, acquisition_id):
                 action_kind="TELEGRAPH_HTTP_ACQUISITION",
                 amount=budget,
                 g13_result=checkpoint.longitudinal.result,
+                action_material=action_material,
                 constraints={
                     "throttle_satisfied": throttle_ok,
                     "recovery_probe_authorized": (
@@ -310,27 +533,15 @@ def execute_one(mandate_id, acquisition_id):
                         and preliminary_g13.result_core.get("recovery_probe_authorized") is True
                     ),
                     "bootstrap_authorized": bootstrap_authorized,
+                    "bootstrap_authority_id": bootstrap_grant.bootstrap_authority_id if bootstrap_grant is not None else None,
                     "authorization_source": "BOOTSTRAP" if bootstrap_authorized else "NORMAL_G13",
+                    "recovery_observation_permitted": recovery_observation_permitted,
                     "throttle_limit_usdc": str(throttle_limit) if throttle_limit is not None else None,
                     "g12_reservation_verified": True,
                     "g12_reserved_usdc": str(reservation.reserved_usdc),
                 },
             )
             session.commit()
-            consume_execution_permit(session, permit.permit_id)
-            session.commit()
-            if bootstrap_authorized and bootstrap_grant is not None:
-                from app.authority.bootstrap import consume_bootstrap_authority
-                consume_bootstrap_authority(
-                    session,
-                    grant_id=bootstrap_grant.bootstrap_authority_id,
-                    action_id=acquisition_id,
-                    action_kind="TELEGRAPH_HTTP_ACQUISITION",
-                    amount=budget,
-                    mandate_id=mandate_id,
-                    run_id=run.run_id,
-                )
-                session.commit()
             if (
                 preliminary_g13.policy_version == G13_REVIEW_RECOVERY_POLICY_VERSION
                 and preliminary_g13.result_core.get("recovery_probe_authorized") is True
@@ -354,7 +565,26 @@ def execute_one(mandate_id, acquisition_id):
                             "concurrency_limit": profile.concurrency_limit,
                         },
                     ))
-                    session.commit()
+            # All authority-sensitive validation and one-shot consumption are
+            # coordinated in one final DB transaction. Commit before network;
+            # no DB transaction is held open across adapter.acquire().
+            consume_execution_permit(
+                session,
+                permit.permit_id,
+                expected_action_material=action_material,
+                authority_validator=lambda locked_permit: _validate_fresh_autonomous_authority(
+                    session,
+                    permit=locked_permit,
+                    mandate_id=mandate_id,
+                    acquisition_id=acquisition_id,
+                    run=run,
+                    adapter=adapter,
+                    action_material=action_material,
+                    budget=budget,
+                    throttle_ok=throttle_ok,
+                ),
+            )
+            session.commit()
         network_attempted = True
         failure_stage = "NETWORK"
         try:
