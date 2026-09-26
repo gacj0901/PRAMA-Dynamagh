@@ -216,7 +216,7 @@ def _accepted_response(
     )
 
 
-def _x402_result_payload(session, mandate: Mandate, request_id: str) -> dict:
+def _x402_result_payload(session, mandate: Mandate, request_id: str, *, secrets=()) -> dict:
     """Build only the persisted read result for the authorized mandate."""
 
     tasks = (
@@ -249,7 +249,9 @@ def _x402_result_payload(session, mandate: Mandate, request_id: str) -> dict:
         .order_by(Ticket.created_at.desc())
         .first()
     )
+    from app.api.consumer_result import project_consumer_result
     return {
+        "consumer_result": project_consumer_result(mandate, tasks, evidence_rows, secrets),
         "request_id": request_id,
         "mandate_id": mandate.mandate_id,
         "origin": mandate.origin,
@@ -585,8 +587,9 @@ def get_x402_result(mandate_id: str, request: Request):
         mandate = session.get(Mandate, mandate_id)
         if mandate is None or mandate.origin != "M2M":
             return JSONResponse({"code": "X402_RESULT_NOT_FOUND"}, status_code=404)
-        return JSONResponse(
-            jsonable_encoder(_x402_result_payload(session, mandate, payment.request_id)),
+        from app.tickets.delivery import ConsumerResultResponse
+        return ConsumerResultResponse(
+            jsonable_encoder(_x402_result_payload(session, mandate, payment.request_id, secrets=(supplied,))),
             headers={"Cache-Control": "no-store"},
         )
     finally:

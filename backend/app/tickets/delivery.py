@@ -4,12 +4,51 @@ import logging
 import uuid
 
 from starlette.concurrency import run_in_threadpool
+from starlette.responses import JSONResponse
 
 from app.persistence.database import SessionLocal
 from app.tickets.disclosure import delivered
 from app.tickets.public_identity import ticket_by_hash
 
 logger = logging.getLogger(__name__)
+
+
+def record_consumer_delivery(mandate_id, acquisition_ids, evidence_ids):
+    from app.api.consumer_result import DELIVERY_EVENT
+    from app.domain.mandates import UsageEvent
+    with SessionLocal() as session:
+        session.add(UsageEvent(
+            mandate_id=mandate_id, event_type=DELIVERY_EVENT,
+            metadata_={"origin": "M2M", "acquisition_ids": acquisition_ids,
+                       "evidence_ids": evidence_ids,
+                       "delivery_surface": "x402-public-result",
+                       "delivery_scope": "SERVER_DELIVERY_CONFIRMED"},
+        ))
+        session.commit()
+
+
+class ConsumerResultResponse(JSONResponse):
+    """Append one receipt per successful send, never a consumer acknowledgment.
+
+    Socket send and DB commit cannot be atomic. Missing receipts remain UNKNOWN;
+    retries append another delivery observation, without replaying any payment.
+    """
+    def __init__(self, content, **kwargs):
+        super().__init__(content, **kwargs)
+        result = content["consumer_result"]
+        self.delivery = None
+        if result["status"] == "DELIVERED" and result["results"]:
+            self.delivery = (content["mandate_id"],
+                             sorted({r["acquisition_id"] for r in result["results"]}),
+                             sorted({r["evidence_id"] for r in result["results"]}))
+
+    async def __call__(self, scope, receive, send):
+        await super().__call__(scope, receive, send)
+        if self.delivery:
+            try:
+                await run_in_threadpool(record_consumer_delivery, *self.delivery)
+            except Exception:
+                logger.error("M2M_CONSUMER_DELIVERY_AUDIT_UNAVAILABLE")
 
 
 def record_delivery(response_hash, context_id, request_id):

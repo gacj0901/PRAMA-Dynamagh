@@ -29,6 +29,7 @@ from app.domain.mandates import (
     StructuralEvaluation,
     TelegraphCall,
     Ticket,
+    UsageEvent,
 )
 from app.competition import competition_budget_profile
 from app.persistence.database import get_session
@@ -151,8 +152,8 @@ def _execution_history(session: Session, mandates: list[Mandate], *, limit: int 
     must not be copied into an unscoped list endpoint. Their aggregate counts
     remain available under USER as a distinct origin.
     This projection never includes Evidence.normalized_payload, provider
-    responses, payment identities, or result-capability material. No durable
-    consumer-fulfillment signal exists yet, so delivery stays UNKNOWN.
+    responses, payment identities, or result-capability material. Server
+    delivery is inferred only from persisted server delivery events.
     """
     visible_mandates = [item for item in mandates if getattr(item, "origin", None) != "USER"]
     mandate_by_id = {str(item.mandate_id): item for item in visible_mandates}
@@ -164,6 +165,17 @@ def _execution_history(session: Session, mandates: list[Mandate], *, limit: int 
         return float(timestamp()) if callable(timestamp) else 0.0
 
     mandate_ids = list(mandate_by_id)
+    from app.api.consumer_result import DELIVERY_EVENT
+    delivered_acquisitions = {
+        (event.mandate_id, acquisition_id)
+        for event in session.query(UsageEvent).filter(
+            UsageEvent.mandate_id.in_(mandate_ids), UsageEvent.event_type == DELIVERY_EVENT
+        ).all()
+        if event.event_type == DELIVERY_EVENT
+        and (event.metadata_ or {}).get("delivery_surface") == "x402-public-result"
+        and (event.metadata_ or {}).get("delivery_scope") == "SERVER_DELIVERY_CONFIRMED"
+        for acquisition_id in (event.metadata_ or {}).get("acquisition_ids", [])
+    }
     tasks = [
         item for item in session.query(AcquisitionTask)
         .filter(AcquisitionTask.mandate_id.in_(mandate_ids)).all()
@@ -264,7 +276,7 @@ def _execution_history(session: Session, mandates: list[Mandate], *, limit: int 
             "evidence_status": getattr(evidence, "admissibility", None),
             "evidence_sha": getattr(evidence, "content_hash", None),
             "decision": getattr(decision, "state", None),
-            "delivery_status": "UNKNOWN",
+            "delivery_status": "DELIVERED" if (task.mandate_id, task.acquisition_id) in delivered_acquisitions else "UNKNOWN",
         }))
 
     rows.sort(key=lambda item: (item[0], item[1]), reverse=True)

@@ -15,6 +15,12 @@ def test_public_m2m_short_request_form_is_normalized():
 
 
 def test_m2m_auth_is_dedicated_and_fail_closed(monkeypatch):
+    # The global USER ownership dependency reads the mandate before M2M auth.
+    # Keep this auth-only test independent of a live database.
+    from app.persistence.database import get_session
+    from types import SimpleNamespace
+    monkeypatch.setitem(app.dependency_overrides, get_session,
+                        lambda: SimpleNamespace(get=lambda *args: None))
     monkeypatch.delenv("PRAMA_M2M_API_TOKEN", raising=False)
     assert client.get("/v1/m2m/mandates/unknown").status_code == 503
 

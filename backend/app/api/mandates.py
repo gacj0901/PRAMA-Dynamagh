@@ -170,6 +170,9 @@ def acquisitions(mandate_id: str, session: Session = Depends(get_session)) -> di
 @router.get("/{mandate_id}/evidence")
 def evidence(mandate_id: str, session: Session = Depends(get_session)) -> list[dict[str, Any]]:
     from app.domain.mandates import Evidence
+    mandate = session.get(Mandate, mandate_id)
+    if mandate is not None and mandate.origin == "M2M":
+        raise HTTPException(status_code=403, detail="M2M_EVIDENCE_REQUIRES_SCOPED_RESULT")
     return [{"evidence_id":e.evidence_id,"admissibility":e.admissibility,"provenance_status":e.provenance_status,"content_hash":e.content_hash,"source_intent":e.source_intent,"source_miner_id":e.source_miner_id,"source_signal_hash":e.source_signal_hash,"limitation_codes":e.limitation_codes,"normalized_payload":e.normalized_payload} for e in session.query(Evidence).filter_by(mandate_id=mandate_id)]
 @router.get("/{mandate_id}/evaluation")
 def evaluation(mandate_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
