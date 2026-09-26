@@ -20,14 +20,14 @@ fulfillment around acquired intelligence. PRAMA is not a substitute for Telegrap
 
 Valid status values: PLANNED, SUBMITTED, LISTED, PUBLISHED, VERIFIED, REJECTED.
 Dates for planned external actions remain unset until the action occurs.
-Only project-owned artifacts are published by this release; no community
-message or directory submission is authorized or represented as performed.
+The initial release published project-owned artifacts. A subsequent operator-reported
+Telegraph Discord field report is recorded below; this task sends no messages.
 
 | CAMPAIGN | CHANNEL | CLASSIFICATION | DATE | ACTION | PUBLIC_URL | STATUS | ARTIFACT | NOTES |
 |---|---|---|---|---|---|---|---|---|
 | v1 | PRAMA public surfaces | MACHINE_DISCOVERY | 2026-09-26 | Deploy and verify discovery and read-only adoption | https://prama-dynamagh.up.railway.app/adoption | VERIFIED | agent-access API + adoption page | HTTP, MCP and unpaid x402 smoke passed |
 | v1 | Bazaar resource metadata | MACHINE_DISCOVERY | 2026-09-26 | Verify declared extension against JSON Schema | https://prama-dynamagh.up.railway.app/.well-known/prama-agent.json | VERIFIED | Unpaid HTTP 402 PaymentRequired extension | Declaration only; catalog indexing NOT TESTED |
-| v1 | x402 Bazaar | MACHINE_DISCOVERY | — | Declare extension; verify facilitator indexing separately | — | PLANNED | submissions/x402-bazaar.md | Declared metadata does not prove catalog indexing |
+| v1 | x402 Bazaar | MACHINE_DISCOVERY | 2026-09-26 | Read-only PayAI catalog verification | https://facilitator.payai.network/discovery/search?query=PRAMA-Dynamagh | VERIFIED | ../observations/BAZAAR_DISCOVERY_2026-09-26.md | Exact canonical resource returned; dated observation, not quality endorsement |
 | v1 | Agent402 | DEVELOPER_DISCOVERY | — | Submit directory pack | — | PLANNED | submissions/agent402.md | Machine ingestion unverified |
 | v1 | x402 community directories | DEVELOPER_DISCOVERY | — | Identify and submit compatible listing | — | PLANNED | submissions/x402-bazaar.md | Not all directories are machine-native |
 | v1 | Run402 | DEVELOPER_DISCOVERY | — | Share integration pack | — | PLANNED | submissions/run402.md | No listing claimed |
@@ -35,13 +35,13 @@ message or directory submission is authorized or represented as performed.
 | v1 | AI Agents List | HUMAN_DISCOVERY | — | Submit human-facing directory entry | — | PLANNED | submissions/aiagentslist.md | Not machine-native |
 | v1 | GPT Store | HUMAN_DISCOVERY | — | Assess compatible GPT listing | — | PLANNED | submissions/gpt-store.md | No GPT created or approval claimed |
 | v1 | X | HUMAN_DISCOVERY | — | Publish factual adoption post | — | PLANNED | submissions/x-post.md | Draft only |
-| v1 | Telegraph Discord | COMMUNITY_ENGAGEMENT | — | Share Track 3 evidence | — | PLANNED | submissions/telegraph-discord.md | Draft only |
+| v1 | Telegraph Discord | COMMUNITY_ENGAGEMENT | 2026-09-26 | Track 3 real paid M2M field report | NOT_RECORDED | PUBLISHED | ../observations/TELEGRAPH_INTENT_FULFILLMENT_2026-09-26.md | Operator-reported ACKNOWLEDGED; ENGAGEMENT / TECHNICAL FEEDBACK, not adoption counts |
 
 ## Claims policy
 
 DO SAY: External M2M Requests; Unique Paying Wallets; Declared Clients;
 Registered AgentIdentities; Successful Acquisitions; Admitted Evidence;
-Consumer Fulfilled (distinct mandates with evidenced server content delivery).
+Consumer Results Delivered (distinct mandates with evidenced server content delivery).
 
 DO NOT SAY unless independently established: Unique independent agents;
 Unique users; Production mainnet revenue; 87% risk reduction; standard safety
@@ -123,7 +123,7 @@ reported SUCCESS on that commit.
   its JSON Schema. No authorization was generated or submitted.
 * Persisted snapshot: 7 external M2M requests, 6 settled requests, 2 paying
   wallets, 2 declared client labels, 2 registered M2M identity records,
-  6 successful acquisitions, 5 admitted evidence records, 1 consumer fulfilled.
+  6 successful acquisitions, 5 admitted evidence records, 1 consumer results delivered.
   These are observed counts at that time, not permanent totals or independent
   agent/user estimates.
 * KIMI proof verification returned **OPERATOR_ATTESTED**, not
@@ -150,3 +150,17 @@ Python example: 9 offline tests. TypeScript example: strict typecheck and 8
 offline tests. Signers/transports in tests are isolated doubles, not service
 traffic or campaign activity. Nginx configuration passes nginx -t without network.
 The only supported economic path remains native HTTP/x402.
+
+Delivery semantics: Semantic task fulfillment is not currently inferred from delivery.
+WEB_SEARCH is currently observed as a search/retrieval primitive, not a research/synthesis workflow.
+
+## Post-live semantic correction and engagement
+
+[Two real execution records and team feedback](../observations/TELEGRAPH_INTENT_FULFILLMENT_2026-09-26.md).
+[Independent PayAI Bazaar lookup and baseline evidence](../observations/BAZAAR_DISCOVERY_2026-09-26.md).
+
+Discord outcome: team clarified technical delivery versus semantic task fulfillment
+and WEB_SEARCH as a retrieval primitive. Follow-up: RESEARCH_QUERY failure under
+investigation; not a confirmed bug. PUBLIC_URL=NOT_RECORDED. This engagement does
+not increment request, wallet or agent counts. Earlier NOT_TESTED Bazaar notes
+above describe the launch snapshot; the later catalog lookup confirmed indexing.

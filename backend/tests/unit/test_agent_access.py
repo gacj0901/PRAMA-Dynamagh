@@ -88,10 +88,10 @@ def test_adoption_real_only_no_wallet_enumeration_no_poll_inflation(store):
     snapshot = adoption_snapshot(session)
     assert snapshot["metrics"] == {"external_m2m_requests": 2, "settled_m2m_requests": 2,
         "unique_paying_wallets": 1, "declared_client_labels": 0, "registered_m2m_agent_identities": 0,
-        "successful_acquisitions": 4, "admitted_evidence": 4, "consumer_fulfilled": 0}
+        "successful_acquisitions": 4, "admitted_evidence": 4, "consumer_results_delivered": 0}
     for _ in range(3):
         assert result(client).status_code == 200
-    assert adoption_snapshot(session)["metrics"]["consumer_fulfilled"] == 1
+    assert adoption_snapshot(session)["metrics"]["consumer_results_delivered"] == 1
     before = session.query(UsageEvent).count()
     response = client.get("/v1/public/adoption")
     assert response.status_code == 200
@@ -142,3 +142,87 @@ def test_requested_intent_alias_reaches_same_canonical_acquisition(db_session, f
     assert task.query == "actual test fixture need"
     assert facilitator_stub.verify_calls == facilitator_stub.settle_calls == 1
     assert facilitator_stub.verify_requirements == x402._requirements()
+
+
+def test_delivery_does_not_establish_semantic_fulfillment():
+    from app.api.consumer_result import DELIVERY_EVENT
+    assert DELIVERY_EVENT == "M2M_CONSUMER_RESULT_DELIVERED"
+    d = descriptor()
+    assert d["semantics"]["delivered_implies_semantic_fulfillment"] is False
+    assert "consumer_fulfillment_condition" not in d["semantics"]
+    assert d["semantics"]["consumer_delivery_condition"] == "consumer_result.status == DELIVERED"
+    for path in ("/agents.md", "/llms.txt"):
+        assert "Semantic task fulfillment is not currently inferred from delivery." in TestClient(app).get(path).text
+    observations = d["capabilities"]["intent_observations"]
+    assert "retrieval primitive" in observations["WEB_SEARCH"]
+    assert "investigating" in observations["RESEARCH_QUERY"]
+
+
+def test_failed_research_not_delivered_but_web_search_delivery_counts(store):
+    from app.domain.mandates import AcquisitionTask
+    session, client = store
+    AgentIdentity.__table__.create(session.bind, checkfirst=True)
+    for task in session.query(AcquisitionTask).filter_by(mandate_id="b"):
+        task.status = "FAILED"
+        task.requested_intent = "RESEARCH_QUERY"
+    for evidence in session.query(Evidence).filter_by(mandate_id="b"):
+        session.delete(evidence)
+    session.commit()
+    assert result(client, "b", "cap-b").json()["consumer_result"]["status"] == "NOT_AVAILABLE"
+    assert result(client).json()["consumer_result"]["status"] == "DELIVERED"
+    snapshot = client.get("/v1/public/adoption").json()
+    assert snapshot["metrics"]["consumer_results_delivered"] == 1
+    assert "consumer_fulfilled" not in snapshot["metrics"]
+    assert snapshot["semantic_task_fulfillment"] == "NOT_INFERRED_FROM_DELIVERY"
+
+
+@pytest.mark.parametrize("origin", ["USER", "AUTONOMOUS", "MANUAL"])
+def test_delivery_metric_keeps_m2m_origin_scope(store, origin):
+    session, client = store
+    AgentIdentity.__table__.create(session.bind, checkfirst=True)
+    result(client)
+    session.get(Mandate, "a").origin = origin
+    session.commit()
+    assert adoption_snapshot(session)["metrics"]["consumer_results_delivered"] == 0
+
+
+def test_bazaar_confirmation_is_dated_catalog_evidence_not_declaration(monkeypatch):
+    from app.api.bazaar_observation import indexing_observation, FACILITATOR, RESOURCE
+    monkeypatch.setattr(x402, "PUBLIC_ORIGIN", RESOURCE.removesuffix("/v1/public/ask"))
+    monkeypatch.setattr(x402, "X402_FACILITATOR", FACILITATOR)
+    monkeypatch.setattr(x402, "X402_NETWORK", "eip155:84532")
+    monkeypatch.setattr(x402, "_requirements", lambda: {"payTo": "0xC92b5ec74dca3EeE0A615dE026C3F3756cd18FB6"})
+    value = indexing_observation()
+    assert value["bazaar_indexing_confirmed"] is True
+    assert value["bazaar_indexing_observed_at"] and "/discovery/resources" in value["bazaar_discovery_reference"]
+    monkeypatch.setattr(x402, "X402_FACILITATOR", "https://other.example")
+    value = indexing_observation()
+    assert value["bazaar_indexing_status"] == "INDETERMINATE"
+    assert value["bazaar_indexing_confirmed"] is False
+    assert value["bazaar_discovery_reference"] is None
+    assert descriptor()["discovery"]["bazaar_metadata_declared"] is True
+
+
+def test_provider_metadata_is_bounded_ascii_without_payment_changes():
+    before = x402._requirements()
+    body = TestClient(app).post("/v1/public/ask", json={"query": "offline"}).json()
+    assert body["resource"]["serviceName"] == "PRAMA-Dynamagh"
+    tags = body["resource"]["tags"]
+    assert len(tags) <= 5 and all(0 < len(t) <= 32 and t.isascii() and t.isprintable() for t in tags)
+    assert body["accepts"] == [before]
+
+
+def test_public_labels_and_documentary_proofs_are_sanitized():
+    import os
+    from pathlib import Path
+    root = Path(os.environ.get("PRAMA_REPO_ROOT", Path(__file__).resolve().parents[3]))
+    page = (root / "frontend/public/adoption/index.html").read_text(encoding="utf-8")
+    script = (root / "frontend/public/adoption/adoption.js").read_text(encoding="utf-8")
+    assert "Consumer Results Delivered" in page and "Consumer Results Delivered" in script
+    assert "Consumer Fulfilled" not in page + script
+    note = (root / "docs/observations/TELEGRAPH_INTENT_FULFILLMENT_2026-09-26.md").read_text(encoding="utf-8")
+    assert "742b0c6a-e962-43b5-99d6-74d45bc8cb70" in note
+    assert "194f18e3-7a59-4490-a1fc-7a49d6a3dad8" in note
+    assert "NOT_ESTABLISHED" in note and "NOT_AVAILABLE" in note
+    for forbidden in ("result_capability:", "PAYMENT-SIGNATURE:", "Authorization:", "private_key:", "payer_wallet_address"):
+        assert forbidden not in note

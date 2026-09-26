@@ -1,4 +1,5 @@
 """Public PRAMA-owned discovery descriptor; no execution or signing tools."""
+from app.api.bazaar_observation import indexing_observation
 from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
 
@@ -52,6 +53,7 @@ def supported_capabilities():
     return {"capabilities": ["evidence_bound_intelligence_acquisition", "capability_bound_consumer_result"],
             "intent_selection": "Telegraph routing; an intent string is forwarded to the acquisition layer",
             "requestable_intent_examples": ["WEB_SEARCH", "FINANCIAL_DATA", "WEATHER_FORECAST"],
+            "intent_observations": {"as_of": "2026-09-26", "WEB_SEARCH": "Search/retrieval primitive; not a multi-source research/synthesis guarantee.", "RESEARCH_QUERY": "Latest reported acquisition failed TELEGRAPH_REQUEST_FAILED; Telegraph team investigating. No automatic substitute."},
             "live_provider_inventory": "UNKNOWN", "availability_guaranteed": False,
             "epistemic_coverage": {"e1_validated_targets": ["CRYPTO_PRICE"],
                                     "registry_membership_is_not_validated_coverage": True}}
@@ -72,14 +74,16 @@ def descriptor():
                          "pricing": "challenge-derived"},
             "semantics": {"acquisition_success_is_not_authorization": True,
                           "governance_success_is_not_consumer_fulfillment": True,
-                          "consumer_fulfillment_condition": "consumer_result.status == DELIVERED",
+                          "delivered_implies_semantic_fulfillment": False,
+                          "semantic_task_fulfillment": "NOT_INFERRED_FROM_DELIVERY",
+                          "consumer_delivery_condition": "consumer_result.status == DELIVERED",
                           "delivery_scope": "Server returns admitted content; not consumer acknowledgment or content correctness."},
             "outputs": ["consumer_result", "evidence", "evidence_content_hash", "provenance", "structural_evaluation", "decision", "ticket"],
             "identity": {"agent_identity": "optional", "wallet_is_agent_identity": False, "wallet_role": "economic_principal"},
             "acquisition": {"infrastructure": "Telegraph Protocol"},
             "discovery": {"guide": base + "/agents.md", "llms": base + "/llms.txt", "adoption": base + "/adoption",
                           "metrics": base + "/v1/public/adoption", "bazaar_metadata_declared": True,
-                          "bazaar_indexing_confirmed": False},
+                          **indexing_observation()},
             "capabilities": supported_capabilities(), "request_schema": REQUEST_SCHEMA, "result_schema": RESULT_SCHEMA}
 
 
@@ -109,13 +113,17 @@ Input: {{"requested_intent":"WEB_SEARCH","query":"Your actual information need"}
 Aliases: intent (preferred legacy field), request. Do not send conflicting aliases.
 Result: 202 is acceptance, not fulfillment. Poll only the returned same-origin result URL.
 After ambiguous paid response: STOP. Do not sign/pay again or retry automatically.
+ACQUISITION_SUCCESS != EVIDENCE_ADMISSIBLE != RESULT_DELIVERED != SEMANTIC_TASK_FULFILLED.
 SUCCEEDED != DELIVERED. wallet != AgentIdentity.
+Semantic task fulfillment is not currently inferred from delivery.
+As observed 2026-09-26: WEB_SEARCH is a search/retrieval primitive, not research/synthesis.
+RESEARCH_QUERY: latest reported acquisition failed; Telegraph team investigating. No automatic substitute.
 DELIVERED means content in this HTTP response, possibly a subset of acquisitions;
 not acknowledgment, correctness, or proof that the question is fully answered.
 Current network: {descriptor()['payments']['network']} / {descriptor()['payments']['environment']}.
 Price, recipient and asset are challenge-derived. This deployment is not mainnet.
 Telegraph provides machine intelligence infrastructure. PRAMA-Dynamagh adds
-evidence-bound evaluation, execution governance, auditability and Consumer fulfillment.
+evidence-bound evaluation, execution governance, auditability and Consumer Result delivery.
 Discovery-only MCP: {base}/mcp
 OpenAPI: {base}/openapi.json
 Adoption metrics: {base}/v1/public/adoption
@@ -138,6 +146,7 @@ def llms():
     return (f"# PRAMA-Dynamagh\nTelegraph-powered machine intelligence. x402 v2; {d['payments']['network']} / {d['payments']['environment']}.\n"
             + ("Base Sepolia.\n" if d['payments']['network'] == "eip155:84532" else "") +
             "Evidence-bound governance and capability-bound Consumer Result. Optional external capability.\n"
-            "SUCCEEDED != DELIVERED; wallet != AgentIdentity. Respect caller authority and spending limits.\n"
+            "SUCCEEDED != DELIVERED != SEMANTIC_TASK_FULFILLED; wallet != AgentIdentity. Respect caller authority and spending limits.\n"
+            "Semantic task fulfillment is not currently inferred from delivery. WEB_SEARCH is currently a retrieval primitive.\n"
             + "\n".join(f"- {key}: {value}" for key, value in d["discovery"].items() if isinstance(value, str))
             + "\n- Manifest: " + d["interfaces"]["http"]["endpoint"].split("/v1/")[0] + "/.well-known/prama-agent.json\n")

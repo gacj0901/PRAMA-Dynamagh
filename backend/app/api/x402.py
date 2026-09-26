@@ -133,7 +133,8 @@ def _encoded(value: dict) -> str:
 def _challenge(resource: str | None = None, *, error: str | None = None) -> JSONResponse:
     from app.api.agent_access import bazaar_extension, DESCRIPTION
     required = {"x402Version": 2, "accepts": [_requirements(resource)]}
-    required["resource"] = {"url": resource or f"{PUBLIC_ORIGIN}/v1/public/ask", "description": DESCRIPTION, "mimeType": "application/json"}
+    required["resource"] = {"url": resource or f"{PUBLIC_ORIGIN}/v1/public/ask", "description": DESCRIPTION, "mimeType": "application/json",
+                            "serviceName": "PRAMA-Dynamagh", "tags": ["ai-agents", "intelligence", "evidence", "governance", "telegraph"]}
     required["extensions"] = bazaar_extension()
     body = dict(required)
     if error:

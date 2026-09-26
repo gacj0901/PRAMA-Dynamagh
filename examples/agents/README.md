@@ -40,3 +40,6 @@ Governance fields and original evidence hashes remain available.
 
 Discovery: https://prama-dynamagh.up.railway.app/agents.md
 MCP (discovery only): https://prama-dynamagh.up.railway.app/mcp
+
+Delivery semantics: Semantic task fulfillment is not currently inferred from delivery.
+WEB_SEARCH is currently observed as a search/retrieval primitive, not a research/synthesis workflow.

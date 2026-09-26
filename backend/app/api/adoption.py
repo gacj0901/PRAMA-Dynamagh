@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.api.bazaar_observation import indexing_observation
 from app.api.consumer_result import DELIVERY_EVENT
 from app.domain.mandates import (Mandate, AcquisitionTask, Evidence, InboundX402Payment,
                                  UsageEvent, Decision, Ticket, AgentIdentity)
@@ -48,7 +49,7 @@ def adoption_snapshot(session):
         "registered_m2m_agent_identities": session.query(AgentIdentity.agent_id).join(Mandate,
             Mandate.agent_identity_id == AgentIdentity.agent_id).filter(Mandate.origin == "M2M").distinct().count(),
         "successful_acquisitions": tasks.filter(AcquisitionTask.status == "SUCCEEDED").count(),
-        "admitted_evidence": admitted.count(), "consumer_fulfilled": len(delivered),
+        "admitted_evidence": admitted.count(), "consumer_results_delivered": len(delivered),
     }
     proof = {"client": "KIMI_EXTERNAL", "intent": "WEATHER_FORECAST", "payment_usdc": "0.01",
              "acquisition": "SUCCEEDED", "evidence": "ADMITTED", "provenance": "VERIFIED",
@@ -68,11 +69,11 @@ def adoption_snapshot(session):
             proof["source"] = "Matched persisted mandate, payment, acquisition, admitted evidence, decision, ticket and delivery event."
     return {"schema_version": "prama-adoption-v1", "observed_at": datetime.now(timezone.utc).isoformat(),
             "metrics": metrics, "scope": "Persisted M2M records; settled counts reflect application records, not an onchain reconciliation.",
-            "metric_definitions": {"consumer_fulfilled": "Distinct mandates with at least one evidenced server content delivery; not necessarily all acquisitions or semantic correctness.",
+            "metric_definitions": {"consumer_results_delivered": "Distinct mandates with at least one evidenced server content delivery; not necessarily all acquisitions or semantic correctness.",
                                    "declared_client_labels": "Distinct nonempty declared agent_id values; not verified independent agents.",
                                    "unique_paying_wallets": "Distinct normalized (network, payer) pairs on recorded settled payments.",
                                    "registered_m2m_agent_identities": "Distinct persistent identities referenced by M2M mandates; not verified independent agents."},
-            "verified_execution": proof, "bazaar_metadata_declared": True, "bazaar_indexing_confirmed": False}
+            "verified_execution": proof, "bazaar_metadata_declared": True, **indexing_observation(), "semantic_task_fulfillment": "NOT_INFERRED_FROM_DELIVERY"}
 
 
 @router.get("/v1/public/adoption")

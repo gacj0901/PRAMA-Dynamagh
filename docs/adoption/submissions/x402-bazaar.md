@@ -63,3 +63,10 @@ PRAMA adds evidence-bound governance and capability-bound delivery. Inspect
 the execution proof and real persisted metrics at https://prama-dynamagh.up.railway.app/adoption.
 Base Sepolia testnet. Acquisition success is not authorization; a Ticket alone
 does not establish consumer fulfillment.
+
+Delivery semantics: Semantic task fulfillment is not currently inferred from delivery.
+WEB_SEARCH is currently observed as a search/retrieval primitive, not a research/synthesis workflow.
+
+Update 2026-09-26: exact PRAMA resource independently found in configured PayAI
+catalog. See ../../observations/BAZAAR_DISCOVERY_2026-09-26.md. This is catalog
+evidence, not a manual submission, delivery guarantee or semantic endorsement.
