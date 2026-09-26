@@ -98,6 +98,20 @@ h2 span{color:var(--cream)}
 .runtime-inline{margin-top:1.8rem;padding-top:1rem;border-top:1px solid var(--line)}
 .runtime-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 1.6rem}
 @media (max-width:640px){.runtime-grid{grid-template-columns:1fr}}
+.history-inline{margin-top:1.8rem;padding-top:1rem;border-top:1px solid var(--line);min-width:0}
+.history-inline h2{margin-bottom:.65rem}
+.history-table-scroll{max-width:100%;overflow:hidden}
+table.history{width:100%;table-layout:fixed;font-size:.61rem}
+table.history th,table.history td{padding:.24rem .1rem;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+table.history th{color:var(--dim);font-size:.55rem;font-weight:500;letter-spacing:.025em;white-space:normal;overflow-wrap:anywhere;text-overflow:clip;vertical-align:bottom;line-height:1.2}
+table.history td{color:var(--cream)}
+table.history td.sha{color:var(--blue);font-size:.54rem}
+table.history td.empty{color:var(--mute);text-align:left}
+table.history col.time{width:6%} table.history col.origin{width:9%} table.history col.client{width:7%}
+table.history col.intent{width:10%} table.history col.query{width:15%} table.history col.payment{width:7%}
+table.history col.acquisition{width:10%} table.history col.evidence{width:8%} table.history col.sha{width:13%}
+table.history col.decision{width:7%} table.history col.delivery{width:8%}
+@media(max-width:640px){.history-table-scroll{overflow-x:auto}table.history{min-width:760px}}
 .trow{display:flex;justify-content:space-between;gap:1rem;font-family:var(--mono);font-size:.73rem;padding:.36rem 0;border-bottom:1px solid var(--line)}
 .trow span:first-child{color:var(--dim)}
 .trow span:last-child{color:var(--blue);text-align:right}
@@ -249,18 +263,17 @@ footer a:hover{color:var(--blue);border-color:var(--blue)}
         <div class="runtime-inline">
           <h2>Runtime — <span>read only</span></h2>
           <div class="runtime-grid">
-            <div class="trow"><span>Autonomy global</span><span>ENABLED</span></div>
-            <div class="trow"><span>Authority mode</span><span>BINDING</span></div>
-            <div class="trow"><span>Active policies</span><span>1</span></div>
-            <div class="trow"><span>G13 policy</span><span>v0.4</span></div>
-            <div class="trow"><span>Active runs</span><span>0</span></div>
-            <div class="trow"><span>Scheduler</span><span>ACTIVE</span></div>
-            <div class="trow"><span>Today spend</span><span>0.030000 USDC</span></div>
-            <div class="trow"><span>Next due</span><span class="dash">—</span></div>
+            <div class="trow"><span>Autonomy global</span><span id="runtimeAutonomyGlobal">—</span></div>
+            <div class="trow"><span>Authority mode</span><span id="runtimeAuthorityMode">—</span></div>
+            <div class="trow"><span>Active policies</span><span id="runtimeActivePolicies">—</span></div>
+            <div class="trow"><span>G13 policy</span><span id="runtimeG13Policy">UNKNOWN</span></div>
+            <div class="trow"><span>Active runs</span><span id="runtimeActiveRuns">—</span></div>
+            <div class="trow"><span>Scheduler</span><span id="runtimeScheduler">UNKNOWN</span></div>
+            <div class="trow"><span>Today spend</span><span id="runtimeTodaySpend">—</span></div>
+            <div class="trow"><span>Next due</span><span id="runtimeNextDue" class="dash">—</span></div>
             <!-- INVARIANT: AUTHORITY — BINDING ≠ G13 state ≠ recovery state.
-                 `Authority mode` reflects the durable policy binding (design-time).
-                 `G13 policy` reflects longitudinal state. `recovery-state-row`
-                 renders ONLY while an episode requires recovery intervention. -->
+                 Recovery is shown only from an explicit read-model value; no
+                 state is inferred from the authority binding or G13 policy. -->
             <div class="trow" id="recoveryStateRow" hidden><span>Recovery</span><span id="recoveryStateValue">—</span></div>
           </div>
         </div>
@@ -281,6 +294,17 @@ footer a:hover{color:var(--blue);border-color:var(--blue)}
             <div class="trow"><span>Episode</span><span id="econEpisodeId" class="dash">—</span></div>
           </div>
         </div>
+
+        <section class="history-inline" aria-labelledby="executionHistoryTitle">
+          <h2 id="executionHistoryTitle">Evidence / Usage History</h2>
+          <div class="history-table-scroll">
+            <table class="history" aria-label="Persisted evidence and usage history">
+              <colgroup><col class="time" /><col class="origin" /><col class="client" /><col class="intent" /><col class="query" /><col class="payment" /><col class="acquisition" /><col class="evidence" /><col class="sha" /><col class="decision" /><col class="delivery" /></colgroup>
+              <thead><tr><th>Time</th><th>Origin</th><th>Client</th><th>Intent</th><th>Query</th><th>Payment</th><th>Acquisition</th><th>Evidence</th><th>Evidence SHA</th><th>Decision</th><th>Delivery</th></tr></thead>
+              <tbody id="executionHistoryRows"><tr><td class="empty" colspan="11">No persisted execution rows</td></tr></tbody>
+            </table>
+          </div>
+        </section>
       </section>
 
       <section class="miner-panel">
@@ -295,11 +319,11 @@ footer a:hover{color:var(--blue);border-color:var(--blue)}
         <div class="section-label">BY ORIGIN</div>
         <table class="origin">
           <tr><th>Origin</th><th>Responses</th><th>W/ Evidence</th></tr>
-          <tr><td>AUTONOMOUS · INTERNAL</td><td>—</td><td>—</td></tr>
-          <tr><td>MANUAL</td><td>—</td><td>—</td></tr>
-          <tr><td>M2M · INBOUND</td><td>—</td><td>—</td></tr>
-          <tr><td>USER</td><td>—</td><td>—</td></tr>
-          <tr><td>TOTAL</td><td>—</td><td>—</td></tr>
+          <tr data-origin="autonomous"><td>AUTONOMOUS · INTERNAL</td><td>—</td><td>—</td></tr>
+          <tr data-origin="manual"><td>MANUAL</td><td>—</td><td>—</td></tr>
+          <tr data-origin="m2m"><td>M2M · INBOUND</td><td>—</td><td>—</td></tr>
+          <tr data-origin="user"><td>USER</td><td>—</td><td>—</td></tr>
+          <tr data-origin="total"><td>TOTAL</td><td>—</td><td>—</td></tr>
         </table>
 
         <div class="public-read-model">

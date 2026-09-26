@@ -1,8 +1,9 @@
 """Small, read-only public surfaces for real Track 3 workflows.
 
-These endpoints deliberately expose aggregates and identifiers only.  They do
-not return mandate text, provider payloads, signer material, or any mutation
-capability.
+These endpoints expose aggregates plus a bounded allowlisted execution-history
+projection with short request previews and persisted Evidence hashes. They do
+not return owner-scoped USER artifacts, Evidence payloads, provider responses,
+signer material, payment identities, result capabilities, or mutation access.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from app.domain.mandates import (
     AutonomyRun,
     Decision,
     Evidence,
+    InboundX402Payment,
     Mandate,
     AutonomyPolicy,
     PolicyEvaluation,
@@ -140,6 +142,133 @@ def _activity_read_model(
         "actual_spend_usdc": _money(actual_spend),
         "latest_miner_response": latest_response,
     }
+
+
+def _execution_history(session: Session, mandates: list[Mandate], *, limit: int = 25) -> list[dict[str, Any]]:
+    """Project a small allowlisted history for the public operator surface.
+
+    USER-origin artifacts are owner-scoped by ``protect_user_artifact`` and
+    must not be copied into an unscoped list endpoint. Their aggregate counts
+    remain available under USER as a distinct origin.
+    This projection never includes Evidence.normalized_payload, provider
+    responses, payment identities, or result-capability material. No durable
+    consumer-fulfillment signal exists yet, so delivery stays UNKNOWN.
+    """
+    visible_mandates = [item for item in mandates if getattr(item, "origin", None) != "USER"]
+    mandate_by_id = {str(item.mandate_id): item for item in visible_mandates}
+    if not mandate_by_id:
+        return []
+
+    def time_key(value: Any) -> float:
+        timestamp = getattr(value, "timestamp", None)
+        return float(timestamp()) if callable(timestamp) else 0.0
+
+    mandate_ids = list(mandate_by_id)
+    tasks = [
+        item for item in session.query(AcquisitionTask)
+        .filter(AcquisitionTask.mandate_id.in_(mandate_ids)).all()
+        if str(getattr(item, "mandate_id", "")) in mandate_by_id
+    ]
+    if not tasks:
+        return []
+
+    task_ids = {str(item.acquisition_id) for item in tasks}
+    task_by_id = {str(item.acquisition_id): item for item in tasks}
+    calls = [
+        item for item in session.query(TelegraphCall)
+        .filter(TelegraphCall.mandate_id.in_(mandate_ids)).all()
+        if str(getattr(item, "acquisition_id", "")) in task_ids
+        and str(getattr(item, "mandate_id", "")) == str(task_by_id[str(item.acquisition_id)].mandate_id)
+    ]
+    call_by_task = {str(item.acquisition_id): item for item in calls}
+    task_by_call_id = {
+        str(item.telegraph_call_id): str(item.acquisition_id)
+        for item in calls if getattr(item, "telegraph_call_id", None)
+    }
+    evidences = [
+        item for item in session.query(Evidence)
+        .filter(Evidence.mandate_id.in_(mandate_ids)).all()
+        if str(getattr(item, "mandate_id", "")) in mandate_by_id
+    ]
+    evidences.sort(key=lambda item: (time_key(getattr(item, "created_at", None)), str(getattr(item, "evidence_id", ""))))
+    evidence_by_task: dict[str, Evidence] = {}
+    for item in evidences:
+        acquisition_id = getattr(item, "acquisition_id", None)
+        call_id = getattr(item, "telegraph_call_id", None)
+        linked_task = task_by_id.get(str(acquisition_id)) if acquisition_id else None
+        if linked_task and str(linked_task.mandate_id) == str(item.mandate_id):
+            evidence_by_task[str(acquisition_id)] = item
+        elif call_id and str(call_id) in task_by_call_id:
+            task_id = task_by_call_id[str(call_id)]
+            linked_call = call_by_task[task_id]
+            if str(getattr(linked_call, "mandate_id", "")) == str(item.mandate_id):
+                evidence_by_task[task_id] = item
+
+    decisions = [
+        item for item in session.query(Decision)
+        .filter(Decision.mandate_id.in_(mandate_ids)).all()
+        if str(getattr(item, "mandate_id", "")) in mandate_by_id
+    ]
+    decisions.sort(key=lambda item: (time_key(getattr(item, "created_at", None)), str(getattr(item, "decision_id", ""))))
+    decision_by_mandate: dict[str, Decision] = {}
+    for item in decisions:
+        decision_by_mandate[str(item.mandate_id)] = item
+
+    payments = [
+        item for item in session.query(InboundX402Payment)
+        .filter(InboundX402Payment.mandate_id.in_(mandate_ids)).all()
+        if str(getattr(item, "mandate_id", "")) in mandate_by_id
+        and getattr(item, "payment_status", None) == "SETTLED"
+    ]
+    payments.sort(key=lambda item: (time_key(getattr(item, "settled_at", None) or getattr(item, "created_at", None)), str(getattr(item, "payment_id", ""))))
+    payment_by_mandate: dict[str, InboundX402Payment] = {}
+    for item in payments:
+        payment_by_mandate[str(item.mandate_id)] = item
+
+    policy_ids = {str(item.autonomy_policy_id) for item in visible_mandates if getattr(item, "autonomy_policy_id", None)}
+    policies = {
+        str(item.policy_id): item
+        for item in session.query(AutonomyPolicy).all()
+        if str(getattr(item, "policy_id", "")) in policy_ids
+    }
+
+    rows: list[tuple[float, str, dict[str, Any]]] = []
+    for task in tasks:
+        mandate_id = str(task.mandate_id)
+        mandate = mandate_by_id[mandate_id]
+        call = call_by_task.get(str(task.acquisition_id))
+        evidence = evidence_by_task.get(str(task.acquisition_id))
+        decision = decision_by_mandate.get(mandate_id)
+        payment = payment_by_mandate.get(mandate_id)
+        origin = str(getattr(mandate, "origin", "") or "")
+        if origin == "AUTONOMOUS" and _is_fixture_policy(policies.get(str(getattr(mandate, "autonomy_policy_id", "")))):
+            origin = "FIXTURE / CANARY"
+        elif origin not in {"M2M", "MANUAL", "AUTONOMOUS"}:
+            origin = "LEGACY / UNATTRIBUTED"
+        timestamp = (
+            getattr(call, "completed_at", None)
+            or getattr(task, "completed_at", None)
+            or getattr(call, "created_at", None)
+            or getattr(task, "started_at", None)
+            or getattr(task, "created_at", None)
+        )
+        query = str(getattr(task, "query", "") or "")
+        rows.append((time_key(timestamp), str(task.acquisition_id), {
+            "time": _iso(timestamp),
+            "origin": origin,
+            "client": getattr(mandate, "agent_id", None) or getattr(mandate, "client_id", None),
+            "intent": getattr(call, "intent", None) or getattr(task, "requested_intent", None),
+            "query": query[:240],
+            "payment_amount_usdc": _money(getattr(payment, "amount_usdc", None)) if payment else None,
+            "acquisition_status": getattr(task, "status", None),
+            "evidence_status": getattr(evidence, "admissibility", None),
+            "evidence_sha": getattr(evidence, "content_hash", None),
+            "decision": getattr(decision, "state", None),
+            "delivery_status": "UNKNOWN",
+        }))
+
+    rows.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [item[2] for item in rows[:max(0, limit)]]
 
 
 def _public_mandates(session: Session) -> list[Mandate]:
@@ -272,6 +401,7 @@ def public_activity(session: Session) -> dict[str, Any]:
     all_evidence = session.query(Evidence).filter(Evidence.mandate_id.in_(all_mandate_ids)).all() if all_mandate_ids else []
     all_read_model = _activity_read_model(session, all_mandates, all_calls, all_evidence)
     demand_origin = _demand_origin_summary(session)
+    execution_history = _execution_history(session, all_mandates)
 
     mandate_ids = [item.mandate_id for item in mandates]
     if not mandate_ids:
@@ -304,6 +434,7 @@ def public_activity(session: Session) -> dict[str, Any]:
             "inbound_m2m_requester_principals": [],
             **all_read_model,
             "demand_origin": demand_origin,
+            "execution_history": execution_history,
         }
         base["autonomous"] = autonomous_summary
         base["manual"] = manual_summary
@@ -363,6 +494,7 @@ def public_activity(session: Session) -> dict[str, Any]:
         "autonomous": autonomous_summary,
         "operational_ledger": operational_ledger,
         "demand_origin": demand_origin,
+        "execution_history": execution_history,
     }
 
 

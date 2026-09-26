@@ -38,7 +38,44 @@ test("root and operator still render the original console", async ({ page }) => 
   await page.route("**/api/**", route => route.fulfill({ status: 503, json: {} }));
   for (const path of ["/", "/operator/"]) {
     await page.goto(path);
-    await expect(page.getByText("PROCESS CONSOLE", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Decision Pipeline/ })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Miner Responses", exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "TITULAR CHECK", exact: true })).toHaveCount(0);
   }
+});
+
+for (const width of [390, 1280]) test(`evidence history remains in the left column without page overflow at ${width}px`, async ({ page }) => {
+  await page.route("**/api/**", route => route.fulfill({ status: 503, json: {} }));
+  await page.setViewportSize({ width, height: 1000 });
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Evidence / Usage History" })).toBeVisible();
+
+  const layout = await page.evaluate(() => {
+    const history = document.querySelector(".history-inline")!;
+    const runtime = document.querySelector(".runtime-inline")!;
+    const chain = document.querySelector(".secondary h3")!;
+    const pipeline = document.querySelector(".pipeline-panel")!;
+    const rightColumn = document.querySelector(".miner-panel")!;
+    const scroll = document.querySelector(".history-table-scroll")!;
+    return {
+      pageWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+      history: history.getBoundingClientRect().toJSON(),
+      runtime: runtime.getBoundingClientRect().toJSON(),
+      chain: chain.getBoundingClientRect().toJSON(),
+      pipeline: pipeline.getBoundingClientRect().toJSON(),
+      rightColumn: rightColumn.getBoundingClientRect().toJSON(),
+      tableScrollWidth: scroll.scrollWidth,
+      tableClientWidth: scroll.clientWidth,
+    };
+  });
+  expect(layout.pageWidth).toBeLessThanOrEqual(layout.viewportWidth);
+  expect(Math.abs(layout.history.x - layout.pipeline.x)).toBeLessThanOrEqual(1);
+  expect(layout.history.y).toBeGreaterThan(layout.runtime.y);
+  expect(layout.history.y).toBeLessThan(layout.chain.y);
+  if (width > 640) {
+    expect(layout.history.x).toBeLessThan(layout.rightColumn.x);
+    expect(layout.tableScrollWidth).toBeLessThanOrEqual(layout.tableClientWidth);
+  }
+  await page.screenshot({ path: `test-results/evidence-history-${width}.png`, fullPage: true });
 });
