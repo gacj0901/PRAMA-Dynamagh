@@ -131,8 +131,11 @@ def _encoded(value: dict) -> str:
 
 
 def _challenge(resource: str | None = None, *, error: str | None = None) -> JSONResponse:
+    from app.api.agent_access import bazaar_extension, DESCRIPTION
     required = {"x402Version": 2, "accepts": [_requirements(resource)]}
-    body = {"x402Version": 2, "accepts": required["accepts"]}
+    required["resource"] = {"url": resource or f"{PUBLIC_ORIGIN}/v1/public/ask", "description": DESCRIPTION, "mimeType": "application/json"}
+    required["extensions"] = bazaar_extension()
+    body = dict(required)
     if error:
         body["error"] = error
     response = JSONResponse(body, status_code=status.HTTP_402_PAYMENT_REQUIRED)
@@ -422,7 +425,11 @@ def x402_service_manifest() -> dict:
     return seller_manifest()
 
 
-@router.post("/v1/public/ask", include_in_schema=False)
+from app.api.agent_access import REQUEST_SCHEMA, ACCEPTED_SCHEMA, RESULT_SCHEMA
+
+
+@router.post("/v1/public/ask", responses={202: {"description": "Accepted; preserve result capability privately", "content": {"application/json": {"schema": ACCEPTED_SCHEMA}}}, 402: {"description": "x402 v2 payment required"}},
+             openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": REQUEST_SCHEMA}}}})
 async def public_x402_ask(request: Request):
     """Challenge or settle one inbound x402 request before M2M dispatch."""
 
@@ -443,7 +450,7 @@ async def public_x402_ask(request: Request):
     if not isinstance(body, dict):
         return JSONResponse({"code": "X402_REQUEST_INVALID"}, status_code=422)
     query = body.get("request") or body.get("query")
-    intent = body.get("intent")
+    intent = body.get("intent", body.get("requested_intent"))
     if not isinstance(query, str) or not query.strip() or (intent is not None and not isinstance(intent, str)):
         return JSONResponse({"code": "X402_REQUEST_INVALID"}, status_code=422)
     requirements = _requirements(resource)
@@ -557,7 +564,7 @@ async def public_x402_ask(request: Request):
     )
 
 
-@router.get("/v1/public/ask/{mandate_id}/result", include_in_schema=False)
+@router.get("/v1/public/ask/{mandate_id}/result", responses={200: {"description": "Capability-bound result", "content": {"application/json": {"schema": RESULT_SCHEMA}}}}, openapi_extra={"parameters": [{"name": "X-PRAMA-Result-Capability", "in": "header", "required": True, "schema": {"type": "string"}}]})
 def get_x402_result(mandate_id: str, request: Request):
     """Read one inbound x402 mandate using only its result capability.
 

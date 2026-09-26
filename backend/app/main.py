@@ -13,8 +13,21 @@ from app.api.disclosure import router as disclosure_router
 from app.api.authority import router as authority_router
 from app.api.x402 import router as x402_router
 from app.tickets.delivery import DisclosureMiddleware
+from app.api.agent_access import router as discovery_router
+from app.api.adoption import router as adoption_router
+from app.api.mcp_discovery import mcp_app
+from contextlib import asynccontextmanager
 
-app = FastAPI(title="PRAMA-Dynamagh API", version="0.0.1", dependencies=[Depends(protect_user_artifact)])
+
+@asynccontextmanager
+async def lifespan(app):
+    async with mcp_app.router.lifespan_context(mcp_app):
+        yield
+
+app = FastAPI(title="PRAMA-Dynamagh API", version="0.0.1", dependencies=[Depends(protect_user_artifact)], lifespan=lifespan)
+app.include_router(discovery_router)
+app.include_router(adoption_router)
+app.router.routes.extend(mcp_app.routes)
 app.include_router(users_router)
 app.include_router(mandates_router)
 app.include_router(autonomy_router)

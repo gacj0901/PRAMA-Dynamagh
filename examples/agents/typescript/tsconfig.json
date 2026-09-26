@@ -1,0 +1,7 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "module": "CommonJS", "moduleResolution": "Node",
+    "lib": ["ES2022", "DOM"], "types": [], "strict": true, "noEmitOnError": true
+  },
+  "include": ["prama-client.ts"]
+}
