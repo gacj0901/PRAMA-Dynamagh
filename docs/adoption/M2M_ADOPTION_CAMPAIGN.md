@@ -25,7 +25,8 @@ message or directory submission is authorized or represented as performed.
 
 | CAMPAIGN | CHANNEL | CLASSIFICATION | DATE | ACTION | PUBLIC_URL | STATUS | ARTIFACT | NOTES |
 |---|---|---|---|---|---|---|---|---|
-| v1 | PRAMA public surfaces | MACHINE_DISCOVERY | — | Deploy discovery and read-only adoption | https://prama-dynamagh.up.railway.app/adoption | PLANNED | agent-access API + adoption page | Change to VERIFIED only after production smoke |
+| v1 | PRAMA public surfaces | MACHINE_DISCOVERY | 2026-09-26 | Deploy and verify discovery and read-only adoption | https://prama-dynamagh.up.railway.app/adoption | VERIFIED | agent-access API + adoption page | HTTP, MCP and unpaid x402 smoke passed |
+| v1 | Bazaar resource metadata | MACHINE_DISCOVERY | 2026-09-26 | Verify declared extension against JSON Schema | https://prama-dynamagh.up.railway.app/.well-known/prama-agent.json | VERIFIED | Unpaid HTTP 402 PaymentRequired extension | Declaration only; catalog indexing NOT TESTED |
 | v1 | x402 Bazaar | MACHINE_DISCOVERY | — | Declare extension; verify facilitator indexing separately | — | PLANNED | submissions/x402-bazaar.md | Declared metadata does not prove catalog indexing |
 | v1 | Agent402 | DEVELOPER_DISCOVERY | — | Submit directory pack | — | PLANNED | submissions/agent402.md | Machine ingestion unverified |
 | v1 | x402 community directories | DEVELOPER_DISCOVERY | — | Identify and submit compatible listing | — | PLANNED | submissions/x402-bazaar.md | Not all directories are machine-native |
@@ -73,8 +74,8 @@ identity. This release performs no paid validation.
   paid acquisition and production Consumer Fulfillment. Public counters and
   proof verification must be checked at the linked adoption surface.
 * Evidence is persisted and hashed. Governance and delivery remain distinct.
-* Machine discovery, MCP, Bazaar declaration and adoption surfaces are release
-  artifacts; deployment verification is recorded below after production smoke.
+* Public machine discovery, remote MCP, Bazaar declaration and adoption metrics
+  are deployed and smoke-verified; observations are recorded below.
 * Directory/community packs and Python/TypeScript client examples were produced.
   Preparing these artifacts is completed adoption work, not evidence of external
   submissions, listings or community engagement responses.
@@ -107,10 +108,38 @@ OpenAPI includes the native paid entrypoint and capability result endpoint.
 
 ## Deployment verification
 
-PENDING — replace with actual smoke observations only after deployment.
+Observed on 2026-09-26, approximately 16:52–16:54 UTC, for launch commit
+`42772c2405018e7d7258f391503efe47ee3d7fcd`. Railway API, worker and frontend all
+reported SUCCESS on that commit.
+
+* GET `/`, `/adoption`, `/v1/public/adoption`, `/.well-known/prama-agent.json`,
+  `/agents.md`, `/llms.txt`, `/openapi.json`: HTTP 200 after API rollout completed.
+* Adoption JSON: `Cache-Control: public, max-age=30`; aggregate counts only.
+* MCP `/mcp`: initialize, tools/list and prama.discover returned HTTP 200 with
+  valid JSON-RPC results. All three intended discovery tools were listed.
+* Exactly one unsigned POST `/v1/public/ask`: HTTP 402, x402 v2 exact,
+  `eip155:84532`, 10000 atomic USDC (0.01), expected USDC contract and recipient,
+  EIP-712 USDC / 2, exact canonical resource URL. Bazaar info validated against
+  its JSON Schema. No authorization was generated or submitted.
+* Persisted snapshot: 7 external M2M requests, 6 settled requests, 2 paying
+  wallets, 2 declared client labels, 2 registered M2M identity records,
+  6 successful acquisitions, 5 admitted evidence records, 1 consumer fulfilled.
+  These are observed counts at that time, not permanent totals or independent
+  agent/user estimates.
+* KIMI proof verification returned **OPERATOR_ATTESTED**, not
+  PERSISTED_LINEAGE_VERIFIED. The supplied certified case is visible and
+  sanitized, but this campaign did not independently confirm its entire
+  persisted lineage. It is never inserted into or added to aggregate metrics.
+* Bazaar catalog indexing: NOT TESTED. External submissions remain PLANNED.
+
 No paid traffic, artificial users, synthetic wallets or invented AgentIdentities.
 
 ## Local validation
+
+Backend: **112 passed**, comprising 11 new agent-access cases and 101 relevant
+regression cases, including PostgreSQL Consumer Fulfillment and evidence/ticket
+checks, using the freshly built backend Docker image and local test database.
+No new regressions were observed in this selection.
 
 Backend selection includes discovery documents, MCP initialize/tools-list/all
 three discovery tools, JSON Schema validation of Bazaar info, unchanged payment
