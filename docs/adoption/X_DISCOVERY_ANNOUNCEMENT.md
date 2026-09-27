@@ -9,7 +9,7 @@ listing; prepared or pending submissions are omitted.
 Machines should not have to guess what a paid endpoint can do.
 
 PRAMA-Dynamagh now has one canonical machine-readable discovery entrypoint:
-https://prama-dynamagh.up.railway.app/v1/public/discovery
+https://prama-dynamagh.up.railway.app/m2m/discovery
 
 Discovery → capabilities → x402 payment → machine intelligence via Telegraph
 Protocol → Evidence → PRAMAgraph → Decision → Ticket → Consumer Result.
@@ -23,7 +23,7 @@ delivery does not establish semantic fulfillment.
 Machines should not have to guess what a paid endpoint can do.
 
 PRAMA-Dynamagh has one canonical machine-readable discovery entrypoint:
-https://prama-dynamagh.up.railway.app/v1/public/discovery
+https://prama-dynamagh.up.railway.app/m2m/discovery
 
 Discovery → capabilities → x402 payment → machine intelligence via Telegraph
 Protocol → Evidence → PRAMAgraph → Decision → Ticket → Consumer Result.

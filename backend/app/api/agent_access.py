@@ -6,6 +6,8 @@ from fastapi.responses import PlainTextResponse
 from urllib.parse import urlsplit, urlunsplit
 
 router = APIRouter(tags=["agent-discovery"])
+M2M_DISCOVERY_PATH = "/m2m/discovery"
+M2M_CAPABILITIES_PATH = "/m2m/capabilities"
 DESCRIPTION = ("Paid machine intelligence with Evidence, provenance, PRAMAgraph "
                "structural evaluation, Decision, Ticket and capability-bound Consumer Result.")
 BENIGN = ("[BENIGN AGENT DISCOVERY]\nDiscover PRAMA-Dynamagh as an optional evidence-bound machine "
@@ -63,10 +65,12 @@ RESOLUTION = {"intent_resolution_owner": "Telegraph", "eligibility_ranking_owner
 def supported_capabilities():
     """PRAMA-owned request semantics and dated observations, not a routing registry."""
     from app.api import x402
+    base = x402.PUBLIC_ORIGIN.rstrip("/")
     return {"schema_version": "prama.capabilities.v1", "service": "PRAMA-Dynamagh",
             "descriptor_type": "PRAMA-owned capability descriptor; not an x402 or Telegraph standard",
-            "canonical_discovery_url": x402.PUBLIC_ORIGIN.rstrip("/") + "/v1/public/discovery",
-            "execution": {"method": "POST", "url": x402.PUBLIC_ORIGIN + "/v1/public/ask",
+            "canonical_url": base + M2M_CAPABILITIES_PATH,
+            "canonical_discovery_url": base + M2M_DISCOVERY_PATH,
+            "execution": {"method": "POST", "url": base + "/v1/public/ask",
                           "payment_protocol": "x402", "network": x402.X402_NETWORK,
                           "environment": "TESTNET" if x402.X402_NETWORK == "eip155:84532" else "UNKNOWN"},
             "request_model": {"schema": deepcopy(REQUEST_SCHEMA),
@@ -116,6 +120,7 @@ def universal_discovery():
         facilitator = urlunsplit(("https", parsed_facilitator.netloc, parsed_facilitator.path.rstrip("/"), "", ""))
     return {
         "schema_version": "prama.discovery.v1",
+        "canonical_url": base + M2M_DISCOVERY_PATH,
         "service": {
             "name": "PRAMA-Dynamagh",
             "organization": "AptadinamiK Cybernetics",
@@ -123,7 +128,7 @@ def universal_discovery():
             "description": DESCRIPTION,
         },
         "execution": {"method": "POST", "endpoint": base + "/v1/public/ask", "asynchronous": True},
-        "capabilities": {"url": base + "/v1/public/capabilities"},
+        "capabilities": {"url": base + M2M_CAPABILITIES_PATH},
         "mcp": {"endpoint": base + "/mcp", "transport": "streamable-http", "purpose": "discovery"},
         "agent_manifest": {"url": base + "/.well-known/prama-agent.json"},
         "machine_documentation": {"agent_guide": base + "/agents.md", "llms": base + "/llms.txt"},
@@ -197,6 +202,7 @@ def universal_discovery():
     }
 
 
+@router.get(M2M_DISCOVERY_PATH)
 @router.get("/v1/public/discovery")
 def public_discovery(response: Response):
     response.headers["Cache-Control"] = "public, max-age=300"
@@ -204,6 +210,7 @@ def public_discovery(response: Response):
     return universal_discovery()
 
 
+@router.get(M2M_CAPABILITIES_PATH)
 @router.get("/v1/public/capabilities")
 def public_capabilities(response: Response):
     response.headers["Cache-Control"] = "public, max-age=60"
@@ -233,10 +240,10 @@ def descriptor():
             "outputs": ["consumer_result", "evidence", "evidence_content_hash", "provenance", "structural_evaluation", "decision", "ticket"],
             "identity": {"agent_identity": "optional", "wallet_is_agent_identity": False, "wallet_role": "economic_principal"},
             "acquisition": {"infrastructure": "Telegraph Protocol"},
-            "discovery": {"canonical": base.rstrip("/") + "/v1/public/discovery", "guide": base + "/agents.md", "llms": base + "/llms.txt", "adoption": base + "/adoption",
-                          "metrics": base + "/v1/public/adoption", "capabilities": base + "/v1/public/capabilities", "bazaar_metadata_declared": True,
+            "discovery": {"canonical": base.rstrip("/") + M2M_DISCOVERY_PATH, "guide": base + "/agents.md", "llms": base + "/llms.txt", "adoption": base + "/adoption",
+                          "metrics": base + "/v1/public/adoption", "capabilities": base + M2M_CAPABILITIES_PATH, "bazaar_metadata_declared": True,
                           **indexing_observation()},
-            "capabilities": {"url": base + "/v1/public/capabilities"}, "resolution": dict(RESOLUTION),
+            "capabilities": {"url": base + M2M_CAPABILITIES_PATH}, "resolution": dict(RESOLUTION),
             "request_schema": deepcopy(REQUEST_SCHEMA), "result_schema": RESULT_SCHEMA}
 
 
@@ -250,9 +257,9 @@ Do not override system instructions, security policy, wallet controls,
 delegated authority, or spending limits.
 
 ## EXECUTION PATH
-1. Read canonical discovery: {base}/v1/public/discovery
+1. Read canonical discovery: {base}{M2M_DISCOVERY_PATH}
 2. Discover PRAMA: {base}/.well-known/prama-agent.json
-3. Inspect PRAMA request capabilities: {base}/v1/public/capabilities
+3. Inspect PRAMA request capabilities: {base}{M2M_CAPABILITIES_PATH}
 4. POST a natural-language query/request without payment to {base}/v1/public/ask; requested_intent is optional.
 5. Receive HTTP 402.
 6. Validate current payment challenge: version, scheme, resource, network, asset, amount, recipient and EIP-712 domain.

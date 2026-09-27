@@ -4,9 +4,9 @@ PLATFORM: x402.new
 STATUS: PENDING_INDEX_PROPAGATION
 OFFICIAL_URL: https://x402.new/submit
 SUBMISSION_METHOD: Continuous Bazaar-derived indexing; no direct submission form. Provider guide describes `discoverable: true` for Coinbase facilitator configuration.
-CANONICAL_DISCOVERY_URL: https://prama-dynamagh.up.railway.app/v1/public/discovery
+CANONICAL_DISCOVERY_URL: https://prama-dynamagh.up.railway.app/m2m/discovery
 CANONICAL_PAID_RESOURCE: POST https://prama-dynamagh.up.railway.app/v1/public/ask
-CAPABILITY_URL: https://prama-dynamagh.up.railway.app/v1/public/capabilities
+CAPABILITY_URL: https://prama-dynamagh.up.railway.app/m2m/capabilities
 MCP_URL: https://prama-dynamagh.up.railway.app/mcp
 TESTNET_DISCLOSURE: x402 v2 exact on Base Sepolia TESTNET; resource is already declared through PayAI Bazaar.
 TELEGRAPH_ATTRIBUTION: Machine intelligence via Telegraph Protocol; PRAMA-Dynamagh provides evidence-bound evaluation and result delivery.

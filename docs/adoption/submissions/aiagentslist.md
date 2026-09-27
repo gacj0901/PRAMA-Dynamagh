@@ -22,7 +22,7 @@ The PRAMA descriptor is a proprietary versioned document, not an external standa
 - Adoption and execution proof: https://prama-dynamagh.up.railway.app/adoption
 - Metrics: https://prama-dynamagh.up.railway.app/v1/public/adoption
 - PRAMA descriptor: https://prama-dynamagh.up.railway.app/.well-known/prama-agent.json
-- Request capabilities: https://prama-dynamagh.up.railway.app/v1/public/capabilities
+- Request capabilities: https://prama-dynamagh.up.railway.app/m2m/capabilities
 - Agent guide: https://prama-dynamagh.up.railway.app/agents.md
 - Compact crawler guide: https://prama-dynamagh.up.railway.app/llms.txt
 - OpenAPI: https://prama-dynamagh.up.railway.app/openapi.json

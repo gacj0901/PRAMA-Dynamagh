@@ -4,9 +4,9 @@ PLATFORM: x402-list
 STATUS: PLANNED; submission withheld because the live API may require a non-refundable Base payment for free-compute hosting
 OFFICIAL_URL: https://www.x402-list.com/api
 SUBMISSION_METHOD: POST https://x402-list.com/api/v1/submit; API returns a live x402 challenge when a listing fee applies, followed by human review
-CANONICAL_DISCOVERY_URL: https://prama-dynamagh.up.railway.app/v1/public/discovery
+CANONICAL_DISCOVERY_URL: https://prama-dynamagh.up.railway.app/m2m/discovery
 CANONICAL_PAID_RESOURCE: POST https://prama-dynamagh.up.railway.app/v1/public/ask
-CAPABILITY_URL: https://prama-dynamagh.up.railway.app/v1/public/capabilities
+CAPABILITY_URL: https://prama-dynamagh.up.railway.app/m2m/capabilities
 MCP_URL: https://prama-dynamagh.up.railway.app/mcp
 TESTNET_DISCLOSURE: Service accepts x402 v2 exact on Base Sepolia testnet; listing site's fee, if applied, is on Base mainnet and is not authorized.
 TELEGRAPH_ATTRIBUTION: Machine intelligence via Telegraph Protocol; PRAMA-Dynamagh adds evidence-bound governance and Consumer Result delivery.
@@ -21,7 +21,7 @@ EXACT_PAYLOAD_OR_FORM_VALUES:
   "website_url": "https://prama-dynamagh.up.railway.app",
   "category": "AI",
   "endpoints": ["POST /v1/public/ask"],
-  "notes": "Machine discovery: https://prama-dynamagh.up.railway.app/v1/public/discovery. Base Sepolia testnet only."
+  "notes": "Machine discovery: https://prama-dynamagh.up.railway.app/m2m/discovery. Base Sepolia testnet only."
 }
 ```
 

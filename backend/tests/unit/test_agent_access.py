@@ -78,6 +78,9 @@ def test_mcp_initialize_tools_list_and_discovery():
             assert response.status_code == 200
             assert response.json()["result"].get("isError") is not True
             assert "payment_signature" not in response.text
+            if name == "prama.discover":
+                assert "https://prama-dynamagh.up.railway.app/m2m/discovery" in response.text
+                assert "https://prama-dynamagh.up.railway.app/m2m/capabilities" in response.text
         denied = client.post("/mcp", headers={**headers, "Origin": "https://evil.invalid"}, json={"jsonrpc": "2.0", "id": 4, "method": "tools/list"})
         assert denied.status_code in {400, 403}
 
@@ -257,12 +260,14 @@ def test_capabilities_are_public_cacheable_read_only_and_sanitized(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", forbidden)
     monkeypatch.setattr(Session, "execute", forbidden)
     client = TestClient(app)
-    response = client.get("/v1/public/capabilities")
+    response = client.get("/m2m/capabilities")
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "public, max-age=60"
     value = response.json()
     assert value == supported_capabilities()
     assert value["schema_version"] == "prama.capabilities.v1"
+    assert value["canonical_url"] == "https://prama-dynamagh.up.railway.app/m2m/capabilities"
+    assert value["canonical_discovery_url"] == "https://prama-dynamagh.up.railway.app/m2m/discovery"
     assert value["resolution"]["intent_resolution_owner"] == "Telegraph"
     assert value["resolution"]["miner_selection_owner"] == "Telegraph"
     assert value["resolution"]["explicit_telegraph_intent_id_required"] is False
@@ -270,6 +275,7 @@ def test_capabilities_are_public_cacheable_read_only_and_sanitized(monkeypatch):
     for forbidden_field in ("private_key", "seed_phrase", "payer_wallet", "payTo", "facilitator_credentials", "miner_config"):
         assert forbidden_field not in response.text
     assert client.post("/v1/public/capabilities", json={}).status_code == 405
+    assert client.post("/m2m/capabilities", json={}).status_code == 405
     assert "/v1/public/intents" not in client.get("/openapi.json").json()["paths"]
 
 
@@ -294,9 +300,10 @@ def test_observations_are_dated_evidence_not_provider_support_claims():
 
 def test_machine_guides_share_capability_and_async_contract(monkeypatch):
     monkeypatch.setattr(x402, "PUBLIC_ORIGIN", "https://public.example")
-    url = "https://public.example/v1/public/capabilities"
+    url = "https://public.example/m2m/capabilities"
     assert descriptor()["capabilities"] == {"url": url}
     assert descriptor()["discovery"]["capabilities"] == url
+    assert descriptor()["discovery"]["canonical"] == "https://public.example/m2m/discovery"
     for path in ("/agents.md", "/llms.txt"):
         text = TestClient(app).get(path).text
         for fragment in (url, "requested_intent is not necessarily a Telegraph Intent_ID",
@@ -316,6 +323,8 @@ def test_single_public_paid_endpoint_unchanged():
     paid = [path for path, operations in paths.items()
             if path.startswith("/v1/public/") and "post" in operations]
     assert paid == ["/v1/public/ask"]
+    assert set(paths["/m2m/discovery"]) == {"get"}
+    assert set(paths["/m2m/capabilities"]) == {"get"}
 
 
 def test_catalog_listing_never_counts_as_demand(store, monkeypatch):
@@ -341,7 +350,9 @@ def test_discovery_has_no_local_provider_registry_and_header_fits_budget():
     assert len(response.headers["PAYMENT-REQUIRED"]) < 30_000
     config = (root / "frontend/nginx.conf").read_text()
     assert "location = /v1/public/capabilities" in config
+    assert "location = /m2m/discovery" in config
+    assert "location = /m2m/capabilities" in config
     assert "proxy_buffer_size 32k;" in config
     page = (root / "frontend/public/adoption/index.html").read_text(encoding="utf-8")
-    assert 'href="/v1/public/capabilities"' in page
+    assert 'href="/m2m/capabilities"' in page
     assert "Listing does not establish external demand" in page

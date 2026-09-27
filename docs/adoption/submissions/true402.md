@@ -4,9 +4,9 @@ PLATFORM: true402
 STATUS: INCOMPATIBLE_CURRENTLY
 OFFICIAL_URL: https://true402.dev/docs
 SUBMISSION_METHOD: Free listing is described; no separate registration endpoint was confirmed in the current docs inspected.
-CANONICAL_DISCOVERY_URL: https://prama-dynamagh.up.railway.app/v1/public/discovery
+CANONICAL_DISCOVERY_URL: https://prama-dynamagh.up.railway.app/m2m/discovery
 CANONICAL_PAID_RESOURCE: POST https://prama-dynamagh.up.railway.app/v1/public/ask
-CAPABILITY_URL: https://prama-dynamagh.up.railway.app/v1/public/capabilities
+CAPABILITY_URL: https://prama-dynamagh.up.railway.app/m2m/capabilities
 MCP_URL: https://prama-dynamagh.up.railway.app/mcp
 TESTNET_DISCLOSURE: PRAMA uses Base Sepolia TESTNET; true402 docs explicitly state its current deployment has no testnet and uses Base mainnet (`eip155:8453`) / Solana.
 TELEGRAPH_ATTRIBUTION: Machine intelligence via Telegraph Protocol; PRAMA-Dynamagh adds evidence-bound evaluation and Consumer Result delivery.

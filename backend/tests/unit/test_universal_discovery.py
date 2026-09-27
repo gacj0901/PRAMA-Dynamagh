@@ -5,19 +5,31 @@ from app.main import app
 
 
 def test_universal_discovery_public_cacheable_and_canonical():
-    response = TestClient(app).get("/v1/public/discovery")
+    client = TestClient(app, follow_redirects=False)
+    response = client.get("/m2m/discovery")
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "public, max-age=300"
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     value = response.json()
     assert value["schema_version"] == "prama.discovery.v1"
+    assert value["canonical_url"] == "https://prama-dynamagh.up.railway.app/m2m/discovery"
     assert value["execution"] == {
         "method": "POST",
         "endpoint": "https://prama-dynamagh.up.railway.app/v1/public/ask",
         "asynchronous": True,
     }
-    assert value["capabilities"]["url"].endswith("/v1/public/capabilities")
-    assert TestClient(app).get("/v1/public/capabilities").json()["canonical_discovery_url"] == "https://prama-dynamagh.up.railway.app/v1/public/discovery"
+    assert value["capabilities"]["url"] == "https://prama-dynamagh.up.railway.app/m2m/capabilities"
+    assert client.get("/v1/public/discovery").status_code == 200
+    assert client.get("/v1/public/discovery").json() == value
+    capabilities = client.get("/m2m/capabilities")
+    assert capabilities.status_code == 200
+    assert capabilities.headers["Cache-Control"] == "public, max-age=60"
+    assert capabilities.json()["canonical_url"] == "https://prama-dynamagh.up.railway.app/m2m/capabilities"
+    assert capabilities.json()["canonical_discovery_url"] == "https://prama-dynamagh.up.railway.app/m2m/discovery"
+    assert client.get("/v1/public/capabilities").status_code == 200
+    assert client.get("/v1/public/capabilities").json() == capabilities.json()
+    assert client.get("/m2m/discovery").history == []
+    assert client.get("/m2m/capabilities").history == []
     assert value["mcp"]["endpoint"].endswith("/mcp")
     assert value["agent_manifest"]["url"].endswith("/.well-known/prama-agent.json")
     assert value["machine_documentation"]["agent_guide"].endswith("/agents.md")
@@ -37,12 +49,12 @@ def test_universal_discovery_does_not_contact_provider_or_database(monkeypatch):
 
     monkeypatch.setattr(socket.socket, "connect", forbidden)
     monkeypatch.setattr(Session, "execute", forbidden)
-    response = TestClient(app).get("/v1/public/discovery")
+    response = TestClient(app).get("/m2m/discovery")
     assert response.status_code == 200
 
 
 def test_universal_discovery_payment_bazaar_and_safety_contract():
-    value = TestClient(app).get("/v1/public/discovery").json()
+    value = TestClient(app).get("/m2m/discovery").json()
     assert value["service"]["environment"] == "TESTNET"
     assert value["payment"] == {
         "protocol": "x402", "version": 2, "scheme": "exact",
@@ -64,7 +76,7 @@ def test_universal_discovery_payment_bazaar_and_safety_contract():
 
 
 def test_universal_discovery_telegraph_range_and_nuanced_observations():
-    value = TestClient(app).get("/v1/public/discovery").json()
+    value = TestClient(app).get("/m2m/discovery").json()
     assert value["telegraph"]["intent_resolution_owner"] == "Telegraph"
     assert value["telegraph"]["miner_selection_owner"] == "Telegraph"
     assert value["telegraph"]["requested_intent_semantics"] == "application-level semantic hint"
@@ -87,7 +99,7 @@ def test_universal_discovery_telegraph_range_and_nuanced_observations():
 
 
 def test_universal_discovery_preserves_async_result_and_semantic_invariants():
-    value = TestClient(app).get("/v1/public/discovery").json()
+    value = TestClient(app).get("/m2m/discovery").json()
     contract = value["async_result_contract"]
     assert contract["capability_is_secret"] is True
     assert contract["capability_in_discovery"] is False
