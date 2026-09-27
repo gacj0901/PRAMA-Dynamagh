@@ -23,8 +23,8 @@ describe("public dashboard history and runtime read model", () => {
     expect(history.compareDocumentPosition(chain) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(document.querySelectorAll(".pipeline-panel .pipe .step")).toHaveLength(6);
     expect(document.querySelector(".miner-panel > h2").textContent).toBe("Miner Responses");
-    expect(document.querySelectorAll("table.origin tr[data-origin]")).toHaveLength(5);
-    expect(document.querySelector('table.origin tr[data-origin="user"] td:first-child').textContent).toBe("USER");
+    expect(document.querySelectorAll("table.origin tr[data-origin]")).toHaveLength(4);
+    expect(document.querySelector('table.origin tr[data-origin="user"]')).toBeNull();
     dom.window.close();
   });
 
@@ -103,16 +103,15 @@ describe("public dashboard history and runtime read model", () => {
     const originCount = (origin, column) => Number(document.querySelector(`table.origin tr[data-origin="${origin}"] td:nth-child(${column})`).textContent);
     expect(originCount("autonomous", 2)).toBe(3);
     expect(originCount("autonomous", 3)).toBe(2);
-    expect(originCount("manual", 2)).toBe(2);
-    expect(originCount("manual", 3)).toBe(1);
+    expect(originCount("manual", 2)).toBe(3);
+    expect(originCount("manual", 3)).toBe(2);
     expect(originCount("m2m", 2)).toBe(2);
     expect(originCount("m2m", 3)).toBe(2);
-    expect(originCount("user", 2)).toBe(1);
-    expect(originCount("user", 3)).toBe(1);
+    expect(document.querySelector("#publicManual").textContent).toBe("3");
     expect(originCount("total", 2)).toBe(8);
     expect(originCount("total", 3)).toBe(6);
-    expect(["autonomous", "manual", "m2m", "user"].reduce((sum, origin) => sum + originCount(origin, 2), 0)).toBe(originCount("total", 2));
-    expect(["autonomous", "manual", "m2m", "user"].reduce((sum, origin) => sum + originCount(origin, 3), 0)).toBe(originCount("total", 3));
+    expect(["autonomous", "manual", "m2m"].reduce((sum, origin) => sum + originCount(origin, 2), 0)).toBe(originCount("total", 2));
+    expect(["autonomous", "manual", "m2m"].reduce((sum, origin) => sum + originCount(origin, 3), 0)).toBe(originCount("total", 3));
     expect(setInterval).toHaveBeenCalledWith(expect.any(Function), 12000);
 
     activity = { ...activity, processed_responses: 9, execution_history: [], recovery_state: "RECOVERY_REQUIRED" };

@@ -100,9 +100,8 @@
     setText(".metric-hero .cap", `RESPONSES PROCESSED · ${data.responses_with_evidence ?? 0} WITH EVIDENCE`);
     const originValues = {
       autonomous: [autonomous.processed_responses, autonomous.responses_with_evidence],
-      manual: [manual.processed_responses, manual.responses_with_evidence],
+      manual: [Number(manual.processed_responses || 0) + Number(user.processed_responses || 0), Number(manual.responses_with_evidence || 0) + Number(user.responses_with_evidence || 0)],
       m2m: [m2m.processed_responses, m2m.responses_with_evidence],
-      user: [user.processed_responses, user.responses_with_evidence],
       total: [data.processed_responses, data.responses_with_evidence],
     };
     document.querySelectorAll("table.origin tr[data-origin]").forEach((row) => {
@@ -131,7 +130,7 @@
     setText("#publicResponses", data.processed_responses ?? 0);
     setText("#publicEvidence", data.responses_with_evidence ?? 0);
     setText("#publicExternal", demand.external_user_driven ?? 0);
-    setText("#publicManual", demand.manual ?? 0);
+    setText("#publicManual", Number(demand.manual || 0) + Number(demand.user || 0));
     setText("#publicM2M", demand.m2m_inbound ?? 0);
     setText("#publicFixture", demand.fixture_canary ?? 0);
     setText("#publicLegacy", demand.unattributed_legacy ?? 0);
