@@ -77,6 +77,10 @@ def test_universal_discovery_payment_bazaar_and_safety_contract():
 
 def test_universal_discovery_telegraph_range_and_nuanced_observations():
     value = TestClient(app).get("/m2m/discovery").json()
+    assert value["telegraph"]["name"] == "Telegraph Protocol"
+    assert value["telegraph"]["website"] == "https://telegraphprotocol.com/"
+    assert value["telegraph"]["developer_console"] == "https://integrate.telegraphprotocol.com/"
+    assert value["telegraph"]["role"] == "machine-intelligence acquisition and resolution layer"
     assert value["telegraph"]["intent_resolution_owner"] == "Telegraph"
     assert value["telegraph"]["miner_selection_owner"] == "Telegraph"
     assert value["telegraph"]["requested_intent_semantics"] == "application-level semantic hint"
@@ -96,6 +100,42 @@ def test_universal_discovery_telegraph_range_and_nuanced_observations():
     assert token_holder["observed_state"] == "OBSERVED_ACQUISITION_SUCCESS_RESULT_NOT_AVAILABLE"
     assert "5dba61f6" not in json.dumps(value)
     assert len(value["intelligence_domains"]) > 1
+
+
+def test_telegraph_attribution_is_present_across_machine_discovery_surfaces():
+    client = TestClient(app)
+    surfaces = {
+        "discovery": client.get("/m2m/discovery").json(),
+        "capabilities": client.get("/m2m/capabilities").json(),
+        "manifest": client.get("/.well-known/prama-agent.json").json(),
+    }
+    expected_description = (
+        "Telegraph Protocol provides the machine-intelligence acquisition and resolution layer. "
+        "PRAMA-Dynamagh adds evidence-bound evaluation, governance, auditability and Consumer Result delivery."
+    )
+    expected_pipeline = [
+        "Agent", "PRAMA-Dynamagh", "x402", "Telegraph Protocol",
+        "Intent Resolution / Miner Selection", "Miner Intelligence", "Evidence",
+        "PRAMAgraph", "Decision", "Ticket", "Consumer Result",
+    ]
+    for name, payload in surfaces.items():
+        assert payload["telegraph"]["name"] == "Telegraph Protocol", name
+        assert payload["telegraph"]["website"] == "https://telegraphprotocol.com/", name
+        assert payload["telegraph"]["developer_console"] == "https://integrate.telegraphprotocol.com/", name
+        assert payload["telegraph"]["role"] == "machine-intelligence acquisition and resolution layer", name
+        assert payload["telegraph"]["intent_resolution_owner"] == "Telegraph", name
+        assert payload["telegraph"]["intent_resolution_owner"] != "PRAMA-Dynamagh", name
+        assert payload["telegraph"]["miner_selection_owner"] == "Telegraph", name
+        assert payload["intelligence"]["provider"] == "Telegraph Protocol", name
+        assert payload["intelligence"]["requested_intent_semantics"] == "application-level semantic hint", name
+        assert payload["intelligence"]["explicit_telegraph_intent_id_required"] is False, name
+        assert payload["intelligence"]["intent_resolution_owner"] == "Telegraph", name
+        assert payload["intelligence"]["miner_selection_owner"] == "Telegraph", name
+        assert payload["intelligence_description"] == expected_description, name
+        assert payload["pipeline"] == expected_pipeline, name
+    assert surfaces["discovery"]["telegraph"]["local_telegraph_intent_registry"] is False
+    assert surfaces["capabilities"]["telegraph"]["local_telegraph_intent_registry"] is False
+    assert surfaces["manifest"]["telegraph"]["local_telegraph_intent_registry"] is False
 
 
 def test_universal_discovery_preserves_async_result_and_semantic_invariants():

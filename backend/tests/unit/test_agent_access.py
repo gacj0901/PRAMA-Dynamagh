@@ -307,7 +307,11 @@ def test_machine_guides_share_capability_and_async_contract(monkeypatch):
     for path in ("/agents.md", "/llms.txt"):
         text = TestClient(app).get(path).text
         for fragment in (url, "requested_intent is not necessarily a Telegraph Intent_ID",
-                         "Telegraph performs protocol Intent resolution", "PAYMENT != AUTHORITY",
+                         "Telegraph owns protocol Intent Resolution and Miner selection.", "PAYMENT != AUTHORITY",
+                         "Telegraph Protocol provides the machine-intelligence acquisition and resolution layer.",
+                         "PRAMA-Dynamagh expresses the application-level intelligence need.",
+                         "Telegraph owns protocol Intent Resolution and Miner selection.",
+                         "Agent → PRAMA-Dynamagh → x402 → Telegraph Protocol → Intent Resolution / Miner Selection",
                          "202", "result_endpoint", "X-PRAMA-Result-Capability", "STOP",
                          "consumer_result", "evidence", "evaluation", "decision", "ticket"):
             assert fragment in text

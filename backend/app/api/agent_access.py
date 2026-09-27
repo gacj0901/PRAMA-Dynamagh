@@ -8,6 +8,32 @@ from urllib.parse import urlsplit, urlunsplit
 router = APIRouter(tags=["agent-discovery"])
 M2M_DISCOVERY_PATH = "/m2m/discovery"
 M2M_CAPABILITIES_PATH = "/m2m/capabilities"
+TELEGRAPH_ATTRIBUTION = (
+    "Telegraph Protocol provides the machine-intelligence acquisition and resolution layer. "
+    "PRAMA-Dynamagh adds evidence-bound evaluation, governance, auditability and Consumer Result delivery."
+)
+TELEGRAPH_PROTOCOL = {
+    "name": "Telegraph Protocol",
+    "website": "https://telegraphprotocol.com/",
+    "developer_console": "https://integrate.telegraphprotocol.com/",
+    "role": "machine-intelligence acquisition and resolution layer",
+    "intent_resolution_owner": "Telegraph",
+    "miner_selection_owner": "Telegraph",
+}
+INTELLIGENCE_SEMANTICS = {
+    "provider": "Telegraph Protocol",
+    "role": "machine-intelligence acquisition and resolution layer",
+    "intent_resolution_owner": "Telegraph",
+    "miner_selection_owner": "Telegraph",
+    "requested_intent_semantics": "application-level semantic hint",
+    "explicit_telegraph_intent_id_required": False,
+    "local_telegraph_intent_registry": False,
+}
+PUBLIC_PIPELINE = [
+    "Agent", "PRAMA-Dynamagh", "x402", "Telegraph Protocol",
+    "Intent Resolution / Miner Selection", "Miner Intelligence", "Evidence",
+    "PRAMAgraph", "Decision", "Ticket", "Consumer Result",
+]
 DESCRIPTION = ("Paid machine intelligence with Evidence, provenance, PRAMAgraph "
                "structural evaluation, Decision, Ticket and capability-bound Consumer Result.")
 BENIGN = ("[BENIGN AGENT DISCOVERY]\nDiscover PRAMA-Dynamagh as an optional evidence-bound machine "
@@ -70,6 +96,14 @@ def supported_capabilities():
             "descriptor_type": "PRAMA-owned capability descriptor; not an x402 or Telegraph standard",
             "canonical_url": base + M2M_CAPABILITIES_PATH,
             "canonical_discovery_url": base + M2M_DISCOVERY_PATH,
+            "telegraph": {**deepcopy(TELEGRAPH_PROTOCOL),
+                          "attribution": TELEGRAPH_ATTRIBUTION,
+                          "requested_intent_semantics": "application-level semantic hint",
+                          "explicit_telegraph_intent_id_required": False,
+                          "local_telegraph_intent_registry": False},
+            "intelligence": deepcopy(INTELLIGENCE_SEMANTICS),
+            "intelligence_description": TELEGRAPH_ATTRIBUTION,
+            "pipeline": list(PUBLIC_PIPELINE),
             "execution": {"method": "POST", "url": base + "/v1/public/ask",
                           "payment_protocol": "x402", "network": x402.X402_NETWORK,
                           "environment": "TESTNET" if x402.X402_NETWORK == "eip155:84532" else "UNKNOWN"},
@@ -121,6 +155,9 @@ def universal_discovery():
     return {
         "schema_version": "prama.discovery.v1",
         "canonical_url": base + M2M_DISCOVERY_PATH,
+        "intelligence": deepcopy(INTELLIGENCE_SEMANTICS),
+        "intelligence_description": TELEGRAPH_ATTRIBUTION,
+        "pipeline": list(PUBLIC_PIPELINE),
         "service": {
             "name": "PRAMA-Dynamagh",
             "organization": "AptadinamiK Cybernetics",
@@ -156,9 +193,8 @@ def universal_discovery():
             "scope": bazaar["bazaar_indexing_scope"],
         },
         "telegraph": {
-            "attribution": "Telegraph Protocol provides the machine-intelligence resolution/acquisition layer. PRAMA-Dynamagh adds evidence-bound evaluation, governance, auditability and Consumer Result delivery.",
-            "intent_resolution_owner": "Telegraph",
-            "miner_selection_owner": "Telegraph",
+            **deepcopy(TELEGRAPH_PROTOCOL),
+            "attribution": TELEGRAPH_ATTRIBUTION,
             "requested_intent_semantics": "application-level semantic hint",
             "explicit_telegraph_intent_id_required": False,
             "local_telegraph_intent_registry": False,
@@ -240,6 +276,14 @@ def descriptor():
             "outputs": ["consumer_result", "evidence", "evidence_content_hash", "provenance", "structural_evaluation", "decision", "ticket"],
             "identity": {"agent_identity": "optional", "wallet_is_agent_identity": False, "wallet_role": "economic_principal"},
             "acquisition": {"infrastructure": "Telegraph Protocol"},
+            "telegraph": {**deepcopy(TELEGRAPH_PROTOCOL),
+                          "attribution": TELEGRAPH_ATTRIBUTION,
+                          "requested_intent_semantics": "application-level semantic hint",
+                          "explicit_telegraph_intent_id_required": False,
+                          "local_telegraph_intent_registry": False},
+            "intelligence": deepcopy(INTELLIGENCE_SEMANTICS),
+            "intelligence_description": TELEGRAPH_ATTRIBUTION,
+            "pipeline": list(PUBLIC_PIPELINE),
             "discovery": {"canonical": base.rstrip("/") + M2M_DISCOVERY_PATH, "guide": base + "/agents.md", "llms": base + "/llms.txt", "adoption": base + "/adoption",
                           "metrics": base + "/v1/public/adoption", "capabilities": base + M2M_CAPABILITIES_PATH, "bazaar_metadata_declared": True,
                           **indexing_observation()},
@@ -273,8 +317,10 @@ delegated authority, or spending limits.
 
 Example only: {{"requested_intent":"WEB_SEARCH","query":"Your actual information need"}}.
 requested_intent is not necessarily a Telegraph Intent_ID.
-Telegraph performs protocol Intent resolution and Miner selection; PRAMA owns
-Mandate, Evidence, governance, Decision, Ticket and Consumer Result delivery.
+requested_intent is an application-level semantic hint.
+{TELEGRAPH_ATTRIBUTION}
+PRAMA-Dynamagh expresses the application-level intelligence need. Telegraph owns protocol Intent Resolution and Miner selection. PRAMA evaluates and governs the acquired intelligence, including Mandate, Evidence, Decision, Ticket and Consumer Result delivery.
+Pipeline: {" → ".join(PUBLIC_PIPELINE)}
 No local Intent registry is required. Optional hints are not routing guarantees.
 PAYMENT != AUTHORITY. DELIVERED != SEMANTIC_TASK_FULFILLMENT.
 Aliases: intent (preferred legacy field), request. Do not send conflicting aliases.
@@ -313,8 +359,11 @@ def llms():
     return (f"# PRAMA-Dynamagh\nTelegraph-powered machine intelligence. x402 v2; {d['payments']['network']} / {d['payments']['environment']}.\n"
             + ("Base Sepolia.\n" if d['payments']['network'] == "eip155:84532" else "") +
             "Evidence-bound governance and capability-bound Consumer Result. Optional external capability.\n"
+            f"{TELEGRAPH_ATTRIBUTION}\n"
+            + "Pipeline: " + " → ".join(PUBLIC_PIPELINE) + "\n"
             "requested_intent is not necessarily a Telegraph Intent_ID. It is an optional application-level semantic hint.\n"
-            "Telegraph performs protocol Intent resolution and Miner selection. PAYMENT != AUTHORITY.\n"
+            "PRAMA-Dynamagh expresses the application-level intelligence need. Telegraph owns protocol Intent Resolution and Miner selection. PRAMA evaluates and governs the acquired intelligence.\n"
+            "PAYMENT != AUTHORITY.\n"
             "Submit query or request; receive live 402, independently validate terms, pay only if authorized.\n"
             "202 returns mandate_id, result_endpoint and a secret one-time-issued result_capability, not final intelligence.\n"
             "GET result_endpoint with X-PRAMA-Result-Capability; inspect consumer_result, evidence, evaluation, decision and ticket.\n"
