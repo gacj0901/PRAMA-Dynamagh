@@ -1,5 +1,7 @@
 """Public PRAMA-owned discovery descriptor; no execution or signing tools."""
 from app.api.bazaar_observation import indexing_observation
+from app.api.public_intents import public_intents, PUBLIC_INTENT_HOLDS
+from copy import deepcopy
 from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
 
@@ -30,8 +32,23 @@ ACCEPTED_SCHEMA = {"type": "object", "required": ["mandate_id", "result_endpoint
                                   "Subsequent result contains consumer_result, evidence, evaluation, decision and ticket."}
 
 
+def public_request_schema(intents=None):
+    names = list(public_intents() if intents is None else intents)
+    schema = deepcopy(REQUEST_SCHEMA)
+    for field in ("intent", "requested_intent"):
+        if names:
+            schema["properties"][field]["enum"] = names.copy()
+        else:
+            schema["properties"][field]["not"] = {}
+    return schema
+
+
 def bazaar_extension():
     """x402 v2 Bazaar info/schema shape from the official HTTP body builder."""
+    intents = public_intents()
+    if "WEB_SEARCH" not in intents:
+        # Never publish an example that contradicts the currently verified enum.
+        return {}
     return {"bazaar": {
         "info": {"input": {"type": "http", "method": "POST", "bodyType": "json",
                             "body": {"requested_intent": "WEB_SEARCH", "query": "Find the official specification for HTTP 402."}},
@@ -42,7 +59,7 @@ def bazaar_extension():
             "input": {"type": "object", "required": ["type", "method", "bodyType", "body"],
                       "additionalProperties": False, "properties": {
                 "type": {"const": "http"}, "method": {"enum": ["POST", "PUT", "PATCH"]},
-                "bodyType": {"enum": ["json", "form-data", "text"]}, "body": REQUEST_SCHEMA}},
+                "bodyType": {"enum": ["json", "form-data", "text"]}, "body": public_request_schema(intents)}},
             "output": {"type": "object", "required": ["type"], "properties": {
                 "type": {"type": "string"}, "example": ACCEPTED_SCHEMA}},
         }},
@@ -50,11 +67,17 @@ def bazaar_extension():
 
 
 def supported_capabilities():
+    intents = public_intents()
     return {"capabilities": ["evidence_bound_intelligence_acquisition", "capability_bound_consumer_result"],
             "intent_selection": "Telegraph routing; an intent string is forwarded to the acquisition layer",
-            "requestable_intent_examples": ["WEB_SEARCH", "FINANCIAL_DATA", "WEATHER_FORECAST"],
+            "public_intents": list(intents),
+            "requestable_intent_examples": [name for name in ("WEB_SEARCH", "FINANCIAL_DATA", "WEATHER_FORECAST") if name in intents],
+            "intent_registry_source": "Configured Telegraph gateway GET /intents -> GET /engine/v1/intents",
+            "intent_registry_max_cache_seconds": 60,
+            "intent_registry_scope": "Canonical registry entries with miners, excluding inactive/experimental entries and PRAMA routing holds; not execution or semantic fulfillment guarantees.",
+            "intent_discovery_holds": dict(PUBLIC_INTENT_HOLDS),
             "intent_observations": {"as_of": "2026-09-26", "WEB_SEARCH": "Search/retrieval primitive; not a multi-source research/synthesis guarantee.", "RESEARCH_QUERY": "Latest reported acquisition failed TELEGRAPH_REQUEST_FAILED; Telegraph team investigating. No automatic substitute."},
-            "live_provider_inventory": "UNKNOWN", "availability_guaranteed": False,
+            "live_provider_inventory": "REGISTRY_OBSERVED" if intents else "UNAVAILABLE", "availability_guaranteed": False,
             "epistemic_coverage": {"e1_validated_targets": ["CRYPTO_PRICE"],
                                     "registry_membership_is_not_validated_coverage": True}}
 
@@ -82,9 +105,9 @@ def descriptor():
             "identity": {"agent_identity": "optional", "wallet_is_agent_identity": False, "wallet_role": "economic_principal"},
             "acquisition": {"infrastructure": "Telegraph Protocol"},
             "discovery": {"guide": base + "/agents.md", "llms": base + "/llms.txt", "adoption": base + "/adoption",
-                          "metrics": base + "/v1/public/adoption", "bazaar_metadata_declared": True,
+                          "metrics": base + "/v1/public/adoption", "bazaar_metadata_declared": "WEB_SEARCH" in public_intents(),
                           **indexing_observation()},
-            "capabilities": supported_capabilities(), "request_schema": REQUEST_SCHEMA, "result_schema": RESULT_SCHEMA}
+            "capabilities": supported_capabilities(), "request_schema": public_request_schema(), "result_schema": RESULT_SCHEMA}
 
 
 def execution_guide():

@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.bazaar_observation import indexing_observation
+from app.api.public_intents import public_intents
 from app.api.consumer_result import DELIVERY_EVENT
 from app.domain.mandates import (Mandate, AcquisitionTask, Evidence, InboundX402Payment,
                                  UsageEvent, Decision, Ticket, AgentIdentity)
@@ -73,7 +74,7 @@ def adoption_snapshot(session):
                                    "declared_client_labels": "Distinct nonempty declared agent_id values; not verified independent agents.",
                                    "unique_paying_wallets": "Distinct normalized (network, payer) pairs on recorded settled payments.",
                                    "registered_m2m_agent_identities": "Distinct persistent identities referenced by M2M mandates; not verified independent agents."},
-            "verified_execution": proof, "bazaar_metadata_declared": True, **indexing_observation(), "semantic_task_fulfillment": "NOT_INFERRED_FROM_DELIVERY"}
+            "verified_execution": proof, "bazaar_metadata_declared": "WEB_SEARCH" in public_intents(), **indexing_observation(), "semantic_task_fulfillment": "NOT_INFERRED_FROM_DELIVERY"}
 
 
 @router.get("/v1/public/adoption")

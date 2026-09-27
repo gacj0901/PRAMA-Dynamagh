@@ -12,6 +12,16 @@ from tests.unit.test_m2m_consumer_result import store, result
 from tests.unit.test_x402_public import db_session, facilitator_stub, _valid_payment_header
 
 
+@pytest.fixture(autouse=True)
+def offline_intent_registry(monkeypatch):
+    from app.api import public_intents as registry
+    monkeypatch.setenv("GATEWAY_URL", "https://offline-registry.invalid")
+    monkeypatch.setattr(registry, "_cache", None)
+    monkeypatch.setattr(registry, "_fetch_registry", lambda base: {"count": 3, "intents": [
+        {"intent_id": name, "canonical": True, "miner_count": 1}
+        for name in ("WEB_SEARCH", "FINANCIAL_DATA", "WEATHER_FORECAST")]})
+
+
 @pytest.mark.parametrize("path,fragment", [
     ("/.well-known/prama-agent.json", "PRAMA descriptor"),
     ("/agents.md", "[BENIGN AGENT DISCOVERY]"), ("/llms.txt", "Telegraph-powered"),
@@ -226,3 +236,86 @@ def test_public_labels_and_documentary_proofs_are_sanitized():
     assert "NOT_ESTABLISHED" in note and "NOT_AVAILABLE" in note
     for forbidden in ("result_capability:", "PAYMENT-SIGNATURE:", "Authorization:", "private_key:", "payer_wallet_address"):
         assert forbidden not in note
+
+
+def test_bazaar_all_canonical_public_intents_in_both_aliases():
+    from app.api.public_intents import public_intents
+    extension = bazaar_extension()["bazaar"]
+    body_schema = extension["schema"]["properties"]["input"]["properties"]["body"]
+    assert extension["info"]["input"]["body"]["requested_intent"] == "WEB_SEARCH"
+    for field in ("intent", "requested_intent"):
+        assert body_schema["properties"][field]["enum"] == list(public_intents())
+        for name in public_intents():
+            Draft202012Validator(body_schema).validate({field: name, "query": "offline test"})
+        assert not Draft202012Validator(body_schema).is_valid({field: "UNSUPPORTED", "query": "offline"})
+        assert not Draft202012Validator(body_schema).is_valid({field: "RESEARCH_QUERY", "query": "offline"})
+    Draft202012Validator.check_schema(extension["schema"])
+    Draft202012Validator(extension["schema"]).validate(extension["info"])
+    assert descriptor()["capabilities"]["public_intents"] == list(public_intents())
+
+
+def test_registry_excludes_nonpublic_entries_and_known_routing_failure():
+    from app.api.public_intents import canonical_public_intents
+    rows = [{"intent_id": "WEB_SEARCH", "canonical": True, "miner_count": 2}]
+    for name, change in [("NO_MINERS", {"miner_count": 0}), ("EXPERIMENTAL", {"experimental": True}),
+                         ("DISABLED", {"enabled": False}), ("INACTIVE", {"status": "inactive"}),
+                         ("NON_CANONICAL", {"canonical": False}), ("RESEARCH_QUERY", {})]:
+        rows.append({**rows[0], "intent_id": name, **change})
+    assert canonical_public_intents({"count": len(rows), "intents": rows}) == ("WEB_SEARCH",)
+    with pytest.raises(ValueError):
+        canonical_public_intents({"count": 99, "intents": rows})
+
+
+def test_live_registry_refresh_changes_enum_without_list_drift(monkeypatch):
+    from app.api import public_intents as registry
+    clock = [0]
+    monkeypatch.setattr(registry.time, "monotonic", lambda: clock[0])
+    assert "WEATHER_FORECAST" in registry.public_intents()
+    monkeypatch.setattr(registry, "_fetch_registry", lambda base: {"count": 1, "intents": [
+        {"intent_id": "WEB_SEARCH", "canonical": True, "miner_count": 1}]})
+    clock[0] = 61
+    props = bazaar_extension()["bazaar"]["schema"]["properties"]["input"]["properties"]["body"]["properties"]
+    assert props["requested_intent"]["enum"] == ["WEB_SEARCH"]
+    assert props["intent"]["enum"] == ["WEB_SEARCH"]
+
+
+def test_registry_failure_does_not_advertise_stale_intents_or_break_402(monkeypatch):
+    from app.api import public_intents as registry
+    assert registry.public_intents()
+    monkeypatch.setattr(registry, "_cache", None)
+    def fail(base):
+        raise OSError("offline failure")
+    monkeypatch.setattr(registry, "_fetch_registry", fail)
+    requirements = x402._requirements()
+    response = TestClient(app).post("/v1/public/ask", json={"query": "offline"})
+    assert response.status_code == 402
+    assert response.json()["accepts"] == [requirements]
+    assert response.json()["extensions"] == {}
+    assert descriptor()["capabilities"]["public_intents"] == []
+    assert descriptor()["discovery"]["bazaar_metadata_declared"] is False
+
+
+def test_single_public_paid_endpoint_unchanged():
+    paths = TestClient(app).get("/openapi.json").json()["paths"]
+    paid = [path for path, operations in paths.items()
+            if path.startswith("/v1/public/") and "post" in operations]
+    assert paid == ["/v1/public/ask"]
+
+
+def test_observed_production_enum_fits_proxy_header_budget(monkeypatch):
+    import os
+    from pathlib import Path
+    from app.api import public_intents as registry
+    root = Path(os.environ.get("PRAMA_REPO_ROOT", Path(__file__).resolve().parents[3]))
+    snapshot = json.loads((root / "docs/observations/BAZAAR_PUBLIC_INTENTS_2026-09-26.json").read_text())
+    names = snapshot["canonical_public_intents"]
+    monkeypatch.setattr(registry, "_fetch_registry", lambda base: {"count": len(names), "intents": [
+        {"intent_id": n, "canonical": True, "miner_count": 1} for n in names]})
+    response = TestClient(app).post("/v1/public/ask", json={"query": "offline"})
+    header = response.headers["PAYMENT-REQUIRED"]
+    assert len(header) < 30_000  # leave room for other response headers
+    extension = response.json()["extensions"]["bazaar"]
+    assert extension["schema"]["properties"]["input"]["properties"]["body"]["properties"]["requested_intent"]["enum"] == names
+    config = (root / "frontend/nginx.conf").read_text()
+    assert "proxy_buffer_size 32k;" in config
+    assert "large_client_header_buffers 4 32k;" in config
