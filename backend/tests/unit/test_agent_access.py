@@ -5,21 +5,11 @@ from fastapi.testclient import TestClient
 from jsonschema import Draft202012Validator
 from app.main import app
 from app.api import x402
-from app.api.agent_access import descriptor, bazaar_extension, REQUEST_SCHEMA
+from app.api.agent_access import descriptor, bazaar_extension, REQUEST_SCHEMA, supported_capabilities
 from app.api.adoption import adoption_snapshot, PROOF_HASH
 from app.domain.mandates import AgentIdentity, Mandate, UsageEvent, Evidence
 from tests.unit.test_m2m_consumer_result import store, result
 from tests.unit.test_x402_public import db_session, facilitator_stub, _valid_payment_header
-
-
-@pytest.fixture(autouse=True)
-def offline_intent_registry(monkeypatch):
-    from app.api import public_intents as registry
-    monkeypatch.setenv("GATEWAY_URL", "https://offline-registry.invalid")
-    monkeypatch.setattr(registry, "_cache", None)
-    monkeypatch.setattr(registry, "_fetch_registry", lambda base: {"count": 3, "intents": [
-        {"intent_id": name, "canonical": True, "miner_count": 1}
-        for name in ("WEB_SEARCH", "FINANCIAL_DATA", "WEATHER_FORECAST")]})
 
 
 @pytest.mark.parametrize("path,fragment", [
@@ -163,9 +153,9 @@ def test_delivery_does_not_establish_semantic_fulfillment():
     assert d["semantics"]["consumer_delivery_condition"] == "consumer_result.status == DELIVERED"
     for path in ("/agents.md", "/llms.txt"):
         assert "Semantic task fulfillment is not currently inferred from delivery." in TestClient(app).get(path).text
-    observations = d["capabilities"]["intent_observations"]
-    assert "retrieval primitive" in observations["WEB_SEARCH"]
-    assert "investigating" in observations["RESEARCH_QUERY"]
+    observations = {x["requested_intent"]: x for x in supported_capabilities()["observed_request_examples"]}
+    assert "Retrieval/search primitive" in observations["WEB_SEARCH"]["semantics"]
+    assert observations["RESEARCH_QUERY"]["external_status"] == "UNDER_INVESTIGATION"
 
 
 def test_failed_research_not_delivered_but_web_search_delivery_counts(store):
@@ -238,61 +228,82 @@ def test_public_labels_and_documentary_proofs_are_sanitized():
         assert forbidden not in note
 
 
-def test_bazaar_all_canonical_public_intents_in_both_aliases():
-    from app.api.public_intents import public_intents
+def test_bazaar_examples_do_not_constrain_semantic_hints():
     extension = bazaar_extension()["bazaar"]
-    body_schema = extension["schema"]["properties"]["input"]["properties"]["body"]
+    schema = extension["schema"]["properties"]["input"]["properties"]["body"]
     assert extension["info"]["input"]["body"]["requested_intent"] == "WEB_SEARCH"
     for field in ("intent", "requested_intent"):
-        assert body_schema["properties"][field]["enum"] == list(public_intents())
-        for name in public_intents():
-            Draft202012Validator(body_schema).validate({field: name, "query": "offline test"})
-        assert not Draft202012Validator(body_schema).is_valid({field: "UNSUPPORTED", "query": "offline"})
-        assert not Draft202012Validator(body_schema).is_valid({field: "RESEARCH_QUERY", "query": "offline"})
+        assert "enum" not in schema["properties"][field]
+        assert "semantic hint" in schema["properties"][field]["description"]
+        for hint in (None, "WEB_SEARCH", "FINANCIAL_DATA", "RESEARCH_QUERY", "caller-defined hint"):
+            Draft202012Validator(schema).validate({field: hint, "query": "offline need"})
+    Draft202012Validator(schema).validate({"request": "natural-language need"})
     Draft202012Validator.check_schema(extension["schema"])
     Draft202012Validator(extension["schema"]).validate(extension["info"])
-    assert descriptor()["capabilities"]["public_intents"] == list(public_intents())
+    assert extension["info"]["output"]["example"]["result_capability"] is None
+    assert "not intelligence" in extension["schema"]["properties"]["output"]["properties"]["example"]["description"]
 
 
-def test_registry_excludes_nonpublic_entries_and_known_routing_failure():
-    from app.api.public_intents import canonical_public_intents
-    rows = [{"intent_id": "WEB_SEARCH", "canonical": True, "miner_count": 2}]
-    for name, change in [("NO_MINERS", {"miner_count": 0}), ("EXPERIMENTAL", {"experimental": True}),
-                         ("DISABLED", {"enabled": False}), ("INACTIVE", {"status": "inactive"}),
-                         ("NON_CANONICAL", {"canonical": False}), ("RESEARCH_QUERY", {})]:
-        rows.append({**rows[0], "intent_id": name, **change})
-    assert canonical_public_intents({"count": len(rows), "intents": rows}) == ("WEB_SEARCH",)
-    with pytest.raises(ValueError):
-        canonical_public_intents({"count": 99, "intents": rows})
+def test_capabilities_are_public_cacheable_read_only_and_sanitized(monkeypatch):
+    import socket
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Discovery must not contact providers or a database")
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    from sqlalchemy.orm import Session
+    monkeypatch.setattr(Session, "execute", forbidden)
+    client = TestClient(app)
+    response = client.get("/v1/public/capabilities")
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "public, max-age=60"
+    value = response.json()
+    assert value == supported_capabilities()
+    assert value["schema_version"] == "prama.capabilities.v1"
+    assert value["resolution"]["intent_resolution_owner"] == "Telegraph"
+    assert value["resolution"]["miner_selection_owner"] == "Telegraph"
+    assert value["resolution"]["explicit_telegraph_intent_id_required"] is False
+    assert value["resolution"]["local_telegraph_intent_registry"] is False
+    for forbidden_field in ("private_key", "seed_phrase", "payer_wallet", "payTo", "facilitator_credentials", "miner_config"):
+        assert forbidden_field not in response.text
+    assert client.post("/v1/public/capabilities", json={}).status_code == 405
+    assert "/v1/public/intents" not in client.get("/openapi.json").json()["paths"]
 
 
-def test_live_registry_refresh_changes_enum_without_list_drift(monkeypatch):
-    from app.api import public_intents as registry
-    clock = [0]
-    monkeypatch.setattr(registry.time, "monotonic", lambda: clock[0])
-    assert "WEATHER_FORECAST" in registry.public_intents()
-    monkeypatch.setattr(registry, "_fetch_registry", lambda base: {"count": 1, "intents": [
-        {"intent_id": "WEB_SEARCH", "canonical": True, "miner_count": 1}]})
-    clock[0] = 61
-    props = bazaar_extension()["bazaar"]["schema"]["properties"]["input"]["properties"]["body"]["properties"]
-    assert props["requested_intent"]["enum"] == ["WEB_SEARCH"]
-    assert props["intent"]["enum"] == ["WEB_SEARCH"]
+def test_observations_are_dated_evidence_not_provider_support_claims():
+    value = supported_capabilities()
+    observations = {x["requested_intent"]: x for x in value["observed_request_examples"]}
+    assert observations["WEB_SEARCH"]["observed_status"] == "OBSERVED_SUCCESS"
+    assert observations["FINANCIAL_DATA"]["observed_status"] == "OBSERVED_SUCCESS"
+    assert observations["WEATHER_FORECAST"]["observed_status"] == "UNVERIFIED"
+    research = observations["RESEARCH_QUERY"]
+    assert research["observed_status"] == "FAILED"
+    assert research["failure_code"] == "TELEGRAPH_REQUEST_FAILED"
+    assert research["external_status"] == "UNDER_INVESTIGATION"
+    assert "No replacement is inferred" in research["interpretation"]
+    assert "not supported Telegraph Intent_IDs" in value["example_semantics"]
+    assert value["observations_as_of"]
+    assert all(item["source"] for item in observations.values())
+    assert value["semantics"]["payment_is_authority"] is False
+    assert value["semantics"]["delivered_is_authorization"] is False
+    assert value["semantics"]["delivered_implies_semantic_fulfillment"] is False
 
 
-def test_registry_failure_does_not_advertise_stale_intents_or_break_402(monkeypatch):
-    from app.api import public_intents as registry
-    assert registry.public_intents()
-    monkeypatch.setattr(registry, "_cache", None)
-    def fail(base):
-        raise OSError("offline failure")
-    monkeypatch.setattr(registry, "_fetch_registry", fail)
-    requirements = x402._requirements()
-    response = TestClient(app).post("/v1/public/ask", json={"query": "offline"})
-    assert response.status_code == 402
-    assert response.json()["accepts"] == [requirements]
-    assert response.json()["extensions"] == {}
-    assert descriptor()["capabilities"]["public_intents"] == []
-    assert descriptor()["discovery"]["bazaar_metadata_declared"] is False
+def test_machine_guides_share_capability_and_async_contract(monkeypatch):
+    monkeypatch.setattr(x402, "PUBLIC_ORIGIN", "https://public.example")
+    url = "https://public.example/v1/public/capabilities"
+    assert descriptor()["capabilities"] == {"url": url}
+    assert descriptor()["discovery"]["capabilities"] == url
+    for path in ("/agents.md", "/llms.txt"):
+        text = TestClient(app).get(path).text
+        for fragment in (url, "requested_intent is not necessarily a Telegraph Intent_ID",
+                         "Telegraph performs protocol Intent resolution", "PAYMENT != AUTHORITY",
+                         "202", "result_endpoint", "X-PRAMA-Result-Capability", "STOP",
+                         "consumer_result", "evidence", "evaluation", "decision", "ticket"):
+            assert fragment in text
+    contract = supported_capabilities()["async_contract"]
+    assert contract["accepted_status"] == 202
+    assert contract["automatic_payment_retry"] is False
+    assert contract["result_header"] == "X-PRAMA-Result-Capability"
+    assert "constraints" not in REQUEST_SCHEMA["properties"]
 
 
 def test_single_public_paid_endpoint_unchanged():
@@ -302,20 +313,30 @@ def test_single_public_paid_endpoint_unchanged():
     assert paid == ["/v1/public/ask"]
 
 
-def test_observed_production_enum_fits_proxy_header_budget(monkeypatch):
+def test_catalog_listing_never_counts_as_demand(store, monkeypatch):
+    import app.api.adoption as adoption
+    session, _ = store
+    AgentIdentity.__table__.create(session.bind, checkfirst=True)
+    before = adoption_snapshot(session)["metrics"]
+    for confirmed in (True, False):
+        monkeypatch.setattr(adoption, "indexing_observation", lambda: {"bazaar_indexing_confirmed": confirmed})
+        snapshot = adoption_snapshot(session)
+        assert snapshot["metrics"] == before
+        assert "bazaar_indexing_confirmed" not in snapshot["metrics"]
+
+
+def test_discovery_has_no_local_provider_registry_and_header_fits_budget():
     import os
     from pathlib import Path
-    from app.api import public_intents as registry
     root = Path(os.environ.get("PRAMA_REPO_ROOT", Path(__file__).resolve().parents[3]))
-    snapshot = json.loads((root / "docs/observations/BAZAAR_PUBLIC_INTENTS_2026-09-26.json").read_text())
-    names = snapshot["canonical_public_intents"]
-    monkeypatch.setattr(registry, "_fetch_registry", lambda base: {"count": len(names), "intents": [
-        {"intent_id": n, "canonical": True, "miner_count": 1} for n in names]})
+    assert not (root / "backend/app/api/public_intents.py").exists()
+    assert not (root / "backend/app/api/intent.py").exists()
     response = TestClient(app).post("/v1/public/ask", json={"query": "offline"})
-    header = response.headers["PAYMENT-REQUIRED"]
-    assert len(header) < 30_000  # leave room for other response headers
-    extension = response.json()["extensions"]["bazaar"]
-    assert extension["schema"]["properties"]["input"]["properties"]["body"]["properties"]["requested_intent"]["enum"] == names
+    assert response.status_code == 402
+    assert len(response.headers["PAYMENT-REQUIRED"]) < 30_000
     config = (root / "frontend/nginx.conf").read_text()
+    assert "location = /v1/public/capabilities" in config
     assert "proxy_buffer_size 32k;" in config
-    assert "large_client_header_buffers 4 32k;" in config
+    page = (root / "frontend/public/adoption/index.html").read_text(encoding="utf-8")
+    assert 'href="/v1/public/capabilities"' in page
+    assert "Listing does not establish external demand" in page

@@ -22,6 +22,7 @@ The PRAMA descriptor is a proprietary versioned document, not an external standa
 - Adoption and execution proof: https://prama-dynamagh.up.railway.app/adoption
 - Metrics: https://prama-dynamagh.up.railway.app/v1/public/adoption
 - PRAMA descriptor: https://prama-dynamagh.up.railway.app/.well-known/prama-agent.json
+- Request capabilities: https://prama-dynamagh.up.railway.app/v1/public/capabilities
 - Agent guide: https://prama-dynamagh.up.railway.app/agents.md
 - Compact crawler guide: https://prama-dynamagh.up.railway.app/llms.txt
 - OpenAPI: https://prama-dynamagh.up.railway.app/openapi.json
@@ -29,7 +30,9 @@ The PRAMA descriptor is a proprietary versioned document, not an external standa
 
 ## Machine endpoint
 POST https://prama-dynamagh.up.railway.app/v1/public/ask
-Input: requested_intent (or intent) and query (or request).
+Input: nonempty query (or request), with optional requested_intent (or intent).
+The optional field is an application semantic hint, not necessarily a Telegraph
+Intent_ID. Telegraph owns protocol resolution and Miner selection.
 Price, asset, recipient and domain must be validated from the current challenge.
 
 ## x402 configuration
@@ -40,7 +43,7 @@ No mainnet revenue claim. No wallet custody by discovery tools.
 ## Telegraph attribution
 Telegraph provides machine intelligence infrastructure. PRAMA-Dynamagh adds
 evidence-bound evaluation, execution governance, auditability and Consumer
-fulfillment around acquired intelligence.
+Result delivery around acquired intelligence.
 
 ## Verified M2M proof
 Operator-supplied certified case: KIMI_EXTERNAL / WEATHER_FORECAST / 0.01 USDC /

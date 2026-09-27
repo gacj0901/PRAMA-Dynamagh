@@ -15,6 +15,7 @@ fetch('/v1/public/adoption',{credentials:'omit'}).then(r=>{if(!r.ok)throw Error(
     const dt=document.createElement('dt');dt.textContent=label;const dd=document.createElement('dd');dd.textContent=proof[key]||'UNKNOWN';document.getElementById('proof').append(dt,dd);
   }
   document.getElementById('proof-hash').textContent=proof.evidence_content_hash;
+  document.getElementById('bazaar-discoverable').textContent=data.bazaar_indexing_confirmed?'YES (dated observation)':'INDETERMINATE';
   document.getElementById('bazaar-indexing').textContent=data.bazaar_indexing_status || 'INDETERMINATE';
   document.getElementById('bazaar-observation').textContent=data.bazaar_indexing_observed_at?'Observed '+data.bazaar_indexing_observed_at+'; dated catalog evidence, not a live guarantee.':'';
   document.getElementById('bazaar').textContent=data.bazaar_metadata_declared?'DECLARED':'UNKNOWN';

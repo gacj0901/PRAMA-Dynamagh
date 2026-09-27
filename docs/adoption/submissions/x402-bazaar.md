@@ -1,6 +1,6 @@
 # x402 Bazaar submission pack
 
-STATUS: PLANNED
+STATUS: VERIFIED (dated exact-resource catalog observation; no manual submission)
 CLASSIFICATION: MACHINE_DISCOVERY
 
 ## Title
@@ -22,6 +22,7 @@ The PRAMA descriptor is a proprietary versioned document, not an external standa
 - Adoption and execution proof: https://prama-dynamagh.up.railway.app/adoption
 - Metrics: https://prama-dynamagh.up.railway.app/v1/public/adoption
 - PRAMA descriptor: https://prama-dynamagh.up.railway.app/.well-known/prama-agent.json
+- Request capabilities: https://prama-dynamagh.up.railway.app/v1/public/capabilities
 - Agent guide: https://prama-dynamagh.up.railway.app/agents.md
 - Compact crawler guide: https://prama-dynamagh.up.railway.app/llms.txt
 - OpenAPI: https://prama-dynamagh.up.railway.app/openapi.json
@@ -29,7 +30,9 @@ The PRAMA descriptor is a proprietary versioned document, not an external standa
 
 ## Machine endpoint
 POST https://prama-dynamagh.up.railway.app/v1/public/ask
-Input: requested_intent (or intent) and query (or request).
+Input: nonempty query (or request), with optional requested_intent (or intent).
+The optional field is an application semantic hint, not necessarily a Telegraph
+Intent_ID. Telegraph owns protocol resolution and Miner selection.
 Price, asset, recipient and domain must be validated from the current challenge.
 
 ## x402 configuration
@@ -40,7 +43,7 @@ No mainnet revenue claim. No wallet custody by discovery tools.
 ## Telegraph attribution
 Telegraph provides machine intelligence infrastructure. PRAMA-Dynamagh adds
 evidence-bound evaluation, execution governance, auditability and Consumer
-fulfillment around acquired intelligence.
+Result delivery around acquired intelligence.
 
 ## Verified M2M proof
 Operator-supplied certified case: KIMI_EXTERNAL / WEATHER_FORECAST / 0.01 USDC /
@@ -52,8 +55,10 @@ attestation. The supplied case is never added as a synthetic metric.
 Declared client identity does not establish an independent agent.
 
 ## Submission note
-Resource metadata declared; facilitator catalog indexing NOT CONFIRMED.
-Do not mark submitted, listed or published until the channel supplies evidence.
+Resource metadata declared; exact resource found by read-only PayAI discovery on
+2026-09-26. Listing is not external demand, a new user, agent or wallet.
+Discovery evidence: https://facilitator.payai.network/discovery/search?query=PRAMA-Dynamagh
+The latest local metadata may not yet have propagated to the catalog.
 No private capability, payment signature, private header or wallet secret is included.
 
 ## Suggested message

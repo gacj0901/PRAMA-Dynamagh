@@ -14,7 +14,7 @@ Telegraph / Miner → Evidence → PRAMAgraph → Decision → Ticket → Consum
 
 Telegraph provides machine intelligence infrastructure. PRAMA-Dynamagh adds
 evidence-bound evaluation, execution governance, auditability and Consumer
-fulfillment around acquired intelligence. PRAMA is not a substitute for Telegraph.
+Result delivery around acquired intelligence. PRAMA is not a substitute for Telegraph.
 
 ## Campaign ledger
 
@@ -27,7 +27,7 @@ Telegraph Discord field report is recorded below; this task sends no messages.
 |---|---|---|---|---|---|---|---|---|
 | v1 | PRAMA public surfaces | MACHINE_DISCOVERY | 2026-09-26 | Deploy and verify discovery and read-only adoption | https://prama-dynamagh.up.railway.app/adoption | VERIFIED | agent-access API + adoption page | HTTP, MCP and unpaid x402 smoke passed |
 | v1 | Bazaar resource metadata | MACHINE_DISCOVERY | 2026-09-26 | Verify declared extension against JSON Schema | https://prama-dynamagh.up.railway.app/.well-known/prama-agent.json | VERIFIED | Unpaid HTTP 402 PaymentRequired extension | Declaration only; catalog indexing NOT TESTED |
-| v1 | x402 Bazaar | MACHINE_DISCOVERY | 2026-09-26 | Read-only PayAI catalog verification | https://facilitator.payai.network/discovery/search?query=PRAMA-Dynamagh | VERIFIED | ../observations/BAZAAR_DISCOVERY_2026-09-26.md | Exact canonical resource returned; dated observation, not quality endorsement |
+| v1 | x402 Bazaar | MACHINE_DISCOVERY | 2026-09-26 | Read-only PayAI catalog verification | https://facilitator.payai.network/discovery/search?query=PRAMA-Dynamagh | VERIFIED | ../observations/BAZAAR_DISCOVERY_2026-09-26.md | LISTED / VERIFIED exact canonical resource; dated observation, no new demand/user/agent/wallet counted |
 | v1 | Agent402 | DEVELOPER_DISCOVERY | — | Submit directory pack | — | PLANNED | submissions/agent402.md | Machine ingestion unverified |
 | v1 | x402 community directories | DEVELOPER_DISCOVERY | — | Identify and submit compatible listing | — | PLANNED | submissions/x402-bazaar.md | Not all directories are machine-native |
 | v1 | Run402 | DEVELOPER_DISCOVERY | — | Share integration pack | — | PLANNED | submissions/run402.md | No listing claimed |
@@ -164,3 +164,22 @@ and WEB_SEARCH as a retrieval primitive. Follow-up: RESEARCH_QUERY failure under
 investigation; not a confirmed bug. PUBLIC_URL=NOT_RECORDED. This engagement does
 not increment request, wallet or agent counts. Earlier NOT_TESTED Bazaar notes
 above describe the launch snapshot; the later catalog lookup confirmed indexing.
+
+## Capability discovery alignment — 2026-09-26
+
+The [alignment record](../observations/CAPABILITY_DISCOVERY_V2_ALIGNMENT.md)
+supersedes the prior registry-enum interpretation. `/v1/public/capabilities` is
+a PRAMA-owned descriptor, not an x402 or Telegraph standard. `requested_intent`
+is optional semantic request metadata. Telegraph owns protocol resolution,
+eligibility/ranking and Miner selection. WEB_SEARCH remains an example only.
+The Bazaar request schema has no Telegraph Intent enum or local registry fetch.
+Its null capability example is deliberately non-secret; the initial successful
+202 issues the effective private capability once. The result is retrieved by
+GET with X-PRAMA-Result-Capability, separately from acceptance.
+
+PayAI search was rechecked read-only: the canonical resource is LISTED / VERIFIED.
+That evidence establishes resource discoverability only. Catalog metadata can
+lag behind the deployed seller declaration; no payment was made to refresh it.
+Discord field-report PUBLISHED / operator-reported ACKNOWLEDGED remains recorded
+above, including WEB_SEARCH delivery vs semantic fulfillment and RESEARCH_QUERY
+under investigation. No new engagement message or usage event was generated.

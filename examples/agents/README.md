@@ -43,3 +43,13 @@ MCP (discovery only): https://prama-dynamagh.up.railway.app/mcp
 
 Delivery semantics: Semantic task fulfillment is not currently inferred from delivery.
 WEB_SEARCH is currently observed as a search/retrieval primitive, not a research/synthesis workflow.
+
+Request semantics: the public API requires a nonempty query or request, with
+an optional requested_intent/intent application-level semantic hint. The example
+client takes that hint explicitly; WEB_SEARCH is an example, not a support enum.
+Telegraph owns protocol Intent resolution and Miner selection. PRAMA sets server
+constraints and budgets; this endpoint does not consume arbitrary client constraints.
+Inspect https://prama-dynamagh.up.railway.app/v1/public/capabilities for the real
+contract and dated observations. HTTP 202 is acceptance, not final intelligence;
+GET result_endpoint with X-PRAMA-Result-Capability and inspect consumer_result,
+evidence, evaluation, decision and ticket. PAYMENT != AUTHORITY.

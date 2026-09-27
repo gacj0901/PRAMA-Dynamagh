@@ -2558,3 +2558,27 @@ NETWORK_REQUESTS: 0
 TELEGRAPH_REQUESTS: 0
 PAID_TRAFFIC: 0
 DEPLOYED: false
+
+## POST-AUDIT IMPLEMENTATION NOTE — 2026-09-26
+
+The original third-pass finding is historical and is not rewritten
+by this note. Subsequent repository commit
+`30e981c` (`fix: enforce execution permit authority at dispatch commitment`)
+implements the HYBRID ExecutionPermit authority boundary. Implementation evidence:
+`backend/app/authority/delegated.py::consume_execution_permit` and
+`backend/app/workers/acquisition.py` at the execution-dispatch commitment.
+The same transaction records `consumed_at`, the immutable action envelope/hash
+and the append-only `EXECUTION_DISPATCH_COMMITTED` event.
+
+Test evidence: `backend/tests/unit/test_execution_permit_authority.py`;
+`backend/tests/integration/test_track3_fanout.py::test_execution_permit_concurrent_consumption_is_postgres_one_shot`;
+`test_execution_commitment_orders_authority_changes_with_dispatch` (six cases).
+The dated 2026-09-25 certification above records seven PostgreSQL race cases
+passing. `docs/TICKET_EXECUTION_PERMIT_AUTHORITY.md` records the IMPLEMENTED
+HYBRID authority model. This note cites that existing certification; it does not
+claim a new permit implementation or a new full-suite certification.
+
+Limitations remain explicit: post-commit/pre-dispatch crash recovery is not
+implemented and DB/network atomicity is false. These are distinct from the
+certified authority ordering and one-shot consumption boundary. The current
+capability-discovery task changes no runtime ExecutionPermit semantics.

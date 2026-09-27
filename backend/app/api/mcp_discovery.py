@@ -20,7 +20,7 @@ def guide() -> str:
     return execution_guide()
 
 
-@server.tool(name="prama.supported_capabilities", description="Read supported access capabilities and intent-routing limits. No provider call.", annotations=READ_ONLY)
+@server.tool(name="prama.supported_capabilities", description="Read PRAMA request capabilities and observed semantic hints. Telegraph owns resolution. No provider call.", annotations=READ_ONLY)
 def capabilities() -> dict:
     return supported_capabilities()
 
