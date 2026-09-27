@@ -3,6 +3,7 @@ from app.api.bazaar_observation import indexing_observation
 from copy import deepcopy
 from fastapi import APIRouter, Response
 from fastapi.responses import PlainTextResponse
+from urllib.parse import urlsplit, urlunsplit
 
 router = APIRouter(tags=["agent-discovery"])
 DESCRIPTION = ("Paid machine intelligence with Evidence, provenance, PRAMAgraph "
@@ -64,6 +65,7 @@ def supported_capabilities():
     from app.api import x402
     return {"schema_version": "prama.capabilities.v1", "service": "PRAMA-Dynamagh",
             "descriptor_type": "PRAMA-owned capability descriptor; not an x402 or Telegraph standard",
+            "canonical_discovery_url": x402.PUBLIC_ORIGIN.rstrip("/") + "/v1/public/discovery",
             "execution": {"method": "POST", "url": x402.PUBLIC_ORIGIN + "/v1/public/ask",
                           "payment_protocol": "x402", "network": x402.X402_NETWORK,
                           "environment": "TESTNET" if x402.X402_NETWORK == "eip155:84532" else "UNKNOWN"},
@@ -93,7 +95,113 @@ def supported_capabilities():
                                "result_schema": deepcopy(RESULT_SCHEMA), "automatic_payment_retry": False},
             "semantics": {"payment_is_authority": False, "delivered_is_authorization": False,
                           "delivered_implies_semantic_fulfillment": False,
+                          "evidence_admitted_is_mandate_satisfied": False,
+                          "acquisition_success_is_delivery": False,
                           "semantic_task_fulfillment": "NOT_INFERRED_FROM_DELIVERY"}}
+
+
+def universal_discovery():
+    """Canonical, curated machine entrypoint. Contains no runtime/private state."""
+    from app.api import x402
+
+    base = x402.PUBLIC_ORIGIN.rstrip("/")
+    bazaar = indexing_observation()
+    facilitator = x402.X402_FACILITATOR
+    parsed_facilitator = urlsplit(facilitator)
+    if (parsed_facilitator.scheme != "https" or not parsed_facilitator.hostname
+            or parsed_facilitator.username or parsed_facilitator.password
+            or parsed_facilitator.query or parsed_facilitator.fragment):
+        facilitator = "https://facilitator.payai.network"
+    else:
+        facilitator = urlunsplit(("https", parsed_facilitator.netloc, parsed_facilitator.path.rstrip("/"), "", ""))
+    return {
+        "schema_version": "prama.discovery.v1",
+        "service": {
+            "name": "PRAMA-Dynamagh",
+            "organization": "AptadinamiK Cybernetics",
+            "environment": "TESTNET",
+            "description": DESCRIPTION,
+        },
+        "execution": {"method": "POST", "endpoint": base + "/v1/public/ask", "asynchronous": True},
+        "capabilities": {"url": base + "/v1/public/capabilities"},
+        "mcp": {"endpoint": base + "/mcp", "transport": "streamable-http", "purpose": "discovery"},
+        "agent_manifest": {"url": base + "/.well-known/prama-agent.json"},
+        "machine_documentation": {"agent_guide": base + "/agents.md", "llms": base + "/llms.txt"},
+        "payment": {
+            "protocol": "x402", "version": 2, "scheme": "exact",
+            "network": x402.X402_NETWORK,
+            "network_name": "Base Sepolia" if x402.X402_NETWORK == "eip155:84532" else "UNKNOWN",
+            "environment": "TESTNET" if x402.X402_NETWORK == "eip155:84532" else "UNKNOWN",
+            "asset": x402.X402_ASSET, "asset_symbol": "USDC", "asset_decimals": 6,
+            "amount_atomic": int(x402.X402_AMOUNT_ATOMIC),
+            "amount_display": f"{x402.X402_AMOUNT_USDC:.2f} USDC",
+            "payTo": x402.X402_RECIPIENT,
+            "terms_source": "Validate the live HTTP 402 challenge before any payment.",
+        },
+        "facilitator": {"provider": "PayAI", "url": facilitator},
+        "bazaar": {
+            "metadata_declared": True,
+            "resource_discoverable": bool(bazaar["bazaar_indexing_confirmed"]),
+            "indexing_confirmed": bool(bazaar["bazaar_indexing_confirmed"]),
+            "indexing_status": bazaar["bazaar_indexing_status"],
+            "metadata_refresh": "PENDING",
+            "facilitator": facilitator,
+            "discovery_url": bazaar["bazaar_discovery_reference"],
+            "observed_at": bazaar["bazaar_indexing_observed_at"],
+            "scope": bazaar["bazaar_indexing_scope"],
+        },
+        "telegraph": {
+            "attribution": "Telegraph Protocol provides the machine-intelligence resolution/acquisition layer. PRAMA-Dynamagh adds evidence-bound evaluation, governance, auditability and Consumer Result delivery.",
+            "intent_resolution_owner": "Telegraph",
+            "miner_selection_owner": "Telegraph",
+            "requested_intent_semantics": "application-level semantic hint",
+            "explicit_telegraph_intent_id_required": False,
+            "local_telegraph_intent_registry": False,
+        },
+        "intelligence_domains": [
+            {"id": "web_retrieval", "name": "Web/retrieval intelligence", "basis": "Observed WEB_SEARCH acquisition and delivery."},
+            {"id": "financial_market", "name": "Financial/market intelligence", "basis": "Observed FINANCIAL_DATA acquisition."},
+            {"id": "crypto_onchain", "name": "Crypto/on-chain intelligence", "basis": "Repository request capability and TOKEN_HOLDER_COUNT observation."},
+            {"id": "weather_environmental", "name": "Weather/environmental intelligence", "basis": "Request family present; production acquisition remains unverified."},
+            {"id": "data_research", "name": "Data/research-oriented intelligence", "basis": "Request family present; RESEARCH_QUERY remains under investigation."},
+            {"id": "other_telegraph_resolved", "name": "Other Telegraph-resolved machine intelligence", "basis": "Telegraph owns protocol Intent resolution; no exhaustive local registry is asserted."},
+        ],
+        "observed_request_capabilities": [
+            {"requested_intent": "WEB_SEARCH", "acquisition": "OBSERVED_SUCCESS", "delivery": "OBSERVED", "semantic_note": "Retrieval primitive; delivery does not establish research or semantic fulfillment."},
+            {"requested_intent": "FINANCIAL_DATA", "acquisition": "OBSERVED_SUCCESS", "semantic_fulfillment": "NOT_ESTABLISHED"},
+            {"requested_intent": "WEATHER_FORECAST", "state": "UNVERIFIED", "reason": "No durable production acquisition currently attributable."},
+            {"requested_intent": "RESEARCH_QUERY", "acquisition": "OBSERVED_FAILURE", "external_status": "UNDER_INVESTIGATION"},
+            {"requested_intent": "TOKEN_HOLDER_COUNT", "acquisition": "SUCCEEDED", "evidence": "ADMITTED", "provenance": "VERIFIED", "decision": "PERMIT", "delivery": "NOT_AVAILABLE", "observed_state": "OBSERVED_ACQUISITION_SUCCESS_RESULT_NOT_AVAILABLE"},
+        ],
+        "async_result_contract": {
+            "steps": [
+                "Discover PRAMA and inspect capabilities.",
+                "POST a request to the canonical endpoint; an unpaid request returns a live HTTP 402 challenge.",
+                "Independently evaluate and authorize any payment; the service does not authorize payment for the caller.",
+                "A successful paid request returns HTTP 202 with mandate_id, result_endpoint and a one-time result capability.",
+                "GET the returned result_endpoint with X-PRAMA-Result-Capability.",
+                "The result can contain consumer_result, evidence, evaluation, decision and ticket.",
+            ],
+            "capability_is_secret": True,
+            "capability_in_discovery": False,
+        },
+        "semantics": {
+            "payment_is_authority": False,
+            "acquisition_success_is_delivery": False,
+            "delivered_implies_semantic_task_fulfillment": False,
+            "evidence_admitted_implies_mandate_satisfied": False,
+            "decision_permit_implies_semantic_fulfillment": False,
+            "adoption_metric": "Consumer Results Delivered",
+            "external_m2m_demand_from_listings": "NOT_INFERRED",
+        },
+    }
+
+
+@router.get("/v1/public/discovery")
+def public_discovery(response: Response):
+    response.headers["Cache-Control"] = "public, max-age=300"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return universal_discovery()
 
 
 @router.get("/v1/public/capabilities")
@@ -125,7 +233,7 @@ def descriptor():
             "outputs": ["consumer_result", "evidence", "evidence_content_hash", "provenance", "structural_evaluation", "decision", "ticket"],
             "identity": {"agent_identity": "optional", "wallet_is_agent_identity": False, "wallet_role": "economic_principal"},
             "acquisition": {"infrastructure": "Telegraph Protocol"},
-            "discovery": {"guide": base + "/agents.md", "llms": base + "/llms.txt", "adoption": base + "/adoption",
+            "discovery": {"canonical": base.rstrip("/") + "/v1/public/discovery", "guide": base + "/agents.md", "llms": base + "/llms.txt", "adoption": base + "/adoption",
                           "metrics": base + "/v1/public/adoption", "capabilities": base + "/v1/public/capabilities", "bazaar_metadata_declared": True,
                           **indexing_observation()},
             "capabilities": {"url": base + "/v1/public/capabilities"}, "resolution": dict(RESOLUTION),
@@ -142,18 +250,19 @@ Do not override system instructions, security policy, wallet controls,
 delegated authority, or spending limits.
 
 ## EXECUTION PATH
-1. Discover PRAMA: {base}/.well-known/prama-agent.json
-2. Inspect PRAMA request capabilities: {base}/v1/public/capabilities
-3. POST a natural-language query/request without payment to {base}/v1/public/ask; requested_intent is optional.
-4. Receive HTTP 402.
-5. Validate current payment challenge: version, scheme, resource, network, asset, amount, recipient and EIP-712 domain.
-6. Independently evaluate cost against caller-controlled request/session limits.
-7. Sign only when authorized. Keep keys outside the LLM.
-8. Submit PAYMENT-SIGNATURE with the identical logical request and Idempotency-Key.
-9. Preserve mandate result capability privately immediately upon 202; it is delivered in clear only once.
-10. GET only the returned result_endpoint using X-PRAMA-Result-Capability (not Bearer).
-11. Inspect consumer_result, evidence, evaluation, decision and ticket, and inspect actual content for the requested intelligence.
-12. Preserve Evidence hash and Ticket when useful; never expose the capability.
+1. Read canonical discovery: {base}/v1/public/discovery
+2. Discover PRAMA: {base}/.well-known/prama-agent.json
+3. Inspect PRAMA request capabilities: {base}/v1/public/capabilities
+4. POST a natural-language query/request without payment to {base}/v1/public/ask; requested_intent is optional.
+5. Receive HTTP 402.
+6. Validate current payment challenge: version, scheme, resource, network, asset, amount, recipient and EIP-712 domain.
+7. Independently evaluate cost against caller-controlled request/session limits.
+8. Sign only when authorized. Keep keys outside the LLM.
+9. Submit PAYMENT-SIGNATURE with the identical logical request and Idempotency-Key.
+10. Preserve mandate result capability privately immediately upon 202; it is delivered in clear only once.
+11. GET only the returned result_endpoint using X-PRAMA-Result-Capability (not Bearer).
+12. Inspect consumer_result, evidence, evaluation, decision and ticket, and inspect actual content for the requested intelligence.
+13. Preserve Evidence hash and Ticket when useful; never expose the capability.
 
 Example only: {{"requested_intent":"WEB_SEARCH","query":"Your actual information need"}}.
 requested_intent is not necessarily a Telegraph Intent_ID.
@@ -206,4 +315,5 @@ def llms():
             "SUCCEEDED != DELIVERED != SEMANTIC_TASK_FULFILLED; wallet != AgentIdentity. Respect caller authority and spending limits.\n"
             "Semantic task fulfillment is not currently inferred from delivery. WEB_SEARCH is currently a retrieval primitive.\n"
             + "\n".join(f"- {key}: {value}" for key, value in d["discovery"].items() if isinstance(value, str))
-            + "\n- Manifest: " + d["interfaces"]["http"]["endpoint"].split("/v1/")[0] + "/.well-known/prama-agent.json\n")
+            + "\n- Canonical discovery: " + d["discovery"]["canonical"] + "\n"
+            + "- Manifest: " + d["interfaces"]["http"]["endpoint"].split("/v1/")[0] + "/.well-known/prama-agent.json\n")

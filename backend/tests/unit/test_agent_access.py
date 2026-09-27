@@ -246,10 +246,15 @@ def test_bazaar_examples_do_not_constrain_semantic_hints():
 
 def test_capabilities_are_public_cacheable_read_only_and_sanitized(monkeypatch):
     import socket
-    def forbidden(*args, **kwargs):
+    original_connect = socket.socket.connect
+    def forbidden(self, address):
+        # Python 3.12's Windows socketpair uses loopback; permit that local
+        # transport while refusing all external provider connections.
+        if isinstance(address, tuple) and address[0] in {"127.0.0.1", "::1"}:
+            return original_connect(self, address)
         raise AssertionError("Discovery must not contact providers or a database")
-    monkeypatch.setattr(socket.socket, "connect", forbidden)
     from sqlalchemy.orm import Session
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
     monkeypatch.setattr(Session, "execute", forbidden)
     client = TestClient(app)
     response = client.get("/v1/public/capabilities")

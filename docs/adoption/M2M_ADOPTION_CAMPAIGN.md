@@ -18,7 +18,7 @@ Result delivery around acquired intelligence. PRAMA is not a substitute for Tele
 
 ## Campaign ledger
 
-Valid status values: PLANNED, SUBMITTED, LISTED, PUBLISHED, VERIFIED, REJECTED.
+Valid status values: PLANNED, SUBMITTED, CRAWLED, LISTED, INDEXED, ROUTABLE, VERIFIED, PENDING, REJECTED, INCOMPATIBLE, INACTIVE.
 Dates for planned external actions remain unset until the action occurs.
 The initial release published project-owned artifacts. A subsequent operator-reported
 Telegraph Discord field report is recorded below; this task sends no messages.
@@ -35,7 +35,7 @@ Telegraph Discord field report is recorded below; this task sends no messages.
 | v1 | AI Agents List | HUMAN_DISCOVERY | — | Submit human-facing directory entry | — | PLANNED | submissions/aiagentslist.md | Not machine-native |
 | v1 | GPT Store | HUMAN_DISCOVERY | — | Assess compatible GPT listing | — | PLANNED | submissions/gpt-store.md | No GPT created or approval claimed |
 | v1 | X | HUMAN_DISCOVERY | — | Publish factual adoption post | — | PLANNED | submissions/x-post.md | Draft only |
-| v1 | Telegraph Discord | COMMUNITY_ENGAGEMENT | 2026-09-26 | Track 3 real paid M2M field report | NOT_RECORDED | PUBLISHED | ../observations/TELEGRAPH_INTENT_FULFILLMENT_2026-09-26.md | Operator-reported ACKNOWLEDGED; ENGAGEMENT / TECHNICAL FEEDBACK, not adoption counts |
+| v1 | Telegraph Discord | COMMUNITY_ENGAGEMENT | 2026-09-26 | Track 3 real paid M2M field report | NOT_RECORDED | SUBMITTED | ../observations/TELEGRAPH_INTENT_FULFILLMENT_2026-09-26.md | Operator-reported ACKNOWLEDGED; ENGAGEMENT / TECHNICAL FEEDBACK, not adoption counts |
 
 ## Claims policy
 
@@ -183,3 +183,112 @@ lag behind the deployed seller declaration; no payment was made to refresh it.
 Discord field-report PUBLISHED / operator-reported ACKNOWLEDGED remains recorded
 above, including WEB_SEARCH delivery vs semantic fulfillment and RESEARCH_QUERY
 under investigation. No new engagement message or usage event was generated.
+
+## Universal discovery distribution campaign — 2026-09-27
+
+Detailed platform research: [X402_M2M_DISCOVERY_TARGETS_2026-09-27.md](X402_M2M_DISCOVERY_TARGETS_2026-09-27.md).
+Canonical descriptor implementation is in review; external checks and listings
+below refer to the already deployed paid resource and dated platform evidence.
+
+Each campaign record uses the requested fields. Listing and indexing evidence
+are separate from service usage and do not imply M2M demand.
+
+CAMPAIGN: PRAMA-DYNAMAGH-UNIVERSAL-DISCOVERY-2026-09-27
+CHANNEL: PayAI Bazaar
+DATE: 2026-09-27 (underlying exact-resource observation: 2026-09-26T19:28:03Z)
+ACTION: Read-only verification of exact canonical POST resource
+PUBLIC_URL: https://facilitator.payai.network/discovery/search?query=PRAMA-Dynamagh
+STATUS: VERIFIED
+ARTIFACT: observations/BAZAAR_DISCOVERY_2026-09-26.md
+EVIDENCE: Exact POST /v1/public/ask resource, x402 v2, Base Sepolia, amount 10000, matching recipient; lastUpdated 2026-09-26T18:12:54.583Z
+NOTES: Metadata declaration is current in seller code; catalog metadata refresh is PENDING. No payer enumeration, payment, or demand inference.
+
+CAMPAIGN: PRAMA-DYNAMAGH-UNIVERSAL-DISCOVERY-2026-09-27
+CHANNEL: Agent402
+DATE: 2026-09-27
+ACTION: Read-only official marketplace and submission-flow check
+PUBLIC_URL: https://marketplace.agent402.app/marketplace
+STATUS: PENDING
+ARTIFACT: submissions/agent402.md
+EVIDENCE: Search index described seller registration; official marketplace page fetch returned HTTP 410; no current submission or testnet terms confirmed
+NOTES: No account flow, authentication, wallet signature, listing, or routing state claimed.
+
+CAMPAIGN: PRAMA-DYNAMAGH-UNIVERSAL-DISCOVERY-2026-09-27
+CHANNEL: x402-list
+DATE: 2026-09-27
+ACTION: Read-only official submission API check; no submit due possible non-refundable Base payment
+PUBLIC_URL: https://www.x402-list.com/api
+STATUS: PLANNED
+ARTIFACT: submissions/x402-list.md
+EVIDENCE: API documents HTTP 402 plus $1 USDC Base fee for free-compute hosting; manual review after endpoint probe
+NOTES: No email contact supplied and no payment authorized. Base Sepolia acceptance and Railway fee classification remain unverified.
+
+CAMPAIGN: PRAMA-DYNAMAGH-UNIVERSAL-DISCOVERY-2026-09-27
+CHANNEL: true402
+DATE: 2026-09-27
+ACTION: Read-only requirements verification
+PUBLIC_URL: https://true402.dev/docs
+STATUS: INCOMPATIBLE
+ARTIFACT: submissions/true402.md
+EVIDENCE: Live documentation reports no testnet; current Base rail is eip155:8453 mainnet and x402 v2
+NOTES: No manifest or registration attempted. PRAMA payment architecture remains unchanged.
+
+CAMPAIGN: PRAMA-DYNAMAGH-UNIVERSAL-DISCOVERY-2026-09-27
+CHANNEL: x402.new
+DATE: 2026-09-27
+ACTION: Read-only discovery model check; wait for crawler/index propagation
+PUBLIC_URL: https://x402.new/submit
+STATUS: PENDING
+ARTIFACT: submissions/x402-new.md
+EVIDENCE: Official provider guide says directory is Bazaar-derived and has no direct submission form
+NOTES: PRAMA uses PayAI; cross-facilitator pickup and exact listing were not confirmed in this check.
+
+CAMPAIGN: PRAMA-DYNAMAGH-UNIVERSAL-DISCOVERY-2026-09-27
+CHANNEL: AgentIndex / x402looker
+DATE: 2026-09-27
+ACTION: Read-only current directory and seller claim flow check
+PUBLIC_URL: https://www.agentindex.ai/
+STATUS: PLANNED
+ARTIFACT: submissions/agentindex.md
+EVIDENCE: AgentIndex describes cross-protocol search and brand claim; no official x402looker registration or testnet terms confirmed
+NOTES: Manual operator review required before any account-specific claim; no listing or demand claimed.
+
+CAMPAIGN: PRAMA-DYNAMAGH-UNIVERSAL-DISCOVERY-2026-09-27
+CHANNEL: x402.direct
+DATE: 2026-09-27
+ACTION: Read-only directory API and network-compatibility check
+PUBLIC_URL: https://x402.direct/docs
+STATUS: INCOMPATIBLE
+ARTIFACT: submissions/x402-direct.md
+EVIDENCE: Directory documents Base-mainnet-only paid search and no seller submission mechanism
+NOTES: No search payment or submission performed.
+
+CAMPAIGN: PRAMA-DYNAMAGH-UNIVERSAL-DISCOVERY-2026-09-27
+CHANNEL: Run402
+DATE: 2026-09-27
+ACTION: Read-only product relevance check
+PUBLIC_URL: https://docs.run402.com/
+STATUS: REJECTED
+ARTIFACT: submissions/run402.md
+EVIDENCE: Current official docs describe full-stack agent infrastructure, not a third-party x402 discovery directory
+NOTES: Platform is active but unrelated to this distribution campaign.
+
+CAMPAIGN: PRAMA-DYNAMAGH-UNIVERSAL-DISCOVERY-2026-09-27
+CHANNEL: x402scan (additional)
+DATE: 2026-09-27
+ACTION: Read-only official registration and network check; manual wallet-auth flow not performed
+PUBLIC_URL: https://www.x402scan.com/resources/register
+STATUS: PLANNED
+ARTIFACT: submissions/x402scan.md
+EVIDENCE: Official OpenAPI says registry writes require SIWX; public discovery spec supports OpenAPI and HTTP 402 resource registration
+NOTES: No wallet signature or paid query. Base Sepolia indexing acceptance requires operator confirmation.
+
+CAMPAIGN: PRAMA-DYNAMAGH-UNIVERSAL-DISCOVERY-2026-09-27
+CHANNEL: EXVIV (additional)
+DATE: 2026-09-27
+ACTION: Read-only directory observation; paid query not invoked
+PUBLIC_URL: https://exviv.com/x402
+STATUS: PENDING
+ARTIFACT: X402_M2M_DISCOVERY_TARGETS_2026-09-27.md
+EVIDENCE: Public directory states provider feed is open; aggregate query is $0.05 USDC on Base
+NOTES: No direct seller-listing mechanism identified; retained as a consumer-side WATCH target only.
