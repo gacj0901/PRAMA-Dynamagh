@@ -36,6 +36,7 @@ from app.domain.mandates import (
 )
 from app.agents.identity import get_or_create_m2m_identity, mandate_attribution
 from app.persistence.database import get_session
+from app.read_visibility import is_internal_only
 from app.public_safety import m2m_max_workflow_usdc, reserve_m2m_spend
 from app.competition import competition_max_calls_per_workflow
 from app.workers.tasks import execute_acquisition
@@ -187,7 +188,7 @@ def _read_mandate(session: Session, mandate: Mandate, idempotency_key: str | Non
 
 def _get_m2m_mandate(session: Session, mandate_id: str, m2m_context_id: str | None = None) -> Mandate:
     mandate = session.get(Mandate, mandate_id)
-    if mandate is None or mandate.origin != "M2M":
+    if mandate is None or is_internal_only(mandate) or mandate.origin != "M2M":
         raise HTTPException(status_code=404, detail="M2M_MANDATE_MISSING")
     # Rows created after G13-B are scoped to the authenticated token context.
     # Legacy rows remain readable because their context is intentionally null;

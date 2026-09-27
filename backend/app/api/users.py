@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import text as sql
 from app.persistence.database import get_session
 from app.domain.mandates import Mandate, AcquisitionTask, MandateTransition, UsageEvent, Ticket, Evidence, Decision, TelegraphCall
+from app.read_visibility import frontend_visibility_clause, is_internal_only
 from app.users import auth,credit
 from app.users.history_archive import cleanup_expired, write_archive
 from app.users.models import UserIdentity, UserSession, UserCreditAccount, UserCreditLedger, UserMandate
@@ -208,7 +209,11 @@ def submit(payload:UserMandateInput,request:Request,response:Response,user=Depen
 @router.get('/me/mandates')
 def history(response:Response,user=Depends(auth.current_user),session=Depends(get_session)):
     response.headers['Cache-Control']='no-store'
-    return [mandate_json(session,m) for m in session.query(Mandate).join(UserMandate,UserMandate.mandate_id==Mandate.mandate_id).filter(UserMandate.user_id==user.user_id).order_by(Mandate.created_at.desc()).limit(100)]
+    rows = session.query(Mandate).join(UserMandate,UserMandate.mandate_id==Mandate.mandate_id).filter(
+        UserMandate.user_id==user.user_id, frontend_visibility_clause(Mandate.visibility),
+        Mandate.origin != "INTERNAL_VALIDATION",
+    ).order_by(Mandate.created_at.desc()).limit(100)
+    return [mandate_json(session,m) for m in rows if not is_internal_only(m)]
 
 
 @router.get('/me/mandates/{mandate_id}')
@@ -217,6 +222,7 @@ def detail(mandate_id:str,response:Response,user=Depends(auth.current_user),sess
     if not link or link.user_id!=user.user_id:raise HTTPException(404,'MANDATE_MISSING')
     response.headers['Cache-Control']='no-store'
     m=session.get(Mandate,mandate_id)
+    if m is None or is_internal_only(m):raise HTTPException(404,'MANDATE_MISSING')
     evidence=session.query(Evidence).filter_by(mandate_id=mandate_id).all()
     return user_detail_json(session, m)
 
@@ -224,7 +230,11 @@ def detail(mandate_id:str,response:Response,user=Depends(auth.current_user),sess
 @router.get('/me/history/file')
 def history_file(user=Depends(auth.current_user), session=Depends(get_session)):
     cleanup_expired()
-    rows = session.query(Mandate).join(UserMandate, UserMandate.mandate_id == Mandate.mandate_id).filter(UserMandate.user_id == user.user_id).order_by(Mandate.created_at.desc()).limit(100).all()
+    rows = session.query(Mandate).join(UserMandate, UserMandate.mandate_id == Mandate.mandate_id).filter(
+        UserMandate.user_id == user.user_id, frontend_visibility_clause(Mandate.visibility),
+        Mandate.origin != "INTERNAL_VALIDATION",
+    ).order_by(Mandate.created_at.desc()).limit(100).all()
+    rows = [row for row in rows if not is_internal_only(row)]
     payload = {
         'archive_schema': 'prama.user.history.archive.v1',
         'user_id': user.user_id,

@@ -98,6 +98,13 @@ class Mandate(Base):
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=MandateStatus.RECEIVED.value)
     origin: Mapped[str] = mapped_column(String(32), nullable=False, default="MANUAL")
+    # Generic classification for durable internal validation/audit work.
+    # Existing workflows remain PUBLIC; campaign fields are nullable so no
+    # historical record is rewritten or assigned to a campaign.
+    visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="PUBLIC", server_default="PUBLIC")
+    campaign_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    case_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    purpose: Mapped[str | None] = mapped_column(String(128), nullable=True)
     agent_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     agent_identity_id: Mapped[str | None] = mapped_column(ForeignKey("agent_identities.agent_id"), nullable=True, index=True)
     m2m_context_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)

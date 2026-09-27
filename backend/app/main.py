@@ -156,12 +156,16 @@ def request_ticket_anchor(ticket_id: str):
 
 @app.get("/v1/tickets/{ticket_id}/anchor")
 def get_ticket_anchor(ticket_id: str):
-    from app.domain.mandates import AnchorAttempt, Ticket
+    from app.domain.mandates import AnchorAttempt, Mandate, Ticket
     from app.persistence.database import SessionLocal
     session = SessionLocal()
     try:
         ticket = session.get(Ticket, ticket_id)
         if not ticket:
+            raise HTTPException(status_code=404, detail="TICKET_MISSING")
+        from app.read_visibility import is_internal_only
+        mandate = session.get(Mandate, ticket.mandate_id)
+        if mandate is None or is_internal_only(mandate):
             raise HTTPException(status_code=404, detail="TICKET_MISSING")
         attempt = session.query(AnchorAttempt).filter_by(ticket_id=ticket_id).one_or_none()
         return {
@@ -184,12 +188,16 @@ def get_ticket_anchor(ticket_id: str):
 @app.get("/v1/tickets/{ticket_id}/verify")
 def verify_ticket(ticket_id: str):
     from app.persistence.database import SessionLocal
-    from app.domain.mandates import Ticket
+    from app.domain.mandates import Mandate, Ticket
     from app.tickets.service import verify
     s=SessionLocal()
     try:
         t=s.get(Ticket,ticket_id)
         if not t: return {"status":"INVALID","failure_codes":["TICKET_MISSING"]}
+        from app.read_visibility import is_internal_only
+        mandate = s.get(Mandate, t.mandate_id)
+        if mandate is None or is_internal_only(mandate):
+            return {"status":"INVALID","failure_codes":["TICKET_MISSING"]}
         return {"ticket_id":ticket_id,**verify(s,t)}
     finally:s.close()
 

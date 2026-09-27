@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Response
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.bazaar_observation import indexing_observation
@@ -11,25 +10,42 @@ from app.api.consumer_result import DELIVERY_EVENT
 from app.domain.mandates import (Mandate, AcquisitionTask, Evidence, InboundX402Payment,
                                  UsageEvent, Decision, Ticket, AgentIdentity)
 from app.persistence.database import get_session
+from app.read_visibility import frontend_visibility_clause, is_internal_only
 
 router = APIRouter(tags=["adoption"])
 PROOF_HASH = "0xed49ace56b0e3742b6cb4c1c19955ed77deff9075dd89bc4937954a1dec9d74f"
 
 
 def adoption_snapshot(session):
-    mids = session.query(Mandate.mandate_id).filter(Mandate.origin == "M2M")
-    tasks = session.query(AcquisitionTask).filter(AcquisitionTask.mandate_id.in_(mids))
-    payments = session.query(InboundX402Payment).filter(
-        InboundX402Payment.mandate_id.in_(mids), InboundX402Payment.payment_status == "SETTLED")
-    admitted = session.query(Evidence).join(AcquisitionTask,
-        (Evidence.acquisition_id == AcquisitionTask.acquisition_id) &
-        (Evidence.mandate_id == AcquisitionTask.mandate_id)).filter(
-        Evidence.mandate_id.in_(mids), Evidence.admissibility == "ADMITTED", Evidence.provenance_status == "VERIFIED")
-    events = session.query(UsageEvent).filter(UsageEvent.mandate_id.in_(mids), UsageEvent.event_type == DELIVERY_EVENT).all()
+    visible_mandates = session.query(Mandate).filter(
+        Mandate.origin == "M2M", frontend_visibility_clause(Mandate.visibility)
+    ).all()
+    visible_mandates = [
+        mandate for mandate in visible_mandates
+        if mandate.origin == "M2M" and not is_internal_only(mandate)
+    ]
+    mids = {mandate.mandate_id for mandate in visible_mandates}
+    tasks = [task for task in session.query(AcquisitionTask).filter(AcquisitionTask.mandate_id.in_(mids)).all()
+             if task.mandate_id in mids]
+    settled_payments = [payment for payment in session.query(InboundX402Payment).filter(
+        InboundX402Payment.mandate_id.in_(mids), InboundX402Payment.payment_status == "SETTLED"
+    ).all() if payment.mandate_id in mids and payment.payment_status == "SETTLED"]
+    task_by_acquisition = {task.acquisition_id: task for task in tasks}
+    admitted = [evidence for evidence in session.query(Evidence).filter(
+        Evidence.mandate_id.in_(mids), Evidence.admissibility == "ADMITTED",
+        Evidence.provenance_status == "VERIFIED",
+    ).all() if evidence.mandate_id in mids
+        and evidence.admissibility == "ADMITTED"
+        and evidence.provenance_status == "VERIFIED"
+        and evidence.acquisition_id in task_by_acquisition
+        and task_by_acquisition[evidence.acquisition_id].mandate_id == evidence.mandate_id]
+    events = [event for event in session.query(UsageEvent).filter(
+        UsageEvent.mandate_id.in_(mids), UsageEvent.event_type == DELIVERY_EVENT
+    ).all() if event.mandate_id in mids and event.event_type == DELIVERY_EVENT]
     # Deduplicate operations, not GETs. Require persisted evidence/task lineage.
     delivered = set()
     delivered_evidence = set()
-    eligible = {row.evidence_id: (row.mandate_id, row.acquisition_id) for row in admitted.all()}
+    eligible = {row.evidence_id: (row.mandate_id, row.acquisition_id) for row in admitted}
     for event in events:
         metadata = event.metadata_ or {}
         if metadata.get("delivery_surface") != "x402-public-result" or metadata.get("delivery_scope") != "SERVER_DELIVERY_CONFIRMED":
@@ -39,28 +55,37 @@ def adoption_snapshot(session):
             if lineage and lineage[0] == event.mandate_id and lineage[1] in metadata.get("acquisition_ids", []):
                 delivered.add(event.mandate_id)
                 delivered_evidence.add(eid)
+    identity_ids = {mandate.agent_identity_id for mandate in visible_mandates if mandate.agent_identity_id}
+    registered_identity_ids = {
+        identity.agent_id for identity in session.query(AgentIdentity).filter(
+            AgentIdentity.agent_id.in_(identity_ids)
+        ).all() if identity.agent_id in identity_ids
+    }
     metrics = {
-        "external_m2m_requests": mids.count(),
-        "settled_m2m_requests": payments.with_entities(InboundX402Payment.mandate_id).distinct().count(),
-        "unique_paying_wallets": payments.with_entities(InboundX402Payment.network,
-            func.lower(InboundX402Payment.payer_wallet_address)).distinct().count(),
-        "declared_client_labels": session.query(Mandate.agent_id).filter(Mandate.origin == "M2M",
-            Mandate.agent_id.isnot(None), Mandate.agent_id != "").distinct().count(),
-        "registered_m2m_agent_identities": session.query(AgentIdentity.agent_id).join(Mandate,
-            Mandate.agent_identity_id == AgentIdentity.agent_id).filter(Mandate.origin == "M2M").distinct().count(),
-        "successful_acquisitions": tasks.filter(AcquisitionTask.status == "SUCCEEDED").count(),
-        "admitted_evidence": admitted.count(), "consumer_results_delivered": len(delivered),
+        "external_m2m_requests": len(visible_mandates),
+        "settled_m2m_requests": len({payment.mandate_id for payment in settled_payments}),
+        "unique_paying_wallets": len({
+            (payment.network, str(payment.payer_wallet_address).lower()) for payment in settled_payments
+        }),
+        "declared_client_labels": len({mandate.agent_id for mandate in visible_mandates
+                                        if mandate.agent_id is not None and mandate.agent_id != ""}),
+        "registered_m2m_agent_identities": len(registered_identity_ids),
+        "successful_acquisitions": sum(task.status == "SUCCEEDED" for task in tasks),
+        "admitted_evidence": len(admitted), "consumer_results_delivered": len(delivered),
     }
     proof = {"client": "KIMI_EXTERNAL", "intent": "WEATHER_FORECAST", "payment_usdc": "0.01",
              "acquisition": "SUCCEEDED", "evidence": "ADMITTED", "provenance": "VERIFIED",
              "decision": "PERMIT", "consumer_result": "DELIVERED", "evidence_content_hash": PROOF_HASH,
              "verification": "OPERATOR_ATTESTED", "source": "Operator-supplied certified execution; not added to metrics."}
-    for evidence in admitted.filter(Evidence.content_hash == PROOF_HASH).all():
+    for evidence in admitted:
+        if evidence.content_hash != PROOF_HASH:
+            continue
         mandate = session.get(Mandate, evidence.mandate_id)
         task = session.get(AcquisitionTask, evidence.acquisition_id)
         decision = session.query(Decision).filter_by(mandate_id=mandate.mandate_id).order_by(Decision.created_at.desc()).first()
-        paid = payments.filter(InboundX402Payment.mandate_id == mandate.mandate_id,
-                               InboundX402Payment.amount_usdc == Decimal("0.01")).first()
+        paid = next((payment for payment in settled_payments
+                     if payment.mandate_id == mandate.mandate_id
+                     and payment.amount_usdc == Decimal("0.01")), None)
         if (mandate.agent_id == "KIMI_EXTERNAL" and task.requested_intent == "WEATHER_FORECAST"
                 and task.status == "SUCCEEDED" and evidence.evidence_id in delivered_evidence and paid
                 and decision and decision.state == "PERMIT"

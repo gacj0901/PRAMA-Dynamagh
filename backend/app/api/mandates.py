@@ -11,6 +11,7 @@ from app.workers.tasks import execute_acquisition
 from app.persistence.database import get_session
 from app.public_safety import enforce_public_budget, enforce_public_rate_limit, reserve_public_manual_spend
 from app.competition import competition_max_calls_per_workflow
+from app.read_visibility import frontend_visibility_clause, is_internal_only, require_frontend_mandate
 
 router = APIRouter(prefix="/v1/mandates", tags=["mandates"])
 
@@ -56,7 +57,12 @@ def list_mandates(session: Session = Depends(get_session)) -> list[Mandate]:
     The endpoint intentionally returns only persisted Mandate fields.  Detailed
     artifacts remain available through the existing mandate-scoped endpoints.
     """
-    return session.query(Mandate).filter(Mandate.origin != 'USER').order_by(Mandate.updated_at.desc()).all()
+    rows = session.query(Mandate).filter(
+        Mandate.origin != "USER",
+        Mandate.origin != "INTERNAL_VALIDATION",
+        frontend_visibility_clause(Mandate.visibility),
+    ).order_by(Mandate.updated_at.desc()).all()
+    return [item for item in rows if not is_internal_only(item)]
 
 
 @router.post("", response_model=MandateRead, status_code=status.HTTP_202_ACCEPTED)
@@ -116,9 +122,7 @@ def create_mandate(payload: MandateCreate, request: Request, session: Session = 
 
 @router.get("/{mandate_id}", response_model=MandateRead)
 def get_mandate(mandate_id: str, session: Session = Depends(get_session)) -> Mandate:
-    mandate = session.get(Mandate, mandate_id)
-    if mandate is None:
-        raise HTTPException(status_code=404, detail="mandate not found")
+    mandate = require_frontend_mandate(session, mandate_id)
     tasks = session.query(AcquisitionTask).filter_by(mandate_id=mandate_id).all()
     mandate.acquisitions = [{"acquisition_id": t.acquisition_id, "status": t.status, "requested_intent": t.requested_intent, "attempt_count": t.attempt_count, "failure_code": t.failure_code} for t in tasks]
     return mandate
@@ -127,9 +131,7 @@ def get_mandate(mandate_id: str, session: Session = Depends(get_session)) -> Man
 @router.get("/{mandate_id}/timeline")
 def timeline(mandate_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
     """Return the persisted state and usage chronology without side effects."""
-    mandate = session.get(Mandate, mandate_id)
-    if mandate is None:
-        raise HTTPException(status_code=404, detail="mandate not found")
+    mandate = require_frontend_mandate(session, mandate_id)
     transitions = session.query(MandateTransition).filter_by(mandate_id=mandate_id).order_by(MandateTransition.created_at).all()
     events = session.query(UsageEvent).filter_by(mandate_id=mandate_id).order_by(UsageEvent.created_at).all()
     return {
@@ -160,6 +162,7 @@ def timeline(mandate_id: str, session: Session = Depends(get_session)) -> dict[s
 @router.get("/{mandate_id}/acquisitions")
 def acquisitions(mandate_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
     from app.domain.mandates import TelegraphCall
+    require_frontend_mandate(session, mandate_id)
     tasks = session.query(AcquisitionTask).filter_by(mandate_id=mandate_id).all()
     output=[]
     for t in tasks:
@@ -171,28 +174,34 @@ def acquisitions(mandate_id: str, session: Session = Depends(get_session)) -> di
 def evidence(mandate_id: str, session: Session = Depends(get_session)) -> list[dict[str, Any]]:
     from app.domain.mandates import Evidence
     mandate = session.get(Mandate, mandate_id)
+    if mandate is not None and is_internal_only(mandate):
+        raise HTTPException(status_code=404, detail="MANDATE_MISSING")
     if mandate is not None and mandate.origin == "M2M":
         raise HTTPException(status_code=403, detail="M2M_EVIDENCE_REQUIRES_SCOPED_RESULT")
     return [{"evidence_id":e.evidence_id,"admissibility":e.admissibility,"provenance_status":e.provenance_status,"content_hash":e.content_hash,"source_intent":e.source_intent,"source_miner_id":e.source_miner_id,"source_signal_hash":e.source_signal_hash,"limitation_codes":e.limitation_codes,"normalized_payload":e.normalized_payload} for e in session.query(Evidence).filter_by(mandate_id=mandate_id)]
 @router.get("/{mandate_id}/evaluation")
 def evaluation(mandate_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
     from app.domain.mandates import StructuralEvaluation
+    require_frontend_mandate(session, mandate_id)
     e=session.query(StructuralEvaluation).filter_by(mandate_id=mandate_id).order_by(StructuralEvaluation.created_at.desc()).first()
     if not e: raise HTTPException(404,"evaluation not found")
     return {"evaluation_id":e.evaluation_id,"evaluator_version":e.evaluator_version,"evidence_set_hash":e.evidence_set_hash,"structural_state":e.structural_state,"limitation_codes":e.limitation_codes,"contradiction_codes":e.contradiction_codes}
 @router.get("/{mandate_id}/decision")
 def decision(mandate_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
     from app.domain.mandates import Decision
+    require_frontend_mandate(session, mandate_id)
     d=session.query(Decision).filter_by(mandate_id=mandate_id).order_by(Decision.created_at.desc()).first()
     if not d: raise HTTPException(404,"decision not found")
     return {"decision_id":d.decision_id,"state":d.state,"policy_version":d.policy_version,"reason_codes":d.reason_codes,"evidence_set_hash":d.evidence_set_hash,"evaluation_id":d.evaluation_id}
 @router.get("/{mandate_id}/replay")
 def replay(mandate_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
+    require_frontend_mandate(session, mandate_id)
     from app.pramagraph.replay import replay as run
     return run(session, mandate_id)
 @router.get("/{mandate_id}/ticket")
 def ticket(mandate_id: str, session: Session = Depends(get_session)):
     from app.domain.mandates import Ticket
+    require_frontend_mandate(session, mandate_id)
     t=session.query(Ticket).filter_by(mandate_id=mandate_id).first()
     if not t: raise HTTPException(404,"ticket not found")
     return {"ticket_id":t.ticket_id,"mandate_id":t.mandate_id,"schema_version":t.schema_version,"ticket_hash":t.ticket_hash,"anchor_status":t.anchor_status,"canonical_payload":t.canonical_payload}

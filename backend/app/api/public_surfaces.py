@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.domain.mandates import (
@@ -33,6 +33,7 @@ from app.domain.mandates import (
 )
 from app.competition import competition_budget_profile
 from app.persistence.database import get_session
+from app.read_visibility import frontend_visibility_clause, is_internal_only
 
 
 router = APIRouter(tags=["public-read-surfaces"])
@@ -74,7 +75,12 @@ def _activity_read_model(
     activity surface uses ``processed_responses`` for Miner work so a request
     that never yielded a Miner signal cannot be presented as processed work.
     """
-    processed = [item for item in calls if _processed_call(item)]
+    mandate_by_id = {getattr(item, "mandate_id", None): item for item in mandates}
+    processed = [
+        item for item in calls
+        if _processed_call(item)
+        and not is_internal_only(mandate_by_id.get(getattr(item, "mandate_id", None)))
+    ]
     evidence_call_ids = {
         str(item.telegraph_call_id)
         for item in evidence
@@ -155,7 +161,10 @@ def _execution_history(session: Session, mandates: list[Mandate], *, limit: int 
     responses, payment identities, or result-capability material. Server
     delivery is inferred only from persisted server delivery events.
     """
-    visible_mandates = [item for item in mandates if getattr(item, "origin", None) != "USER"]
+    visible_mandates = [
+        item for item in mandates
+        if getattr(item, "origin", None) != "USER" and not is_internal_only(item)
+    ]
     mandate_by_id = {str(item.mandate_id): item for item in visible_mandates}
     if not mandate_by_id:
         return []
@@ -287,12 +296,13 @@ def _public_mandates(session: Session) -> list[Mandate]:
     rows = (
         session.query(Mandate)
         .filter(Mandate.origin.in_(PUBLIC_ORIGINS))
+        .filter(frontend_visibility_clause(Mandate.visibility))
         .order_by(Mandate.created_at.asc(), Mandate.mandate_id.asc())
         .all()
     )
     # Keep the explicit origin boundary even when a non-standard Session
     # implementation is used by tooling or read-only diagnostics.
-    return [item for item in rows if item.origin in PUBLIC_ORIGINS]
+    return [item for item in rows if item.origin in PUBLIC_ORIGINS and not is_internal_only(item)]
 
 
 def _activity_aggregate(session: Session, mandates: list[Mandate]) -> dict[str, Any]:
@@ -359,20 +369,35 @@ def _is_fixture_policy(policy: AutonomyPolicy | None) -> bool:
 
 def _demand_origin_summary(session: Session) -> dict[str, Any]:
     """Count processed Miner responses by their persisted causal origin."""
-    mandates = {item.mandate_id: item for item in session.query(Mandate).all()}
+    internal_rows = session.query(Mandate).filter(or_(
+        Mandate.origin == "INTERNAL_VALIDATION",
+        Mandate.visibility == "INTERNAL_ONLY",
+    )).all()
+    internal_ids = {item.mandate_id for item in internal_rows if is_internal_only(item)}
+    mandates = {
+        item.mandate_id: item for item in session.query(Mandate).filter(
+            Mandate.origin != "INTERNAL_VALIDATION",
+            frontend_visibility_clause(Mandate.visibility),
+        ).all() if item.mandate_id not in internal_ids and not is_internal_only(item)
+    }
     policies = {item.policy_id: item for item in session.query(AutonomyPolicy).all()}
-    calls = session.query(TelegraphCall).all()
-    processed = [item for item in calls if _processed_call(item)]
+    calls = session.query(TelegraphCall).filter(TelegraphCall.mandate_id.notin_(internal_ids)).all()
+    processed = [
+        item for item in calls
+        if _processed_call(item)
+        and getattr(item, "mandate_id", None) not in internal_ids
+        and not is_internal_only(mandates.get(getattr(item, "mandate_id", None)))
+    ]
     counts = Counter()
     for call in processed:
         mandate = mandates.get(getattr(call, "mandate_id", None))
         origin = getattr(mandate, "origin", None)
-        if origin in PUBLIC_ORIGINS:
+        if origin in PUBLIC_ORIGINS and not is_internal_only(mandate):
             counts["external_user_driven"] += 1
             counts[{"MANUAL": "manual", "M2M": "m2m_inbound", "USER": "user"}[origin]] += 1
-        elif origin == "AUTONOMOUS" and _is_fixture_policy(policies.get(getattr(mandate, "autonomy_policy_id", None))):
+        elif origin == "AUTONOMOUS" and not is_internal_only(mandate) and _is_fixture_policy(policies.get(getattr(mandate, "autonomy_policy_id", None))):
             counts["fixture_canary"] += 1
-        else:
+        elif not is_internal_only(mandate):
             counts["unattributed_legacy"] += 1
     return {
         "total": len(processed),
@@ -401,7 +426,9 @@ def public_activity(session: Session) -> dict[str, Any]:
     manual = [item for item in mandates if item.origin == "MANUAL"]
     m2m = [item for item in mandates if item.origin == "M2M"]
     user = [item for item in mandates if item.origin == "USER"]
-    autonomous = [item for item in session.query(Mandate).all() if item.origin == "AUTONOMOUS"]
+    autonomous = [item for item in session.query(Mandate).filter(
+        Mandate.origin == "AUTONOMOUS", frontend_visibility_clause(Mandate.visibility)
+    ).all() if item.origin == "AUTONOMOUS" and not is_internal_only(item)]
     autonomous_summary = _activity_aggregate(session, autonomous)
     manual_summary = _activity_aggregate(session, manual)
     m2m_summary = _activity_aggregate(session, m2m)
@@ -421,7 +448,7 @@ def public_activity(session: Session) -> dict[str, Any]:
             "budget_profile": competition_budget_profile(),
             "scope": {
                 "included_origins": list(PUBLIC_ORIGINS),
-                "excluded_origins": ["AUTONOMOUS", "INTERNAL", "SHADOW"],
+                "excluded_origins": ["AUTONOMOUS", "INTERNAL_VALIDATION", "INTERNAL_ONLY", "SHADOW"],
                 "test_classification": "NOT_PERSISTED_SEPARATELY",
             },
             "real_users": 0,
@@ -476,7 +503,7 @@ def public_activity(session: Session) -> dict[str, Any]:
         "budget_profile": competition_budget_profile(),
         "scope": {
             "included_origins": list(PUBLIC_ORIGINS),
-            "excluded_origins": ["AUTONOMOUS", "INTERNAL", "SHADOW"],
+            "excluded_origins": ["AUTONOMOUS", "INTERNAL_VALIDATION", "INTERNAL_ONLY", "SHADOW"],
             "test_classification": "NOT_PERSISTED_SEPARATELY",
         },
         "real_users": len(actor_counts),
@@ -514,8 +541,12 @@ def _operational_ledger(session: Session, public_mandates: list[Mandate], autono
     """Build the read-only ledger from persisted production records."""
     all_mandates = [*public_mandates, *autonomous]
     autonomous_ids = {item.mandate_id for item in autonomous}
-    autonomous_tasks = [task for task in session.query(AcquisitionTask).all() if task.mandate_id in autonomous_ids]
-    autonomous_calls = [call for call in session.query(TelegraphCall).all() if call.mandate_id in autonomous_ids]
+    autonomous_tasks = [task for task in session.query(AcquisitionTask).filter(
+        AcquisitionTask.mandate_id.in_(autonomous_ids)
+    ).all() if task.mandate_id in autonomous_ids]
+    autonomous_calls = [call for call in session.query(TelegraphCall).filter(
+        TelegraphCall.mandate_id.in_(autonomous_ids)
+    ).all() if call.mandate_id in autonomous_ids]
     call_counts = Counter(str(call.status) for call in autonomous_calls)
     authority_codes = {"AUTHORITY_COMPOSITION_RESTRICTED", "G13_REVIEW"}
     task_failures = [task for task in autonomous_tasks if task.failure_code]
@@ -592,7 +623,7 @@ def public_ticket_summary(session: Session, ticket_id: str, request: Request) ->
     mandate = session.get(Mandate, ticket.mandate_id)
     if mandate is None:
         raise HTTPException(status_code=404, detail="MANDATE_MISSING")
-    if mandate.origin not in PUBLIC_ORIGINS:
+    if mandate.origin not in PUBLIC_ORIGINS or is_internal_only(mandate):
         raise HTTPException(status_code=404, detail="PUBLIC_TICKET_MISSING")
 
     tasks = (
